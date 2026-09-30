@@ -2,6 +2,7 @@ import {
   BANNED_NAME_PATTERN_MAX,
   type BannedNameAction,
   type BannedNameMatchType,
+  isSafeBannedNameRegex,
 } from '@squad/shared-config/banned-names';
 
 /** One row read from `banned_name_rules`, as needed to compile a matcher. */
@@ -66,6 +67,9 @@ function compileBannedNameRule(row: BannedNameRuleRow): CompiledBannedNameRule |
     };
   }
 
+  // A catastrophically backtracking rule (stored before the API refused
+  // them, audit #115) would stall ingestion on a crafted nickname.
+  if (!isSafeBannedNameRegex(pattern)) return null;
   try {
     const regex = new RegExp(pattern, 'i');
     return {

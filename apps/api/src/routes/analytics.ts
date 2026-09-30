@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 
 /** Default lookback window (in days) applied when a caller omits `from`. */
 export const DEFAULT_WINDOW_DAYS = 7;
@@ -78,22 +79,16 @@ export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow 
   return { from, to };
 }
 
+/**
+ * `panel_access` gate for the dashboard, which also declares
+ * `config.permissions: ['server:view']` so an API token reaches it only when
+ * delegated that scope (audit #89). The auth hook has already answered 401 to
+ * an anonymous caller.
+ */
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
-  if (!req.user) {
-    reply.code(401);
-    return { error: 'unauthenticated' };
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403);
-    return { error: 'forbidden' };
-  }
-  return null;
-}
-
-/** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
-export function escapeCsvField(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
+  if (req.user?.permissions.panelAccess) return null;
+  reply.code(403);
+  return { error: 'forbidden' };
 }
 
 /**
@@ -266,9 +261,7 @@ export async function computeAnalyticsAggregates(
 function toCsv(payload: DashboardPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
   };
   push('meta', 'server_id', payload.server_id ?? 'all');
   push('meta', 'from', payload.from);
@@ -295,7 +288,10 @@ const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/analytics/dashboard',
-    { config: { audit: false }, schema: { querystring: dashboardQuery } },
+    {
+      config: { audit: false, permissions: ['server:view'] },
+      schema: { querystring: dashboardQuery },
+    },
     async (req, reply) => {
       const guard = panelGuard(req, reply);
       if (guard) return guard;

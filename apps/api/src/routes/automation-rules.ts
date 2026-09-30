@@ -147,16 +147,17 @@ function toRuleInput(row: RuleRow): AutomationRuleInput {
   };
 }
 
+/**
+ * `panel_access` gate for the read routes, which also declare
+ * `config.permissions: ['trigger:view']` so an API token reaches them only when
+ * delegated that scope (audit #101). This guard keeps a session whose role
+ * lacks `panel_access` out even if it holds an explicit `trigger:view` row. The
+ * auth hook has already answered 401 to an anonymous caller.
+ */
 function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403).send({ error: 'forbidden' });
-    return true;
-  }
-  return false;
+  if (req.user?.permissions.panelAccess) return false;
+  reply.code(403).send({ error: 'forbidden' });
+  return true;
 }
 
 /** Fire-and-forget enqueue onto worker-rcon's command stream (never used by dry-run). */
@@ -185,14 +186,18 @@ async function enqueueRcon(
 const automationRulesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get('/api/v1/automation-rules', { config: { audit: false } }, async (req, reply) => {
-    if (denyRead(req, reply)) return;
-    const rows = (await app.db
-      .select()
-      .from(automationRules)
-      .orderBy(desc(automationRules.createdAt))) as unknown as RuleRow[];
-    return rows.map(serializeRule);
-  });
+  fast.get(
+    '/api/v1/automation-rules',
+    { config: { audit: false, permissions: ['trigger:view'] } },
+    async (req, reply) => {
+      if (denyRead(req, reply)) return;
+      const rows = (await app.db
+        .select()
+        .from(automationRules)
+        .orderBy(desc(automationRules.createdAt))) as unknown as RuleRow[];
+      return rows.map(serializeRule);
+    },
+  );
 
   fast.post(
     '/api/v1/automation-rules',
@@ -402,7 +407,7 @@ const automationRulesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/automation-runs',
-    { schema: { querystring: runsQuery }, config: { audit: false } },
+    { schema: { querystring: runsQuery }, config: { audit: false, permissions: ['trigger:view'] } },
     async (req, reply) => {
       if (denyRead(req, reply)) return;
       const conditions = req.query.rule_id

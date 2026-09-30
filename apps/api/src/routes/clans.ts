@@ -1,4 +1,4 @@
-import { bucketSessionsByLocalHour, computeKdRatio, computePrimetime } from '@squad/db';
+import { computeKdRatio, computePrimetime } from '@squad/db';
 import type { ClanRow } from '@squad/db/schema';
 import {
   clanMembers,
@@ -13,7 +13,7 @@ import {
   servers,
 } from '@squad/db/schema';
 import { isAdminsCfgSingleLineText, normalizePlayerName } from '@squad/shared-config';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -222,7 +222,6 @@ function auditActor(req: FastifyRequest) {
 const STATS_DAY_MS = 86_400_000;
 const STATS_DEFAULT_RANGE_DAYS = 30;
 const STATS_TOP_MEMBERS_LIMIT = 10;
-const STATS_SESSION_WINDOW_CAP = 5000;
 /** Longest inclusive `from`..`to` span (in days) a clan stats request may ask for. */
 const STATS_MAX_RANGE_DAYS = 366;
 /**
@@ -725,6 +724,43 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
   );
 
   /**
+   * Seconds the clan's current roster spent online per UTC hour of day over
+   * [windowStart, windowEnd): the SQL port of `bucketSessionsByLocalHour`
+   * with offset 0 (a session is clipped to the window, an open session runs
+   * to the window end, and each session-hour slice is floored to whole
+   * seconds). Aggregating in Postgres covers every session of the window;
+   * the handler used to load at most the oldest 5000 into Node, which
+   * silently dropped a busy clan's recent activity (audit #126).
+   */
+  async function primetimeHistogram(
+    clanId: string,
+    windowStart: string,
+    windowEnd: string,
+  ): Promise<number[]> {
+    const rows = (await app.db.execute(sql`
+      SELECT (slice.bucket % 24)::int AS hour,
+             SUM(FLOOR(LEAST(s.hi, (slice.bucket + 1) * 3600) - GREATEST(s.lo, slice.bucket * 3600)))::bigint AS seconds
+      FROM (
+        SELECT EXTRACT(EPOCH FROM GREATEST(ps.connected_at, ${windowStart}::timestamptz)) AS lo,
+               EXTRACT(EPOCH FROM LEAST(COALESCE(ps.disconnected_at, ${windowEnd}::timestamptz), ${windowEnd}::timestamptz)) AS hi
+        FROM player_sessions ps
+        WHERE ps.player_id IN (SELECT cm.player_id FROM clan_members cm WHERE cm.clan_id = ${clanId})
+          AND ps.connected_at < ${windowEnd}::timestamptz
+          AND (ps.disconnected_at IS NULL OR ps.disconnected_at > ${windowStart}::timestamptz)
+      ) s
+      CROSS JOIN LATERAL generate_series(
+        FLOOR(s.lo / 3600)::bigint,
+        CEIL(s.hi / 3600)::bigint - 1
+      ) AS slice(bucket)
+      WHERE s.hi > s.lo
+      GROUP BY 1
+    `)) as unknown as Array<{ hour: number; seconds: string | number }>;
+    const histogram = new Array<number>(24).fill(0);
+    for (const row of rows) histogram[row.hour] = Number(row.seconds);
+    return histogram;
+  }
+
+  /**
    * Aggregates presence, primetime, and combat stats for a clan's current roster over
    * an inclusive [fromDay, toDay] window. Returns a zeroed payload when the roster is empty.
    */
@@ -848,31 +884,10 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
 
     const windowStartMs = Date.parse(`${fromDay}T00:00:00.000Z`);
     const windowEndMs = Date.parse(`${toDay}T00:00:00.000Z`) + STATS_DAY_MS;
-    const sessionRows = await app.db
-      .select({
-        connectedAt: playerSessions.connectedAt,
-        disconnectedAt: playerSessions.disconnectedAt,
-      })
-      .from(playerSessions)
-      .where(
-        and(
-          inArray(playerSessions.playerId, roster),
-          lt(playerSessions.connectedAt, new Date(windowEndMs)),
-          or(
-            isNull(playerSessions.disconnectedAt),
-            gt(playerSessions.disconnectedAt, new Date(windowStartMs)),
-          ),
-        ),
-      )
-      .orderBy(asc(playerSessions.connectedAt))
-      .limit(STATS_SESSION_WINDOW_CAP);
-
-    const histogram = bucketSessionsByLocalHour(
-      sessionRows,
-      0,
-      windowStartMs,
-      windowEndMs,
-      windowEndMs,
+    const histogram = await primetimeHistogram(
+      clanId,
+      new Date(windowStartMs).toISOString(),
+      new Date(windowEndMs).toISOString(),
     );
     const primetimeResult = computePrimetime(histogram);
 
@@ -1342,12 +1357,15 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
                ) AS reserve_from_role
         FROM clan_members cm
         JOIN players p ON p.id = cm.player_id
-        LEFT JOIN (
-          SELECT player_id, SUM(online_seconds) AS online
-          FROM player_daily_presence
-          WHERE day >= (CURRENT_DATE - INTERVAL '60 days')
-          GROUP BY player_id
-        ) pres ON pres.player_id = cm.player_id
+        -- Per-member lookup through the (player_id, day, server_id) key, so the
+        -- cost follows the roster size, not the whole server's 60-day
+        -- presence (audit #127).
+        LEFT JOIN LATERAL (
+          SELECT SUM(pdp.online_seconds) AS online
+          FROM player_daily_presence pdp
+          WHERE pdp.player_id = cm.player_id
+            AND pdp.day >= (CURRENT_DATE - INTERVAL '60 days')
+        ) pres ON true
         WHERE ${whereSql}
         ORDER BY ${sortColumn} ${direction} NULLS LAST, cm.joined_at ASC
         LIMIT ${limit} OFFSET ${offset}
@@ -1693,7 +1711,11 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'forbidden' };
       }
       const [member] = await app.db
-        .select({ hasPriority: clanMembers.hasPriority, roleId: players.roleId })
+        .select({
+          hasPriority: clanMembers.hasPriority,
+          memberRole: clanMembers.memberRole,
+          roleId: players.roleId,
+        })
         .from(clanMembers)
         .innerJoin(players, eq(players.id, clanMembers.playerId))
         .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)))
@@ -1701,6 +1723,12 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       if (!member) {
         reply.code(404);
         return { error: 'member_not_found' };
+      }
+      // Like adding and removing members, a deputy acts on rank-and-file
+      // members only — never on the leader, another deputy or itself (#125).
+      if (level === 'deputy' && member.memberRole !== 'member') {
+        reply.code(403);
+        return { error: 'forbidden' };
       }
 
       const enabled = req.body.enabled;

@@ -1,10 +1,10 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
 import {
   analyticsAggregatesSchema,
   computeAnalyticsAggregates,
-  escapeCsvField,
   POPULAR_LIMIT_DEFAULT,
   POPULAR_LIMIT_MAX,
   resolveWindow,
@@ -33,9 +33,7 @@ export type PublicStatsPayload = z.infer<typeof publicStatsResponse>;
 function toCsv(payload: PublicStatsPayload): string {
   const lines: string[] = ['section,key,value'];
   const push = (section: string, key: string, value: string | number) => {
-    lines.push(
-      [escapeCsvField(section), escapeCsvField(key), escapeCsvField(String(value))].join(','),
-    );
+    lines.push([csvCell(section), csvCell(key), csvCell(String(value))].join(','));
   };
   push('meta', 'from', payload.from);
   push('meta', 'to', payload.to);

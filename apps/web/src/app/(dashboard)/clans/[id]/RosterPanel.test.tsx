@@ -233,6 +233,48 @@ describe('RosterRow', () => {
     expect(html).not.toContain('из клана');
   });
 
+  // Audit #125 — mirrors the API: a deputy toggles priority for members only.
+  it.each(['leader', 'deputy'] as const)(
+    'shows a deputy the priority of a %s read-only',
+    (memberRole) => {
+      const html = renderToStaticMarkup(
+        <table>
+          <tbody>
+            <RosterRow
+              member={member({ player_id: `p-${memberRole}`, member_role: memberRole })}
+              caps={deputyCaps}
+              busy={false}
+              onChangeRole={noop}
+              onRemove={noop}
+              onTransfer={noop}
+              onTogglePriority={noopToggle}
+            />
+          </tbody>
+        </table>,
+      );
+      expect(html).not.toContain('type="checkbox"');
+    },
+  );
+
+  it('lets a deputy toggle the priority of a rank-and-file member', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <RosterRow
+            member={member({ player_id: 'p-member', member_role: 'member' })}
+            caps={deputyCaps}
+            busy={false}
+            onChangeRole={noop}
+            onRemove={noop}
+            onTransfer={noop}
+            onTogglePriority={noopToggle}
+          />
+        </tbody>
+      </table>,
+    );
+    expect(html).toContain('type="checkbox"');
+  });
+
   it('renders an enabled priority checkbox for a manager', () => {
     const html = renderToStaticMarkup(
       <table>

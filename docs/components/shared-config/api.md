@@ -205,6 +205,18 @@ Inverse of `packHostMetrics`. Divides indices 0, 5, 6, 7 by 100.
 
 ---
 
+## `outbound-url.ts`
+
+Outbound-request policy for URLs a panel service fetches unattended (external ban sources, audit #100). Pure string logic, usable from the web bundle.
+
+### `checkOutboundUrl(raw: string): OutboundUrlCheck`
+
+Returns `{ ok: true, url }` or `{ ok: false, reason }`, where `reason` is `invalid_url`, `unsupported_scheme` (anything but `http:`/`https:`), `credentials_in_url`, `internal_host` (single-label names such as the Compose services `redis`/`postgres`/`api`, `localhost`, `.local`, `.internal`, `.localdomain`, `.home.arpa`) or `forbidden_address` (a non-public IP literal; numeric forms such as `0x7f.1` are normalised by the URL parser first). A passing hostname can still resolve to a private address — the fetching side must check resolved addresses.
+
+### `isPublicUnicastAddress(address: string): boolean`
+
+`true` only for a globally reachable unicast IPv4/IPv6 address. Refuses loopback, RFC 1918, CGNAT (`100.64/10`), link-local (`169.254/16`, `fe80::/10`), unique-local (`fc00::/7`), multicast, documentation/benchmark ranges, `0.0.0.0/8`, `240/4`, scoped IPv6 and malformed input; IPv4-mapped, NAT64 and 6to4 IPv6 addresses are judged by their embedded IPv4 address.
+
 ## `permissions.ts`
 
 ### Constants

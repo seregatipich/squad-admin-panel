@@ -284,6 +284,22 @@ describeIfDb('votes API (VOTE-2)', () => {
     expect(none.items).toEqual([]);
   });
 
+  // Audit #118 — clan-tagged searches match the normalised stored name.
+  it('searches initiator by a nickname typed with a clan tag', async () => {
+    const server = await seedServer(h.db, 'VoteClanTagSrv');
+    const uniqueNick = `Krypton-${uuidv7().slice(0, 8)}`;
+    const player = await seedPlayer(h.db, { name: uniqueNick });
+    const wanted = await seedVote(h.db, {
+      serverId: server,
+      startedAt: new Date('2026-06-11T12:00:00.000Z'),
+      initiatorPlayerId: player,
+    });
+
+    const query = encodeURIComponent(`[TAG] ${uniqueNick.slice(0, 10)}`);
+    const found = await listVotes(`?serverId=${server}&initiatorQuery=${query}`);
+    expect(found.items.map((vote) => vote.id)).toEqual([wanted]);
+  });
+
   it('sorts by started_at in both directions', async () => {
     const server = await seedServer(h.db, 'VoteSortSrv');
     const early = await seedVote(h.db, {

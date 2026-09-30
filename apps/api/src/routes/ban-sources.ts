@@ -1,20 +1,37 @@
 import { externalBanSources, externalBans } from '@squad/db/schema';
+import { checkOutboundUrl } from '@squad/shared-config';
 import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { encrypt, serialize } from '../lib/crypto.js';
 
 const BAN_SOURCE_FORMATS = ['squad_bans_cfg', 'battlemetrics_json', 'json_generic', 'csv'] as const;
 const TRUST_LEVELS = ['trusted', 'normal', 'low'] as const;
 const ON_MATCH_ACTIONS = ['none', 'alert', 'kick'] as const;
 
+/**
+ * A ban-source URL is fetched unattended by `worker-ban-sync`, so it must not
+ * reach the panel's own network (audit #100): `checkOutboundUrl` refuses
+ * non-http(s) schemes, embedded credentials, Compose service names and
+ * non-public IP literals. The worker re-checks every resolved address.
+ */
+const sourceUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .superRefine((value, ctx) => {
+    const check = checkOutboundUrl(value);
+    if (!check.ok) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `url_not_allowed: ${check.reason}` });
+    }
+  });
+
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
-  url: z.string().url().max(2048),
+  url: sourceUrl,
   format: z.enum(BAN_SOURCE_FORMATS),
   trust_level: z.enum(TRUST_LEVELS).default('normal'),
   on_match: z.enum(ON_MATCH_ACTIONS).default('alert'),
@@ -27,7 +44,7 @@ const createBody = z.object({
 
 const updateBody = z.object({
   name: z.string().trim().min(1).max(128).optional(),
-  url: z.string().url().max(2048).optional(),
+  url: sourceUrl.optional(),
   format: z.enum(BAN_SOURCE_FORMATS).optional(),
   trust_level: z.enum(TRUST_LEVELS).optional(),
   on_match: z.enum(ON_MATCH_ACTIONS).optional(),
@@ -118,34 +135,23 @@ function auditSnapshot(source: PublicSource) {
   };
 }
 
-function actorFrom(req: FastifyRequest): AuditActor {
-  return req.user
-    ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
-    : { kind: 'system', label: 'http-anonymous' };
-}
-
+/**
+ * `panel_access` gate for the read routes, which also declare
+ * `config.permissions: ['ban_source:view']` so an API token reaches them only when
+ * delegated that scope (audit #101). This guard keeps a session whose role
+ * lacks `panel_access` out even if it holds an explicit `ban_source:view` row. The
+ * auth hook has already answered 401 to an anonymous caller.
+ */
 function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  if (!req.user.permissions.panelAccess) {
-    reply.code(403).send({ error: 'forbidden' });
-    return true;
-  }
-  return false;
+  if (req.user?.permissions.panelAccess) return false;
+  reply.code(403).send({ error: 'forbidden' });
+  return true;
 }
 
 function denyManage(req: FastifyRequest, reply: FastifyReply): boolean {
-  if (!req.user) {
-    reply.code(401).send({ error: 'unauthenticated' });
-    return true;
-  }
-  if (!req.user.permissions.canManageBanSources) {
-    reply.code(403).send({ error: 'forbidden', required: 'can_manage_ban_sources' });
-    return true;
-  }
-  return false;
+  if (req.user?.permissions.canManageBanSources) return false;
+  reply.code(403).send({ error: 'forbidden', required: 'can_manage_ban_sources' });
+  return true;
 }
 
 const banSourcesRoutes: FastifyPluginAsync = async (app) => {
@@ -169,19 +175,23 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
     return Number(rows[0]?.count ?? 0);
   }
 
-  fast.get('/api/v1/ban-sources', { config: { audit: false } }, async (req, reply) => {
-    if (denyRead(req, reply)) return;
-    const sources = (await app.db
-      .select()
-      .from(externalBanSources)
-      .orderBy(externalBanSources.createdAt)) as unknown as SourceRow[];
-    const counts = await recordCounts();
-    return sources.map((source) => toPublic(source, counts.get(source.id) ?? 0));
-  });
+  fast.get(
+    '/api/v1/ban-sources',
+    { config: { audit: false, permissions: ['ban_source:view'] } },
+    async (req, reply) => {
+      if (denyRead(req, reply)) return;
+      const sources = (await app.db
+        .select()
+        .from(externalBanSources)
+        .orderBy(externalBanSources.createdAt)) as unknown as SourceRow[];
+      const counts = await recordCounts();
+      return sources.map((source) => toPublic(source, counts.get(source.id) ?? 0));
+    },
+  );
 
   fast.get(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { audit: false, permissions: ['ban_source:view'] } },
     async (req, reply) => {
       if (denyRead(req, reply)) return;
       const rows = (await app.db
@@ -200,7 +210,10 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/ban-sources',
-    { schema: { body: createBody }, config: { audit: false } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'ban_source.create', resource: 'ban_source' } },
+    },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       if (req.body.on_match === 'kick' && req.body.trust_level !== 'trusted') {
@@ -232,16 +245,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         .limit(1)) as unknown as SourceRow[];
       // biome-ignore lint/style/noNonNullAssertion: row was just inserted
       const publicSource = toPublic(created[0]!, 0);
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'ban_source.create',
-        targetType: 'ban_source',
-        targetId: id,
-        after: auditSnapshot(publicSource),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: id, after: auditSnapshot(publicSource) };
       reply.code(201);
       return publicSource;
     },
@@ -249,7 +253,10 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: false } },
+    {
+      schema: { params: idParam, body: updateBody },
+      config: { audit: { action: 'ban_source.update', resource: 'ban_source' } },
+    },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db
@@ -301,24 +308,20 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
       const beforePublic = toPublic(before, recordCount);
       // biome-ignore lint/style/noNonNullAssertion: row exists (guarded above)
       const afterPublic = toPublic(refreshed[0]!, recordCount);
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'ban_source.update',
-        targetType: 'ban_source',
-        targetId: req.params.id,
+      req.auditSnapshots = {
         before: auditSnapshot(beforePublic),
         after: auditSnapshot(afterPublic),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      };
       return afterPublic;
     },
   );
 
   fast.delete(
     '/api/v1/ban-sources/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    {
+      schema: { params: idParam },
+      config: { audit: { action: 'ban_source.delete', resource: 'ban_source' } },
+    },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db
@@ -331,25 +334,19 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'ban_source_not_found' };
       }
+      req.auditSnapshots = { before: auditSnapshot(toPublic(target, 0)) };
       await app.db.delete(externalBanSources).where(eq(externalBanSources.id, req.params.id));
       await app.redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY);
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'ban_source.delete',
-        targetType: 'ban_source',
-        targetId: req.params.id,
-        before: auditSnapshot(toPublic(target, 0)),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
       return { ok: true };
     },
   );
 
   fast.post(
     '/api/v1/ban-sources/:id/sync',
-    { schema: { params: idParam }, config: { audit: false } },
+    {
+      schema: { params: idParam },
+      config: { audit: { action: 'ban_source.sync', resource: 'ban_source' } },
+    },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
       const existing = (await app.db
@@ -376,15 +373,6 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
           enqueued_at: enqueuedAt,
         }),
       );
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'ban_source.sync',
-        targetType: 'ban_source',
-        targetId: req.params.id,
-        context: { requestId: req.id, method: req.method, url: req.url, mode: 'manual' },
-        statusCode: 200,
-      });
       return { ok: true, queued: true };
     },
   );

@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
+  BANNED_NAME_NICK_MAX,
   BANNED_NAME_PATTERN_MAX,
   type BannedNameRuleForMatch,
   findBannedNameRuleMatch,
   isBannedNameAction,
   isBannedNameMatchType,
+  isSafeBannedNameRegex,
   matchBannedName,
   validateBannedNamePattern,
 } from '../src/banned-names.js';
@@ -55,6 +57,56 @@ describe('validateBannedNamePattern', () => {
 
   it('accepts a non-regex pattern of allowed length', () => {
     expect(validateBannedNamePattern('BadName', 'exact')).toEqual({ ok: true });
+  });
+});
+
+// Audit #115 — a regex with nested or alternating repetition backtracks
+// exponentially on a crafted nickname and blocks the API event loop.
+describe('isSafeBannedNameRegex', () => {
+  it.each([
+    '(a+)+$',
+    '(a*)*b',
+    '(\\w+\\s?)*$',
+    '(a?){20}a{20}',
+    '(a|aa)+$',
+    '(?:x+y?)+z',
+    '((ab)+c)*',
+    '(.*a){12}',
+    '(a)\\1',
+    '(?<n>a)\\k<n>',
+  ])('refuses %s', (pattern) => {
+    expect(isSafeBannedNameRegex(pattern)).toBe(false);
+  });
+
+  it.each([
+    '^\\[TAG\\].*',
+    'admin\\d+',
+    '(foo|bar)',
+    '^(bad){2}$',
+    '[a-z]+[0-9]*',
+    '(\\(x+\\))',
+    '[(+*)]+',
+    '\\(a+\\)+',
+  ])('accepts %s', (pattern) => {
+    expect(isSafeBannedNameRegex(pattern)).toBe(true);
+  });
+
+  it('makes validateBannedNamePattern refuse an unsafe regex', () => {
+    expect(validateBannedNamePattern('(a+)+$', 'regex')).toEqual({
+      ok: false,
+      error: 'pattern_unsafe_regex',
+    });
+    expect(validateBannedNamePattern('(a+)+$', 'substring')).toEqual({ ok: true });
+  });
+
+  it('never runs a stored unsafe regex, so a crafted nickname cannot stall matching', () => {
+    const started = Date.now();
+    expect(matchBannedName('(a+)+$', 'regex', `${'a'.repeat(24)}!`)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('caps a checked nickname well above the Steam 32-character name limit', () => {
+    expect(BANNED_NAME_NICK_MAX).toBe(64);
   });
 });
 

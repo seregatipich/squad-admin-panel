@@ -5,6 +5,8 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { csvCell } from '../lib/csv.js';
+import { playerNameMatch } from '../lib/player-name-search.js';
 
 const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 100;
@@ -102,15 +104,6 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
   const attacker = alias(players, 'attacker');
   const victim = alias(players, 'victim');
 
-  async function resolveNameIds(name: string): Promise<string[]> {
-    const pattern = `%${escapeLike(name.toLowerCase())}%`;
-    const rows = await app.db
-      .select({ id: players.id })
-      .from(players)
-      .where(sql`${players.canonicalNameNormalized} LIKE ${pattern}`);
-    return rows.map((row) => row.id);
-  }
-
   async function buildFilters(query: FilterQuery): Promise<{ clauses: SQL[]; empty: boolean }> {
     const clauses: SQL[] = [];
 
@@ -134,15 +127,15 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (query.attackerName) {
-      const ids = await resolveNameIds(query.attackerName);
-      if (ids.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(combatEvents.attackerPlayerId, ids));
+      const byName = playerNameMatch(combatEvents.attackerPlayerId, query.attackerName);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     if (query.victimName) {
-      const ids = await resolveNameIds(query.victimName);
-      if (ids.length === 0) return { clauses, empty: true };
-      clauses.push(inArray(combatEvents.victimPlayerId, ids));
+      const byName = playerNameMatch(combatEvents.victimPlayerId, query.victimName);
+      if (!byName) return { clauses, empty: true };
+      clauses.push(byName);
     }
 
     if (query.weapon) {
@@ -378,13 +371,6 @@ interface CsvSourceRow {
   victimVehicle: string | null;
   attackerVehicle: string | null;
   isTeamkill: boolean;
-}
-
-function csvCell(value: string | number | boolean | null): string {
-  if (value === null) return '';
-  const text = String(value);
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
 }
 
 function csvRow(row: CsvSourceRow): string {

@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { csvCell } from '../lib/csv.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 import {
@@ -57,11 +58,6 @@ function parseCsvRow(raw: string): { steamId64: string; comment: string | null }
   const [steamId64, comment] = cells;
   if (!steamId64) return null;
   return { steamId64, comment: comment ? comment : null };
-}
-
-function csvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
 }
 
 const whitelistRoutes: FastifyPluginAsync = async (app) => {

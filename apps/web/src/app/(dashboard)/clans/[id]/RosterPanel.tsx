@@ -158,7 +158,8 @@ export function deriveCapabilities(me: MeResponse | null, members: RosterMember[
     canAdd: canManageFull || isDeputy,
     canRemoveMembers: canManageFull || isDeputy,
     // Mirrors the API gate on PUT .../priority (clanManageLevel !== null):
-    // full managers and deputies may toggle, rank-and-file members may not.
+    // full managers and deputies may toggle, rank-and-file members may not;
+    // a deputy only for rank-and-file members (see RosterRow).
     canTogglePriority: canManageFull || isDeputy,
   };
 }
@@ -633,6 +634,9 @@ export function RosterRow({
   const canEditThisRole = caps.canManageFull && !isLeader;
   const canRemoveThis =
     !isLeader && (caps.canManageFull || (caps.canRemoveMembers && member.member_role === 'member'));
+  // A deputy toggles priority for rank-and-file members only, as the API enforces.
+  const canTogglePriorityThis =
+    caps.canManageFull || (caps.canTogglePriority && member.member_role === 'member');
 
   return (
     <TableRow interactive>
@@ -671,7 +675,7 @@ export function RosterRow({
             <input type="checkbox" checked disabled readOnly className="size-3.5 accent-ink-3" />
             <span className="text-xs">роль</span>
           </span>
-        ) : caps.canTogglePriority ? (
+        ) : canTogglePriorityThis ? (
           // Подпись скрыта визуально: колонка уже названа заголовком, но без
           // доступного имени флажок нем для скринридера.
           <Checkbox

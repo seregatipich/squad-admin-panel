@@ -1,3 +1,4 @@
+import { bucketSessionsByLocalHour } from '@squad/db';
 import {
   clanMembers,
   clans,
@@ -399,6 +400,70 @@ describeIfDb('GET /api/v1/clans/:id/stats', () => {
     const histogramSum = body.primetime.histogram.reduce((sum, seconds) => sum + seconds, 0);
     expect(histogramSum).toBe(body.primetime.total_seconds);
     expect(body.primetime.total_seconds).toBeGreaterThan(0);
+  });
+
+  it('buckets the exact seconds of each session into its UTC hour', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}/stats?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    const body = res.json() as ClanStatsResponse;
+    const expected = new Array<number>(24).fill(0);
+    expected[14] = 3600;
+    expected[15] = 3600;
+    expect(body.primetime.histogram).toEqual(expected);
+  });
+
+  // Audit #126 — the histogram was built from the OLDEST 5000 sessions of the
+  // window, so for a busy clan the most recent activity silently dropped out.
+  it('counts every session of a busy clan, the most recent included', async () => {
+    const busyMember = await seedPlayer('Статист Активный', 873010);
+    const busyClanId = uuidv7();
+    await h.db.insert(clans).values({ id: busyClanId, name: 'Активный клан', tags: ['BSY'] });
+    await h.db
+      .insert(clanMembers)
+      .values({ clanId: busyClanId, playerId: busyMember, memberRole: 'leader' });
+
+    const windowStart = Date.parse('2026-07-01T00:00:00.000Z');
+    const windowEnd = Date.parse('2026-07-06T00:00:00.000Z');
+    const sessions: Array<{ connectedAt: Date; disconnectedAt: Date | null }> = Array.from(
+      { length: 5000 },
+      (_, index) => ({
+        connectedAt: new Date(windowStart + index * 60_000),
+        disconnectedAt: new Date(windowStart + index * 60_000 + 30_000),
+      }),
+    );
+    // The newest session: it sits past the first 5000 by connected_at.
+    sessions.push({
+      connectedAt: new Date('2026-07-05T20:15:30.000Z'),
+      disconnectedAt: new Date('2026-07-05T21:45:00.000Z'),
+    });
+    // Started before the window and still open: clipped to the window.
+    sessions.push({
+      connectedAt: new Date('2026-06-30T23:30:00.000Z'),
+      disconnectedAt: null,
+    });
+    await h.db.insert(playerSessions).values(
+      sessions.map((session) => ({
+        playerId: busyMember,
+        serverId: serverAId,
+        connectedAt: session.connectedAt,
+        disconnectedAt: session.disconnectedAt,
+        mode: 'online' as const,
+      })),
+    );
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${busyClanId}/stats?from=2026-07-01&to=2026-07-05`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as ClanStatsResponse;
+    const expected = bucketSessionsByLocalHour(sessions, 0, windowStart, windowEnd, windowEnd);
+    expect(body.primetime.histogram).toEqual(expected);
+    expect(body.primetime.total_seconds).toBe(expected.reduce((sum, value) => sum + value, 0));
   });
 
   it('returns a gracefully zeroed payload for a clan with no presence/combat data', async () => {

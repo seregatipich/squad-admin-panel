@@ -492,7 +492,13 @@ export async function loginAsOwner(h: IntegrationHarness): Promise<string> {
  */
 export async function assertAuditRow(
   h: IntegrationHarness,
-  expected: { action: string; resource?: string; targetId?: string | null; withinMs?: number },
+  expected: {
+    action: string;
+    resource?: string;
+    targetId?: string | null;
+    statusCode?: number;
+    withinMs?: number;
+  },
 ): Promise<typeof auditLog.$inferSelect> {
   const withinMs = expected.withinMs ?? 5_000;
   const cutoff = new Date(Date.now() - withinMs);
@@ -503,6 +509,7 @@ export async function assertAuditRow(
       gte(auditLog.createdAt, cutoff),
       ...(expected.resource ? [eq(auditLog.targetType, expected.resource)] : []),
       ...(expected.targetId != null ? [eq(auditLog.targetId, expected.targetId)] : []),
+      ...(expected.statusCode != null ? [eq(auditLog.statusCode, expected.statusCode)] : []),
     );
   // Polling loop — onResponse hook completes shortly after inject resolves.
   while (Date.now() < deadline) {
