@@ -6,6 +6,16 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
+### Неиспользуемые индексы и один open-снимок балансировщика (migration 0136, #78)
+
+**Files:** `packages/db/drizzle/0136_index_cleanup_balancer_open_key.sql`, `packages/db/src/schema/{balancer-proposals,external-ban-sources,media-upload-tokens,reporter-stats,sessions,diagnostic-events}.ts`, `packages/db/test/index-cleanup.migration.test.ts`
+
+- Удалены индексы, которые не читает ни один запрос: `external_bans_source_id_idx` (префикс `external_bans_dedup_key`), `reporter_stats_trusted_idx`, `reporter_stats_spam_idx`, `sessions_last_activity_idx`, `media_upload_tokens_expires_at_idx`, `diagnostic_events_server_ts_idx`, `diagnostic_events_kind_ts_idx`.
+- `balancer_proposals_open_key`: частичный уникальный индекс `(server_id, mode) WHERE status = 'open'`. Уже существующие дубли open переводятся в `superseded` (остаётся самый новый по `generated_at`).
+- Совместимо с предыдущим релизом: меняются только индексы; откат не требует действий.
+- `reconcileDossierAggregates`: режим `repair` берёт `SHARE ROW EXCLUSIVE` на три таблицы агрегатов и запрещён вместе с `windowHours`. Удалены неиспользуемые `openPlayerSession`, `closePlayerSession`, `closeCrashedSessions`, `aggregateSessionsByDay` (сессиями владеет воркер rcon).
+
+
 ### Audit-wave migrations consolidated into 0119–0135
 
 The audit branches each added migrations independently and collided on 0119–0123 and 0130–0132. None had been applied to any database, so they were merged into one contiguous series; the entries below still cite the pre-consolidation names. The mapping (final file <- original files):

@@ -48,7 +48,9 @@ export interface BalancerProposalEntry {
  * stored row rather than creating a second one. When a *new* snapshot arrives
  * for the same `(server_id, mode)` pair, the previous still-`open` row is
  * flipped to `superseded`, so the review UI always has exactly one current
- * snapshot per granularity.
+ * snapshot per granularity — enforced by the partial unique index
+ * `balancer_proposals_open_key` (migration 0136), and a snapshot generated before the
+ * current open one is stored as `superseded` right away.
  *
  * `signals` and `proposal` are raw `jsonb` blobs carrying whatever the exporter
  * emitted, versioned by `schema_version`. That is deliberate: the exporter's
@@ -97,6 +99,9 @@ export const balancerProposals = pgTable(
     sourceSnapshotKey: uniqueIndex('balancer_proposals_source_snapshot_key').on(
       table.sourceSnapshotId,
     ),
+    openKey: uniqueIndex('balancer_proposals_open_key')
+      .on(table.serverId, table.mode)
+      .where(sql`${table.status} = 'open'`),
     serverGeneratedIdx: index('balancer_proposals_server_generated_idx').on(
       table.serverId,
       table.generatedAt.desc(),

@@ -93,7 +93,6 @@ export const externalBans = pgTable(
       .on(table.steamId64)
       .where(sql`steam_id64 IS NOT NULL`),
     eosIdIdx: index('external_bans_eos_id_idx').on(table.eosId).where(sql`eos_id IS NOT NULL`),
-    sourceIdIdx: index('external_bans_source_id_idx').on(table.sourceId),
     activeSourceIdx: index('external_bans_active_source_idx')
       .on(table.sourceId)
       .where(sql`revoked_at IS NULL`),

@@ -1,6 +1,7 @@
 import {
   layers,
   matches,
+  ROTATION_SCHEDULE_MODES,
   rotationProfiles,
   rotationSchedule,
   seedSchedule,
@@ -43,14 +44,14 @@ const calendarQuery = z
 const scheduleBody = z.object({
   scheduled_at: z.string().datetime(),
   layer: z.string().min(1).max(128),
-  mode: z.enum(['set_next', 'force_change']).default('set_next'),
+  mode: z.enum(ROTATION_SCHEDULE_MODES).default('set_next'),
   enabled: z.boolean().optional(),
 });
 const scheduleUpdateBody = z
   .object({
     scheduled_at: z.string().datetime().optional(),
     layer: z.string().min(1).max(128).optional(),
-    mode: z.enum(['set_next', 'force_change']).optional(),
+    mode: z.enum(ROTATION_SCHEDULE_MODES).optional(),
     enabled: z.boolean().optional(),
   })
   .refine((body) => Object.keys(body).length > 0, { message: 'at least one field is required' });

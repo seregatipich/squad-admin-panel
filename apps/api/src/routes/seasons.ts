@@ -1,4 +1,4 @@
-import { type SeasonRow, seasons } from '@squad/db/schema';
+import { SEASON_STATUSES, type SeasonRow, seasons } from '@squad/db/schema';
 import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -12,7 +12,7 @@ const NAME_MAX = 120;
 const idParam = z.object({ id: z.string().uuid() });
 
 const listQuery = z.object({
-  status: z.enum(['upcoming', 'active', 'closed']).optional(),
+  status: z.enum(SEASON_STATUSES).optional(),
 });
 
 // `closed` is deliberately absent: a season is closed by the finalize tick or by
@@ -29,7 +29,7 @@ const updateBody = z
     name: z.string().trim().min(1).max(NAME_MAX).optional(),
     starts_at: z.string().datetime().optional(),
     ends_at: z.string().datetime().optional(),
-    status: z.enum(['upcoming', 'active', 'closed']).optional(),
+    status: z.enum(SEASON_STATUSES).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'empty_update' });
 

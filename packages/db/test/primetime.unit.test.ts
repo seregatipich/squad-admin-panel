@@ -168,3 +168,35 @@ describe('computePlayerPrimetime', () => {
     expect(shifted.range?.startHour).toBe(20);
   });
 });
+
+describe('computePlayerPrimetime across a DST transition', () => {
+  it('applies the offset in effect at each session, not the one at the window end', () => {
+    // Europe/Berlin leaves DST on 2026-10-25 01:00 UTC: +02:00 before, +01:00 after.
+    const session = (iso: string): PrimetimeSession => ({
+      connectedAt: new Date(iso),
+      disconnectedAt: new Date(Date.parse(iso) + 3_600_000),
+    });
+    const windowStartMs = Date.parse('2026-10-20T00:00:00.000Z');
+    const windowEndMs = Date.parse('2026-10-30T00:00:00.000Z');
+    const histogram = bucketSessionsByLocalHour(
+      [session('2026-10-24T18:00:00.000Z'), session('2026-10-26T18:00:00.000Z')],
+      (atMs) => resolveTimezoneOffsetMinutes('Europe/Berlin', new Date(atMs)),
+      windowStartMs,
+      windowEndMs,
+      windowEndMs,
+    );
+    expect(histogram[20]).toBe(3600);
+    expect(histogram[19]).toBe(3600);
+
+    const result = computePlayerPrimetime({
+      sessions: [session('2026-10-24T18:00:00.000Z'), session('2026-10-26T18:00:00.000Z')],
+      timezone: 'Europe/Berlin',
+      windowStartMs,
+      windowEndMs,
+      nowMs: windowEndMs,
+    });
+    expect(result.offsetMinutes).toBe(60);
+    expect(result.histogram[20]).toBe(3600);
+    expect(result.histogram[19]).toBe(3600);
+  });
+});

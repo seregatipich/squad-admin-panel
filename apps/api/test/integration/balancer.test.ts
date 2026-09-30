@@ -518,6 +518,38 @@ describeIfDb('POST /api/v1/integrations/balancer/proposals', () => {
     expect(byKey.get('balancer-snapshot-player')?.status).toBe('open');
   });
 
+  it('stores a late-arriving older snapshot as superseded and keeps the newer one open', async () => {
+    await postSnapshot(
+      snapshotPayload({
+        source_snapshot_id: 'newer-snapshot',
+        generated_at: '2026-07-27T09:10:00.000Z',
+      }),
+    );
+    await postSnapshot(
+      snapshotPayload({
+        source_snapshot_id: 'older-snapshot',
+        generated_at: '2026-07-27T09:00:00.000Z',
+      }),
+    );
+
+    const byKey = new Map(
+      (await h.db.select().from(balancerProposals)).map((row) => [row.sourceSnapshotId, row]),
+    );
+    expect(byKey.get('newer-snapshot')?.status).toBe('open');
+    expect(byKey.get('older-snapshot')?.status).toBe('superseded');
+  });
+
+  it('enforces one open snapshot per (server_id, mode) in the database', async () => {
+    await postSnapshot(snapshotPayload({ source_snapshot_id: 'first-open' }));
+    const [first] = await h.db.select().from(balancerProposals);
+    if (!first) throw new Error('seed snapshot missing');
+    const { id: _id, ...rest } = first;
+
+    await expect(
+      h.db.insert(balancerProposals).values({ ...rest, sourceSnapshotId: 'second-open' }),
+    ).rejects.toThrow();
+  });
+
   it("prunes the server's aged superseded and dismissed snapshots (#108)", async () => {
     const old = new Date(Date.now() - 45 * 86_400_000);
     await postSnapshot(snapshotPayload({ source_snapshot_id: 'old-superseded' }));

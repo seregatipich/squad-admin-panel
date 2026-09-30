@@ -175,18 +175,28 @@ export function computeSeedSecondsByPlayerServer(
   }
 
   for (const list of byServer.values()) {
-    const boundaries = new Set<number>();
+    const startsAt = new Map<number, SeedSessionInterval[]>();
+    const endsAt = new Map<number, SeedSessionInterval[]>();
     for (const interval of list) {
-      boundaries.add(interval.startSec);
-      boundaries.add(interval.endSec);
+      const starting = startsAt.get(interval.startSec) ?? [];
+      starting.push(interval);
+      startsAt.set(interval.startSec, starting);
+      const ending = endsAt.get(interval.endSec) ?? [];
+      ending.push(interval);
+      endsAt.set(interval.endSec, ending);
     }
-    const sorted = [...boundaries].sort((a, b) => a - b);
-    for (let i = 0; i < sorted.length - 1; i += 1) {
-      const from = sorted[i];
-      const to = sorted[i + 1];
-      if (from === undefined || to === undefined) continue;
-      const active = list.filter((s) => s.startSec <= from && s.endSec >= to);
-      if (active.length === 0 || active.length >= threshold) continue;
+    const boundaries = [...new Set([...startsAt.keys(), ...endsAt.keys()])].sort((a, b) => a - b);
+
+    // Sessions active between the current boundary and the next one. Contributions
+    // are only enumerated while the set is below the threshold, so each interval
+    // costs O(threshold) at most and the whole sweep is O(N log N).
+    const active = new Set<SeedSessionInterval>();
+    for (let i = 0; i < boundaries.length - 1; i += 1) {
+      const from = boundaries[i] as number;
+      const to = boundaries[i + 1] as number;
+      for (const ended of endsAt.get(from) ?? []) active.delete(ended);
+      for (const started of startsAt.get(from) ?? []) active.add(started);
+      if (active.size === 0 || active.size >= threshold) continue;
       const duration = to - from;
       for (const s of active) {
         const key = `${s.playerId}|${s.serverId}`;
