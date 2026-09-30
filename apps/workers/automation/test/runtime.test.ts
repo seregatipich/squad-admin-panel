@@ -124,6 +124,19 @@ describe('processAutomationEnvelope — mapping & cooldown (mocked deps)', () =>
     expect(fired).toHaveLength(1);
   });
 
+  it('skips the players lookup when no enabled rule matches on player flags', async () => {
+    const resolvePlayerFlags = vi.fn(async () => ['watched']);
+    const { deps } = makeDeps({ resolvePlayerFlags });
+    await processAutomationEnvelope(
+      deps,
+      envelope({
+        type: 'player.connected',
+        payload: { steam_id64: '76561190000000001', eos_id: null, name: 'Bob', ip: null },
+      }),
+    );
+    expect(resolvePlayerFlags).not.toHaveBeenCalled();
+  });
+
   it('gates a time_of_day rule behind the per-rule cooldown', async () => {
     const todRule: AutomationRuleInput = {
       id: randomUUID(),
@@ -222,4 +235,36 @@ describeIfDb('processAutomationEnvelope — real DB + Redis firing', () => {
 
     await redis.del(streamKey).catch(() => undefined);
   }, 30_000);
+});
+
+describe('resolvePlayerFlags — lookup keys (fake db)', () => {
+  function fakeDb(rowsBySelect: Array<Array<Record<string, unknown>>>) {
+    const select = vi.fn(() => ({
+      from: () => ({ where: () => ({ limit: async () => rowsBySelect.shift() ?? [] }) }),
+    }));
+    return { db: { select } as unknown as DatabaseClient, select };
+  }
+
+  it('ignores a non-numeric steam id instead of throwing', async () => {
+    const { db, select } = fakeDb([]);
+    await expect(
+      resolvePlayerFlags(db, { steamId64: 'not-a-steam-id', eosId: null }),
+    ).resolves.toEqual([]);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('prefers the steam match over the eos match', async () => {
+    const { db, select } = fakeDb([
+      [{ steamEosConflict: false, roleId: 'r1', roleExpiresAt: null }],
+    ]);
+    const flags = await resolvePlayerFlags(db, { steamId64: '76561190000000001', eosId: 'eos1' });
+    expect(flags).toEqual(['has_role']);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the eos id when the steam id matches no player', async () => {
+    const { db } = fakeDb([[], [{ steamEosConflict: true, roleId: null, roleExpiresAt: null }]]);
+    const flags = await resolvePlayerFlags(db, { steamId64: '76561190000000001', eosId: 'eos1' });
+    expect(flags).toEqual(['steam_eos_conflict']);
+  });
 });

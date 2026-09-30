@@ -62,6 +62,7 @@ async function buildTriggerInput(
   deps: AutomationRuntimeDeps,
   envelope: EventEnvelope,
   now: Date,
+  rules: readonly AutomationRuleInput[],
 ): Promise<AutomationTriggerInput | null> {
   const base: AutomationTriggerInput = { serverId: envelope.server_id, now };
   if (envelope.type === 'rcon.players_polled') {
@@ -70,7 +71,10 @@ async function buildTriggerInput(
   if (envelope.type === 'player.connected') {
     const ref = readConnectedPlayer(envelope.payload);
     if (!ref) return base;
-    const flags = await deps.resolvePlayerFlags({ steamId64: ref.steamId64, eosId: ref.eosId });
+    // The players lookup is only worth a query when some rule can match on flags.
+    const flags = rules.some((rule) => rule.conditionType === 'player_flag')
+      ? await deps.resolvePlayerFlags({ steamId64: ref.steamId64, eosId: ref.eosId })
+      : [];
     return {
       ...base,
       playerFlags: flags,
@@ -108,9 +112,9 @@ export async function processAutomationEnvelope(
   const now = deps.now?.() ?? new Date();
   const drafts: AutomationRunDraft[] = [];
   try {
-    const input = await buildTriggerInput(deps, envelope, now);
-    if (!input) return drafts;
     const rules = await deps.loadRules();
+    const input = await buildTriggerInput(deps, envelope, now, rules);
+    if (!input) return drafts;
     const matches = evaluate(input, rules);
     for (const match of matches) {
       if (
