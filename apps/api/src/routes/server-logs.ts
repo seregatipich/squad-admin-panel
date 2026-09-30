@@ -158,8 +158,8 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
               }
             });
             safeSend({ done: true });
-          } finally {
             if (!closed) socket.close();
+          } finally {
             await dedicatedBridge.close().catch(() => undefined);
           }
         } catch (err) {
