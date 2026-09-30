@@ -7,9 +7,9 @@ import { createIsolatedPackageTestDatabase } from './helpers/isolated-database.j
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
-const MIGRATION_SQL = path.resolve(__dirname, '../drizzle/0119_automation_kick_default_reason.sql');
+const MIGRATION_SQL = path.resolve(__dirname, '../drizzle/0120_automation_kick_default_reason.sql');
 
-describeIfDb('migration 0119 automation_kick_default_reason (#53)', () => {
+describeIfDb('migration 0120 automation_kick_default_reason (#53)', () => {
   it('backfills a reason on blank-reason kick rules and leaves every other rule alone', async () => {
     if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
     const isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'db_kick_reason', {

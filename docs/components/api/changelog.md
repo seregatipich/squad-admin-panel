@@ -92,7 +92,7 @@
 - `GET /api/v1/players/:playerId/alt-candidates` оценивает не больше 1000 кандидатов (с наибольшим числом общих неигнорируемых IP) и передаёт их id одним параметром-массивом. Раньше цель за CGNAT с десятками тысяч кандидатов упиралась в лимит bind-параметров Postgres и получала `500`. `total` считает оценённых кандидатов.
 - `GET /api/v1/geo-anomalies` загружает историю IP всех кандидатов одним оконным запросом (до 500 последних строк на игрока) вместо отдельного запроса на каждого из до 500 кандидатов.
 - `GET /api/v1/players` принимает `limit` (1–500, по умолчанию 200) и `offset`, а `total` считает всех подходящих игроков, а не размер страницы. На странице «Все игроки» появилась постраничная навигация, и «всего» показывает настоящее число игроков.
-- Поиск игроков по нику: миграция `0120_player_name_trgm_indexes` добавляет GIN-индексы `pg_trgm` на `players.canonical_name_normalized` и `player_name_history.name_normalized`, поэтому `LIKE '%q%'` в списке, поиске и других маршрутах больше не читает таблицы целиком. Точное совпадение по SteamID64 в `/players`, `/players/search`, `/users`, лидербордах, участниках роли и составе клана сравнивает `steam_id64` как `bigint` и не приводит столбец к тексту. В `/players` и `/players/search` символы `%` и `_` в запросе ищутся буквально.
+- Поиск игроков по нику: миграция `0126_player_search_and_report_indexes` добавляет GIN-индексы `pg_trgm` на `players.canonical_name_normalized` и `player_name_history.name_normalized`, поэтому `LIKE '%q%'` в списке, поиске и других маршрутах больше не читает таблицы целиком. Точное совпадение по SteamID64 в `/players`, `/players/search`, `/users`, лидербордах, участниках роли и составе клана сравнивает `steam_id64` как `bigint` и не приводит столбец к тексту. В `/players` и `/players/search` символы `%` и `_` в запросе ищутся буквально.
 
 ## 2026-09-28 — Роли, репорты, банлист и восстановление из архива (#41)
 
@@ -178,7 +178,7 @@
 
 ### Database
 
-- Миграция `0119_api_route_audit_indexes`: частичный индекс `chat_messages (matched_rule_id)`, `player_sessions (server_id, disconnected_at)` для закрытых сессий, trigram-индексы на `players.canonical_name_normalized` и `player_name_history.name_normalized`, перенос `next_renewal_at` активных подписок.
+- Миграции `0126_player_search_and_report_indexes`, `0128_list_query_indexes` и `0129_vip_subscription_renewal_lead`: частичный индекс `chat_messages (matched_rule_id)`, `player_sessions (server_id, disconnected_at)` для закрытых сессий, trigram-индексы на `players.canonical_name_normalized` и `player_name_history.name_normalized`, перенос `next_renewal_at` активных подписок.
 
 ## 2026-09-28 — Подтверждённые заявки whitelist, статистика и ReDoS (#52)
 
@@ -284,7 +284,7 @@
 
 ### Changed
 
-- Миграция `0119_list_query_indexes`: индекс `balancer_proposals (generated_at DESC, id DESC)` и частичный индекс активных записей `external_bans (source_id) WHERE revoked_at IS NULL`. Приём нового снапшота балансировщика удаляет `superseded`/`dismissed` снапшоты этого сервера, полученные более 30 дней назад.
+- Миграция `0128_list_query_indexes`: индекс `balancer_proposals (generated_at DESC, id DESC)` и частичный индекс активных записей `external_bans (source_id) WHERE revoked_at IS NULL`. Приём нового снапшота балансировщика удаляет `superseded`/`dismissed` снапшоты этого сервера, полученные более 30 дней назад.
 
 ## 2026-09-28 — Аудит маршрутов API: права, аудит, валидация ввода (#69)
 
@@ -317,7 +317,7 @@
 
 ### Migration notes
 
-- Миграция `0119_player_name_trgm_indexes` добавляет GIN-индексы pg_trgm для поиска по именам игроков; совместима с предыдущим релизом.
+- Миграция `0126_player_search_and_report_indexes` добавляет GIN-индексы pg_trgm для поиска по именам игроков; совместима с предыдущим релизом.
 
 ## 2026-09-28 — Аудит маршрутов API: безопасность, гонки, типы (#70)
 

@@ -51,7 +51,7 @@ export const chatMessages = pgTable(
       'gin',
       sql`${table.message} gin_trgm_ops`,
     ),
-    // Keyset walks ORDER BY sent_at, id (chat-flag reindex, migration 0123).
+    // Keyset walks ORDER BY sent_at, id (chat-flag reindex, migration 0128).
     sentIdIdx: index('chat_messages_sent_id_idx').on(table.sentAt, table.id),
     matchedRuleIdx: index('chat_messages_matched_rule_idx')
       .on(table.matchedRuleId)

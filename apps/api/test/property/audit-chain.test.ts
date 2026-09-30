@@ -6,7 +6,7 @@ import { createIsolatedSchema, runMigrations } from '../integration/harness.js';
 
 /**
  * Independent reference of the v2 canonical form hashed by `audit_log_append()`
- * (migration 0119): `'v2'` + every column as a `|<bytes>:<value>` field, `|-`
+ * (migration 0135): `'v2'` + every column as a `|<bytes>:<value>` field, `|-`
  * for NULL.
  */
 function computeRowHash(prevHashHex: string | null, row: RawRow): string {

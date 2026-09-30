@@ -43,7 +43,7 @@ const EXTRA_COLUMNS = {
   duration_ms_text: null,
 } as const;
 
-/** Builds a well-formed v1 chain (rows written before migration 0119) of `n` rows. */
+/** Builds a well-formed v1 chain (rows written before migration 0135) of `n` rows. */
 function buildChain(n: number): AuditChainRow[] {
   const rows: AuditChainRow[] = [];
   let prev: string | null = null;
@@ -69,7 +69,7 @@ function buildChain(n: number): AuditChainRow[] {
   return rows;
 }
 
-// Independent reference of the v2 trigger form (migration 0119).
+// Independent reference of the v2 trigger form (migration 0135).
 function refV2HashHex(prevHashHex: string | null, row: AuditChainRow): string {
   const field = (v: string | null) => (v === null ? '|-' : `|${Buffer.byteLength(v)}:${v}`);
   const canonical = `v2${[

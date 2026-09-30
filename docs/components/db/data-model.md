@@ -38,9 +38,9 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 
 ## `audit_log`
 
-Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash`, `row_hash` and `hash_version` on every INSERT. UPDATE, DELETE and TRUNCATE (statement trigger `trg_audit_log_no_truncate`, since migration 0119) raise `audit_log is append-only`.
+Immutable, hash-chained record of every state-mutating API action. The DB trigger `trg_audit_log_ins` (function `audit_log_append`) fills `prev_hash`, `row_hash` and `hash_version` on every INSERT. UPDATE, DELETE and TRUNCATE (statement trigger `trg_audit_log_no_truncate`, since migration 0135) raise `audit_log is append-only`.
 
-Since migration 0132 (issue #50) rows are hashed with the **v2** canonical form: `'v2'` followed by every column (`id`, `created_at` rendered in UTC with microseconds, all actor columns, `action_type`, `target_*`, both snapshots, `context`, `status_code`, `duration_ms`), each as a `|<utf-8 byte length>:<::text value>` field (`|-` for NULL). Older rows keep `hash_version = 1` (`action_type|target_type|target_id|context::text|created_at::text`) and are still verified with that form; a v1 row after the first v2 row is a `hash_version` break. The verifier is `apps/api/src/lib/audit-chain.ts`.
+Since migration 0135 (issue #50) rows are hashed with the **v2** canonical form: `'v2'` followed by every column (`id`, `created_at` rendered in UTC with microseconds, all actor columns, `action_type`, `target_*`, both snapshots, `context`, `status_code`, `duration_ms`), each as a `|<utf-8 byte length>:<::text value>` field (`|-` for NULL). Older rows keep `hash_version = 1` (`action_type|target_type|target_id|context::text|created_at::text`) and are still verified with that form; a v1 row after the first v2 row is a `hash_version` break. The verifier is `apps/api/src/lib/audit-chain.ts`.
 
 **Columns**
 
@@ -63,7 +63,7 @@ Since migration 0132 (issue #50) rows are hashed with the **v2** canonical form:
 | `duration_ms` | `integer` | YES | NULL | Handler wall-clock time |
 | `prev_hash` | `bytea` | YES | NULL | SHA-256 of the previous row's `row_hash`; NULL on the first row |
 | `row_hash` | `bytea` | NO | — | `sha256(prev_hash ∥ canonical(row))` written by trigger (canonical form per `hash_version`) |
-| `hash_version` | `smallint` | NO | `1` | Canonical form of `row_hash`: `1` before migration 0132, `2` since; set by the trigger |
+| `hash_version` | `smallint` | NO | `1` | Canonical form of `row_hash`: `1` before migration 0135, `2` since; set by the trigger |
 
 **Indexes**
 
@@ -82,17 +82,18 @@ Since migration 0132 (issue #50) rows are hashed with the **v2** canonical form:
 
 | Trigger | Event | Function | Effect |
 |---|---|---|---|
-| `trg_audit_log_ins` | `BEFORE INSERT` | `audit_log_append()` | Acquires advisory xact lock `hashtextextended('audit_log', 0)`, reads last `row_hash`, sets `prev_hash`, computes and sets `row_hash` |
+| `trg_audit_log_ins` | `BEFORE INSERT` | `audit_log_append()` | Acquires advisory xact lock `hashtextextended('audit_log', 0)`, assigns `id`, reads last `row_hash`, sets `prev_hash`, `hash_version` and `row_hash` |
 | `trg_audit_log_no_upd` | `BEFORE UPDATE` | `audit_log_deny()` | Raises `audit_log is append-only` |
 | `trg_audit_log_no_del` | `BEFORE DELETE` | `audit_log_deny()` | Raises `audit_log is append-only` |
 
 **Hash canonical form** (same as `scripts/verify-audit-chain.ts`):
 
 ```
-sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | audit_log_created_at_text(created_at) ) )
+v1 (rows with hash_version = 1): sha256( prev_hash || utf8( action_type | target_type | target_id | context::text | created_at::text ) )
+v2 (hash_version = 2):           sha256( prev_hash || utf8( 'v2' || field(id) || field(created_at UTC) || ... every column ) )
 ```
 
-`audit_log_created_at_text()` renders `created_at::text` with `TimeZone = 'UTC'` and `DateStyle = 'ISO, MDY'` pinned on the function (migration 0119), so the hash does not depend on the writer's or verifier's session settings. The trigger also assigns `id` itself, after taking the advisory lock; the column has no default.
+The trigger pins `TimeZone = 'UTC'` on itself (migration 0135), so the hash does not depend on the writer's session settings; verifiers read `created_at::text` under a UTC session. The trigger also assigns `id` itself, after taking the advisory lock; the column has no default.
 
 **Example row:**
 
@@ -295,7 +296,7 @@ Monthly-partitioned table for Squad event envelopes produced by `worker-rcon` an
 
 Idempotency table for event consumers. Before a worker processes an event it inserts `event_id` here. ON CONFLICT means the event was already handled by this consumer group. Rows older than 30 days are deleted hourly by `worker-event-partition` (`pruneProcessedEvents`, issue #50).
 
-Retention: `worker-event-partition` deletes rows whose `processed_at` falls before the `events` retention cutoff (24 months, UTC month boundary), served by `processed_events_processed_at_idx` (migration 0119, which also dropped the never-queried `processed_events_group_idx`).
+Retention: `worker-event-partition` deletes rows whose `processed_at` falls before the `events` retention cutoff (24 months, UTC month boundary), served by `processed_events_processed_at_idx` (migration 0128, which also dropped the never-queried `processed_events_group_idx`).
 
 **Columns**
 
@@ -427,7 +428,7 @@ Deduplicated log of observed `(player_id, name_normalized)` pairs. Normalization
 |---|---|---|
 | `player_name_history_player_name_key` | `(player_id, name_normalized)` | UNIQUE |
 | `player_name_history_name_normalized_idx` | `name_normalized` | plain |
-| `player_name_history_name_normalized_trgm_idx` | `name_normalized gin_trgm_ops` | GIN (migration 0119) — serves `LIKE '%…%'` nickname search |
+| `player_name_history_name_normalized_trgm_idx` | `name_normalized gin_trgm_ops` | GIN (migration 0126) — serves `LIKE '%…%'` nickname search |
 | `player_name_history_last_seen_at_idx` | `last_seen_at` | plain |
 
 ---
@@ -476,7 +477,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 |---|---|---|
 | `players_eos_id_unique_idx` | `eos_id` | `eos_id IS NOT NULL` |
 | `players_canonical_name_normalized_idx` | `canonical_name_normalized` | — |
-| `players_canonical_name_normalized_trgm_idx` | GIN `canonical_name_normalized gin_trgm_ops` (migration 0119) — serves `LIKE '%…%'` nickname search | — |
+| `players_canonical_name_normalized_trgm_idx` | GIN `canonical_name_normalized gin_trgm_ops` (migration 0126) — serves `LIKE '%…%'` nickname search | — |
 | `players_last_seen_at_idx` | `last_seen_at` | — |
 | `players_role_id_idx` | `role_id` | `role_id IS NOT NULL` |
 | `players_steam_checked_at_idx` | `steam_checked_at NULLS FIRST` | `steam_id64 IS NOT NULL` |
@@ -504,7 +505,7 @@ nullable fields remain NULL and the non-null ban counters keep their defaults.
 
 ## `role_permissions`
 
-M:N join table mapping roles to permission key strings. **Legacy**: no API route writes it since the flag model (0015), and migration 0121 deleted every stored row (#36). `loadUserPermissions` still honours a row, but only when the role's flags allow that key (the same gates as the flag-derived set), so it can never grant more than the role editor shows.
+M:N join table mapping roles to permission key strings. **Legacy**: no API route writes it since the flag model (0015), and migration 0122 deleted every stored row (#36). `loadUserPermissions` still honours a row, but only when the role's flags allow that key (the same gates as the flag-derived set), so it can never grant more than the role editor shows.
 
 **Columns**
 
@@ -809,7 +810,7 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit an applicat
 | `granted_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL; role granted on approval |
 | `granted_until` | `timestamptz` | YES | `null` | Mirrors `players.role_expires_at`; `null` = permanent |
 | `source` | `text` | NO | `'public'` | CHECK IN (`public`,`panel`) |
-| `verified` | `boolean` | NO | `false` | Submitted from a Steam login for this same SteamID64 (migration 0120) |
+| `verified` | `boolean` | NO | `false` | Submitted from a Steam login for this same SteamID64 (migration 0123) |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `decided_at` | `timestamptz` | YES | `null` | Set when approved/rejected |
 
@@ -842,7 +843,7 @@ MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/ap
 | `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
 | `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
 | `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
-| `tracking_token` | `text` | YES | `null` | Legacy plaintext column, always NULL since migration 0119 (a trigger hashes and clears any value written); to be dropped in a later release |
+| `tracking_token` | `text` | YES | `null` | Legacy plaintext column, always NULL since migration 0134 (a trigger hashes and clears any value written); to be dropped in a later release |
 | `tracking_token_hash` | `text` | NO | | sha256 hex of the `randomBytes(24).toString('base64url')` token, which is returned once and is the applicant's only handle; unique |
 | `submitter_ip` | `inet` | YES | `null` | Abuse forensics; cleared by `worker-event-partition` 30 days after the decision, 90 days after submission at the latest |
 | `created_at` | `timestamptz` | NO | `now()` | |
@@ -852,7 +853,7 @@ MOD-5 (#62) ban-appeal portal queue. Rows are created by `POST /api/v1/public/ap
 **Indexes**
 
 - `ban_appeals_number_key` UNIQUE on `(number)`
-- `ban_appeals_tracking_token_hash_key` UNIQUE on `(tracking_token_hash)` (replaced `ban_appeals_tracking_token_key` in migration 0119)
+- `ban_appeals_tracking_token_hash_key` UNIQUE on `(tracking_token_hash)` (added in migration 0134; the legacy `ban_appeals_tracking_token_key` stays until the plaintext column is dropped in a later release)
 - `ban_appeals_status_created_idx` on `(status, created_at)`
 - `ban_appeals_player_idx` on `(player_id)`
 - `ban_appeals_action_idx` on `(moderation_action_id)`
@@ -917,7 +918,7 @@ One row per dry-run snapshot delivered by
 `received_at`, `created_at`. Indexes: unique `source_snapshot_id`,
 `(server_id, generated_at DESC)`, `(status, generated_at DESC)` and
 `(generated_at DESC, id DESC)` for the unfiltered keyset listing (migration
-`0119`). Retention: each newly ingested snapshot deletes that server's
+`0128`). Retention: each newly ingested snapshot deletes that server's
 `superseded`/`dismissed` rows received more than 30 days earlier.
 
 `signals` and `proposal` are stored verbatim and versioned by `schema_version`,

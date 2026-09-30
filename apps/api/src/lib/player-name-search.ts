@@ -21,7 +21,7 @@ function escapeLike(input: string): string {
  * bound one parameter per id: a short query on a large database used to
  * exceed Postgres' 65 535 bind-parameter limit and answer 500 (audit
  * #117/#118/#138). The substring `LIKE` is served by the `gin_trgm_ops`
- * indexes on both columns (migration `0119_player_name_trgm_indexes`) for
+ * indexes on both columns (migration `0126_player_search_and_report_indexes`) for
  * queries of three or more characters.
  *
  * @param column - The player-id column to filter (e.g. `chatMessages.playerId`); a

@@ -1,27 +1,19 @@
--- Coalesce `events_appended` NOTIFYs to one per statement (#1327).
+-- Coalesce `events_appended` NOTIFYs to one per statement (#1089, #1327).
 --
 -- 0116's trigger was `AFTER INSERT ... FOR EACH ROW`, so a multi-row INSERT
--- (a bulk backfill, an `INSERT ... SELECT`, a future batched writer) called
--- `pg_notify` once per row. Every transaction that calls `pg_notify` takes
--- Postgres's single global notification-queue lock at commit
--- (`PreCommit_Notify`), so those commits serialize against every other
--- commit in the database that also NOTIFYs, and the queue (capped at 8GB)
--- fills faster the more redundant notifications a burst produces.
+-- (a bulk backfill, an `INSERT ... SELECT`, a batched writer) called
+-- `pg_notify` once per row on the combat hot path. Every transaction that
+-- calls `pg_notify` takes Postgres's single global notification-queue lock at
+-- commit, so those commits serialize against every other NOTIFYing commit, and
+-- the queue fills faster the more redundant notifications a burst produces.
 --
--- This does not change the shape of a single-row insert (still exactly one
--- NOTIFY, matching the previous per-row behavior) — log-ingest, handleCombat
--- and worker-rcon each write one `events` row per transaction today, so their
--- commit-serialization cost is unchanged by this migration alone. What it
--- fixes is any statement that inserts many rows at once: instead of one
--- NOTIFY per row (identical (server_id, kind) payloads included), the
--- statement-level trigger reads the whole inserted set once via the
--- transition table and emits at most one NOTIFY per distinct (server_id,
--- kind) pair in it — Postgres already folds identical NOTIFY payloads raised
--- in one transaction, so this makes explicit what was previously produced
--- redundantly one row at a time.
+-- The statement-level trigger reads the whole inserted set once through the
+-- transition table and announces each distinct (server_id, kind) pair once. A
+-- single-row insert still produces exactly one NOTIFY.
 --
--- Payload format is unchanged (`{"server_id": <uuid|null>, "kind": <text>}`),
--- so apps/api/src/plugins/events-feed.ts needs no change.
+-- Channel and payload (`{"server_id": <uuid|null>, "kind": <text>}`) are
+-- unchanged, so apps/api/src/plugins/events-feed.ts and every listener keep
+-- working.
 --
 -- Rollback-safe: the previous release neither listens on the channel nor
 -- depends on trigger granularity; a NOTIFY nobody listens to is dropped.

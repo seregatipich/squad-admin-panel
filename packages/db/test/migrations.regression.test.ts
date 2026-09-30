@@ -27,7 +27,7 @@ afterAll(async () => {
 });
 
 describeIfDb('migration regressions', () => {
-  it('player search and report-analytics indexes exist (0119, audit #71)', async () => {
+  it('player search and report-analytics indexes exist (0126, audit #71)', async () => {
     const rows = await db.execute(sql`
       SELECT indexname, indexdef FROM pg_indexes
       WHERE schemaname = 'public'

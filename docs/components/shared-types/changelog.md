@@ -13,7 +13,7 @@
 ## 2026-09-28 — Validation gaps from the #53 audit
 
 ### Fixed
-- `automation.ts`: `kickActionSchema.reason` is required (non-blank) — worker-rcon refuses `AdminKick` with an empty reason, yet such rules were saved and every firing recorded as executed. Migration `0119_automation_kick_default_reason` backfills a reason on existing blank-reason kick rules.
+- `automation.ts`: `kickActionSchema.reason` is required (non-blank) — worker-rcon refuses `AdminKick` with an empty reason, yet such rules were saved and every firing recorded as executed. Migration `0120_automation_kick_default_reason` backfills a reason on existing blank-reason kick rules.
 - `automation.ts`: `rconCommandActionSchema` requires exactly the argument count worker-rcon demands for the command (new `RCON_OPERATOR_COMMAND_ARG_COUNTS` in `rcon-commands.ts`), each argument non-blank.
 - `automation.ts`: `timeOfDayConditionSchema.timezone` must resolve through `Intl` (`unknown IANA timezone` otherwise) instead of saving a rule that silently never fires.
 - `automation-engine.ts`: `chat_keyword` `word` mode uses Unicode letter/digit boundaries (`u` flag), so Cyrillic keywords no longer match inside other words.

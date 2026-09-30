@@ -35,11 +35,11 @@ export const AUDIT_CHAIN_COLUMNS_SQL = `
  * (see {@link AUDIT_CHAIN_COLUMNS_SQL}).
  *
  * `hash_version` selects the canonical form: `1` for rows written before
- * migration 0132 (`action|target|context::text|created_at::text`), `2` for
+ * migration 0135 (`action|target|context::text|created_at::text`), `2` for
  * every row since (all columns, length-prefixed, UTC timestamp). Any
  * `created_at`/`context_text` must be the Postgres `::text` renderings the v1
  * form hashes; `created_at::text` is rendered with `TimeZone = 'UTC'`, the zone
- * the trigger pins for itself (migration 0122). `prev_hash_hex`/`row_hash_hex`
+ * the trigger pins for itself (migration 0135). `prev_hash_hex`/`row_hash_hex`
  * are the lowercase `encode(..,'hex')` of the `bytea` hash columns;
  * `prev_hash_hex` is `null` for the genesis row.
  */
@@ -84,9 +84,9 @@ export interface AuditChainResult {
 }
 
 /**
- * The v1 canonical string (rows written before migration 0132):
+ * The v1 canonical string (rows written before migration 0135):
  * `action_type|target_type|target_id|context::text|<created_at>`, where
- * `<created_at>` is `audit_log_created_at_text(created_at)`, with NULL target
+ * `<created_at>` is `created_at::text` rendered with `TimeZone = 'UTC'`, with NULL target
  * fields rendered as the empty string.
  */
 export function canonicalAuditStringV1(row: AuditChainRow): string {
@@ -105,7 +105,7 @@ function v2Field(value: string | null): string {
 }
 
 /**
- * The v2 canonical string, mirroring `audit_log_append()` from migration 0132:
+ * The v2 canonical string, mirroring `audit_log_append()` from migration 0135:
  * `'v2'` followed by every column as a length-prefixed field, so no value can be
  * rewritten (or shifted across a separator) without changing the digest.
  */
@@ -228,10 +228,10 @@ export class AuditChainVerifier {
  * input is a valid, intact chain.
  *
  * Primary-key order is the chain order because the append trigger draws `id`
- * only after taking the chain lock (migration 0122). Read `created_at::text`
+ * only after taking the chain lock (migration 0135). Read `created_at::text`
  * with the session TimeZone set to UTC, the zone the trigger hashes it in.
  * Versions never go back down, and TRUNCATE of `audit_log` is refused by the
- * database since migration 0132, so an emptied table cannot pass as intact.
+ * database since migration 0135, so an emptied table cannot pass as intact.
  */
 export function verifyAuditChain(rows: readonly AuditChainRow[]): AuditChainResult {
   const verifier = new AuditChainVerifier();

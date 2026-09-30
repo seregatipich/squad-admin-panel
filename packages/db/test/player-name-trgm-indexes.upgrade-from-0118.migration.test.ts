@@ -9,14 +9,14 @@ import {
 
 /**
  * #69 (finding #180): name search runs `LIKE '%q%'`, which no btree index can
- * serve. Migration 0119 adds pg_trgm GIN indexes on the two searched columns;
+ * serve. Migration 0126 adds pg_trgm GIN indexes on the two searched columns;
  * this checks they exist after upgrading from 0118 and that the planner can use
  * them for an unanchored, escaped LIKE.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
-describeIfDb('migration 0119 player_name_trgm_indexes', () => {
+describeIfDb('migration 0126 player_name_trgm_indexes', () => {
   it('adds GIN trigram indexes that serve an unanchored LIKE on player names', async () => {
     if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
     const isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'db_name_trgm', {

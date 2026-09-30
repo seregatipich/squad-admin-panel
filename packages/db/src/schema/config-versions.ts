@@ -23,7 +23,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
  * Append-only history of every config file the panel writes (no UPDATE; DELETE
  * only through a server-delete cascade). `parent_version_id` links each
  * version to the one it replaced; the author reference is NO ACTION because
- * the append-only triggers make SET NULL unreachable (migration 0119).
+ * the append-only triggers make SET NULL unreachable (migration 0133).
  */
 export const configVersions = pgTable(
   'config_versions',

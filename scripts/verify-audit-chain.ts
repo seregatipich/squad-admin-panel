@@ -4,7 +4,7 @@
  *
  * Walks the audit_log table in primary-key order and verifies that each
  * row's row_hash equals sha256(prev_hash || canonicalized-row) for the row's
- * hash_version (v1 before migration 0132, v2 since). Fails
+ * hash_version (v1 before migration 0135, v2 since). Fails
  * fast on the first mismatch. Exits 0 when the chain is intact. Reads the
  * table in keyset pages from one REPEATABLE READ snapshot, with the session
  * TimeZone pinned to UTC — the zone the append trigger hashes created_at in.

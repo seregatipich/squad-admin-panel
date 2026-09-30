@@ -90,7 +90,7 @@ export function planVipGrant(
  * ahead (several renewal ticks, and well under the shortest one-day period)
  * keeps the renewed period contiguous: `planVipGrant` extends an unexpired role
  * from its current expiry. {@link nextRenewalAfter} preserves the lead for
- * every later period. Migration 0119 applies the same offset to subscriptions
+ * every later period. Migration 0129 applies the same offset to subscriptions
  * created before this lead existed.
  */
 export const VIP_RENEWAL_LEAD_MS = 6 * 60 * 60 * 1000;

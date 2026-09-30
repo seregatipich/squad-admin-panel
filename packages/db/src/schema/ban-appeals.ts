@@ -28,7 +28,7 @@ import { players } from './players.js';
  *
  * The tracking token is the applicant's only handle on the appeal: it is
  * returned once at submission and is the sole key to the public status page.
- * Only its sha256 hex ({@link trackingTokenHash}) is stored (migration 0119);
+ * Only its sha256 hex ({@link trackingTokenHash}) is stored (migration 0134);
  * {@link trackingToken} is the legacy plaintext column, always NULL — a
  * trigger hashes and clears any plaintext a previous release still writes —
  * and will be dropped in a later release. {@link submitterIp} is cleared by

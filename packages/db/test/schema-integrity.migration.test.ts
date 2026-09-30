@@ -9,10 +9,11 @@ import {
 } from './helpers/isolated-database.js';
 
 /**
- * Migration 0119 (issue #77): the append-only tables' foreign keys, the
- * audit_log hash chain, config_versions parent integrity, redundant and
- * missing indexes, the ban-appeal tracking token at rest and the events
- * NOTIFY trigger. Runs against this worker's migrated clone.
+ * Migrations 0132-0135 (issues #77, #1089, #1084): the append-only tables'
+ * foreign keys, the audit_log id order, config_versions parent integrity,
+ * redundant and missing indexes, the ban-appeal tracking token at rest and the
+ * events NOTIFY trigger. The v2 hash form and TRUNCATE guards are covered by
+ * audit-integrity.test.ts. Runs against this worker's migrated clone.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -151,43 +152,6 @@ describeIfDb('audit_log hash chain', () => {
       ) chain
       WHERE id > ${String(first)} AND prev_hash IS DISTINCT FROM expected`;
     expect(breaks).toEqual([]);
-  });
-
-  it('hashes created_at the same way whatever the inserting session TimeZone is', async () => {
-    const [inserted] = await sql.begin(async (tx) => {
-      await tx`SET LOCAL TimeZone = 'America/New_York'`;
-      await tx`SET LOCAL DateStyle = 'SQL, DMY'`;
-      return tx<{ id: string }[]>`
-        INSERT INTO audit_log (actor_kind, actor_system_label, action_type, row_hash)
-        VALUES ('system', 'integrity', 'integrity.timezone', '\\x00')
-        RETURNING id::text AS id`;
-    });
-    if (!inserted) throw new Error('audit insert returned no row');
-
-    const [check] = await sql.begin(async (tx) => {
-      await tx`SET LOCAL TimeZone = 'UTC'`;
-      await tx`SET LOCAL DateStyle = 'ISO, MDY'`;
-      return tx<{ matches: boolean; plain: string }[]>`
-        SELECT row_hash = digest(
-                 COALESCE(prev_hash, ''::bytea) || convert_to(
-                   action_type || '|' || COALESCE(target_type, '') || '|' ||
-                   COALESCE(target_id, '') || '|' || context::text || '|' || created_at::text,
-                   'UTF8'),
-                 'sha256') AS matches,
-               created_at::text AS plain
-        FROM audit_log WHERE id = ${inserted.id}`;
-    });
-    // A verifier in a UTC session reproduces the hash of a row inserted from
-    // a New York session.
-    expect(check?.matches).toBe(true);
-
-    const [elsewhere] = await sql.begin(async (tx) => {
-      await tx`SET LOCAL TimeZone = 'Asia/Tokyo'`;
-      return tx<{ pinned: string }[]>`
-        SELECT audit_log_created_at_text(created_at) AS pinned
-        FROM audit_log WHERE id = ${inserted.id}`;
-    });
-    expect(elsewhere?.pinned).toBe(check?.plain);
   });
 });
 
@@ -339,7 +303,12 @@ describeIfDb('upgrading a populated 0118 database', () => {
     const isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'db_integrity_upgrade', {
       throughMigration: '0118_clan_members_release_disbanded',
     });
-    const db = postgres(isolated.url, { max: 1, onnotice: () => undefined });
+    // created_at::text is hashed in UTC; pin the reading session the same way.
+    const db = postgres(isolated.url, {
+      max: 1,
+      onnotice: () => undefined,
+      connection: { TimeZone: 'UTC' },
+    });
     try {
       for (const action of ['pre.one', 'pre.two']) {
         await db`
@@ -355,19 +324,25 @@ describeIfDb('upgrading a populated 0118 database', () => {
       await db`
         INSERT INTO audit_log (actor_kind, actor_system_label, action_type, row_hash)
         VALUES ('system', 'upgrade', 'post.one', '\\x00')`;
-      const chain = await db<{ id: string; ok: boolean; linked: boolean }[]>`
+      const chain = await db<
+        { id: string; version: number; v1_ok: boolean | null; linked: boolean }[]
+      >`
         SELECT id::text AS id,
-               row_hash = digest(
+               hash_version AS version,
+               CASE WHEN hash_version = 1 THEN row_hash = digest(
                  COALESCE(prev_hash, ''::bytea) || convert_to(
                    action_type || '|' || COALESCE(target_type, '') || '|' ||
-                   COALESCE(target_id, '') || '|' || context::text || '|' ||
-                   audit_log_created_at_text(created_at),
+                   COALESCE(target_id, '') || '|' || context::text || '|' || created_at::text,
                    'UTF8'),
-                 'sha256') AS ok,
+                 'sha256') END AS v1_ok,
                prev_hash IS NOT DISTINCT FROM lag(row_hash) OVER (ORDER BY id) AS linked
         FROM audit_log ORDER BY id`;
       expect(chain.map((row) => row.id)).toEqual(['1', '2', '3']);
-      expect(chain.every((row) => row.ok && row.linked)).toBe(true);
+      // Existing rows keep the v1 form and still verify; the new row is v2
+      // and continues the chain from the last v1 row.
+      expect(chain.map((row) => row.version)).toEqual([1, 1, 2]);
+      expect(chain.filter((row) => row.version === 1).every((row) => row.v1_ok)).toBe(true);
+      expect(chain.every((row) => row.linked)).toBe(true);
 
       const [appeal] = await db<{ tracking_token: string | null; tracking_token_hash: string }[]>`
         SELECT tracking_token, tracking_token_hash FROM ban_appeals`;

@@ -388,7 +388,7 @@ export function buildRolePermissionContext(
   };
 
   const permissions = derivePanelPermissions(panelAccess, isOwner, flags);
-  // Explicit rows are legacy (no route writes them; migration 0121 wiped the
+  // Explicit rows are legacy (no route writes them; migration 0122 wiped the
   // stored ones) and pass the same flag gates as the derived set, so a stray
   // row can never grant a key the role's flags withhold (#36).
   for (const key of explicitKeys) {

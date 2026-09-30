@@ -9,9 +9,10 @@ import {
 } from './helpers/isolated-database.js';
 
 /**
- * Issue #44 (w3-15): migration 0119 adds the indexes the reworked API routes
- * rely on, and moves the billing date of active VIP subscriptions created
- * before `VIP_RENEWAL_LEAD_MS` existed ahead of their role expiry (#364).
+ * Issue #44 (w3-15): migration 0129 moves the billing date of active VIP
+ * subscriptions created before `VIP_RENEWAL_LEAD_MS` existed ahead of their
+ * role expiry (#364); migrations 0126 and 0128 add the indexes the reworked API
+ * routes rely on.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -20,8 +21,8 @@ const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const ROLE_EXPIRES_AT = new Date('2026-12-01T00:00:00.000Z');
 const HOUR_MS = 3_600_000;
 
-describeIfDb('migration 0119 api_route_audit_indexes', () => {
-  it('creates the audit indexes and puts old subscriptions ahead of their role expiry', async () => {
+describeIfDb('migration 0129 vip_subscription_renewal_lead', () => {
+  it('puts old subscriptions ahead of their role expiry and creates the route indexes', async () => {
     if (!DATABASE_URL) throw new Error('DATABASE_URL is required');
     const isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'db_api_route_audit', {
       throughMigration: '0118_clan_members_release_disbanded',

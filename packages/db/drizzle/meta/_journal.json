@@ -741,28 +741,112 @@
       "idx": 105,
       "version": "7",
       "when": 1788473580000,
-      "tag": "0120_role_can_manage_infrastructure",
+      "tag": "0120_automation_kick_default_reason",
       "breakpoints": true
     },
     {
       "idx": 106,
       "version": "7",
       "when": 1788473640000,
-      "tag": "0121_role_permissions_legacy_wipe",
+      "tag": "0121_role_can_manage_infrastructure",
       "breakpoints": true
     },
     {
       "idx": 107,
       "version": "7",
       "when": 1788473700000,
-      "tag": "0122_audit_log_chain_order",
+      "tag": "0122_role_permissions_legacy_wipe",
       "breakpoints": true
     },
     {
       "idx": 108,
       "version": "7",
       "when": 1788473760000,
-      "tag": "0123_chat_messages_sent_id_idx",
+      "tag": "0123_whitelist_application_verified",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1788473820000,
+      "tag": "0124_seasons_start_day_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1788473880000,
+      "tag": "0125_clan_tags_normalized_uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1788473940000,
+      "tag": "0126_player_search_and_report_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1788474000000,
+      "tag": "0127_events_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1788474060000,
+      "tag": "0128_list_query_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1788474120000,
+      "tag": "0129_vip_subscription_renewal_lead",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1788474180000,
+      "tag": "0130_media_publication_upload_session",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1788474240000,
+      "tag": "0131_combat_events_match_uuid",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1788474300000,
+      "tag": "0132_events_notify_per_statement",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1788474360000,
+      "tag": "0133_schema_integrity_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1788474420000,
+      "tag": "0134_appeal_token_hash_and_api_token_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1788474480000,
+      "tag": "0135_audit_log_chain_v2",
       "breakpoints": true
     }
   ]

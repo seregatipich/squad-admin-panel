@@ -91,7 +91,7 @@ interface ReindexRow {
  * `days` days and rewrites `is_flagged`/`matched_rule_id` where they differ.
  *
  * Walks `chat_messages` with a keyset on `(sent_at, id)`, served by
- * `chat_messages_sent_id_idx` (migration 0123), and applies each page's
+ * `chat_messages_sent_id_idx` (migration 0128), and applies each page's
  * changes with a single `UPDATE … FROM (VALUES …)` in its own transaction
  * instead of one statement per row (#36). Callers must not run two reindexes
  * at once; the route serialises them with a Redis lock.

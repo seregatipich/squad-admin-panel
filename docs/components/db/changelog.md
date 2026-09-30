@@ -4,6 +4,36 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-30
+
+### Audit-wave migrations consolidated into 0119–0135
+
+The audit branches each added migrations independently and collided on 0119–0123 and 0130–0132. None had been applied to any database, so they were merged into one contiguous series; the entries below still cite the pre-consolidation names. The mapping (final file <- original files):
+
+| Final migration | Original migrations |
+|---|---|
+| `0119_message_templates_seed_once` | `0119_message_templates_seed_once` |
+| `0120_automation_kick_default_reason` | `0119_automation_kick_default_reason` |
+| `0121_role_can_manage_infrastructure` | `0120_role_can_manage_infrastructure` |
+| `0122_role_permissions_legacy_wipe` | `0121_role_permissions_legacy_wipe` |
+| `0123_whitelist_application_verified` | `0120_whitelist_application_verified` |
+| `0124_seasons_start_day_unique` | `0119_seasons_start_day_unique` |
+| `0125_clan_tags_normalized_uniqueness` | `0121_clan_tags_normalized_uniqueness` |
+| `0126_player_search_and_report_indexes` | `0119_player_name_trgm_indexes`, `0120_player_name_trgm_indexes`, `0119_player_search_trgm_and_report_created_idx`, `0119_search_and_retention_indexes` (trigram and report indexes) |
+| `0127_events_indexes` | `0119_events_feed_indexes`, `0119_events_seeding_kind_idx` |
+| `0128_list_query_indexes` | `0119_list_query_indexes`, `0119_api_route_audit_indexes` (indexes), `0123_chat_messages_sent_id_idx`, `0119_search_and_retention_indexes` (`processed_events`) |
+| `0129_vip_subscription_renewal_lead` | `0119_api_route_audit_indexes` (data fix) |
+| `0130_media_publication_upload_session` | `0130_media_publication_upload_session` |
+| `0131_combat_events_match_uuid` | `0131_combat_events_match_uuid` |
+| `0132_events_notify_per_statement` | `0120_events_notify_per_statement`, `0119_schema_integrity_hardening` (section 7) |
+| `0133_schema_integrity_hardening` | `0119_schema_integrity_hardening` (FKs, `config_versions` parent, indexes) |
+| `0134_appeal_token_hash_and_api_token_index` | `0119_appeal_token_hash_and_api_token_index`, `0119_schema_integrity_hardening` (section 6) |
+| `0135_audit_log_chain_v2` | `0119_audit_log_id_in_chain_order`, `0122_audit_log_chain_order`, `0119_schema_integrity_hardening` (section 2), `0132_audit_log_chain_v2` |
+
+`audit_log_created_at_text()` (from the integrity migration) was dropped: new rows are hashed with the v2 form, which renders `created_at` inside the trigger, and v1 rows are verified with `created_at::text` in a UTC session. The appeal token keeps the hex sha256 design and the expand-only legacy `tracking_token` column; the base64url variant was abandoned.
+
+---
+
 ## 2026-09-28
 
 ### Индексы поиска и хранения, подтверждённые заявки whitelist (migrations 0119, 0120, #52)

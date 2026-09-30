@@ -1,5 +1,5 @@
--- Harden the audit_log hash chain (#1251, #1064): final definition of
--- audit_log_append().
+-- Harden the audit_log hash chain (#36, #49, #1064, #1066, #1067, #1251): the
+-- single definition of audit_log_append().
 --
 -- 1. TRUNCATE bypassed the row-level append-only triggers on audit_log and
 --    config_versions: `TRUNCATE audit_log` emptied the table and an empty chain
@@ -24,17 +24,20 @@
 --    hash_version = 1 and are still verified with the v1 form; a v1 row after
 --    the first v2 row is reported as a break (no downgrade).
 --
--- This definition supersedes every earlier audit_log_append():
--- 0119_audit_log_id_in_chain_order, 0119_schema_integrity_hardening and
--- 0122_audit_log_chain_order. It keeps what they established: the chain lock is
--- taken first, the id is drawn inside the trigger after the lock (ascending id
--- is the chain order), and the function pins TimeZone to UTC. It must sort
--- after all of them.
+-- 3. The chain order is the id order. The bigserial default handed out an id
+--    when the INSERT started, before this BEFORE INSERT trigger took the chain
+--    lock, so two concurrent writers could take the lock in the opposite order
+--    of their ids and a verifier walking ORDER BY id reported a false
+--    "Chain break". The trigger now draws the id itself once it holds the lock
+--    (held to commit), overriding any supplied value, and the column default is
+--    dropped so no id is burnt before the lock (NOT NULL is checked after
+--    BEFORE triggers; the sequence stays owned by the column). The function also
+--    pins TimeZone to UTC for its own execution.
 --
 -- Rollback-safe: hash_version is an added column with a constant default and
--- the previous release never names it. The previous release's verifier reports
--- v2 rows as a row_hash break, but writes keep working because the trigger, not
--- the application, computes the hash.
+-- the previous release never names it or supplies an id. The previous
+-- release's verifier reports v2 rows as a row_hash break, but writes keep
+-- working because the trigger, not the application, computes the hash.
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS hash_version smallint NOT NULL DEFAULT 1;
 --> statement-breakpoint
 CREATE OR REPLACE FUNCTION audit_log_hash_field_v2(value text)
@@ -88,6 +91,8 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+--> statement-breakpoint
+ALTER TABLE audit_log ALTER COLUMN id DROP DEFAULT;
 --> statement-breakpoint
 DROP TRIGGER IF EXISTS trg_audit_log_no_truncate ON audit_log;
 --> statement-breakpoint

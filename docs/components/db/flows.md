@@ -134,27 +134,29 @@ await app.db
 
 1. Application code calls `db.insert(auditLog).values({ actorKind, actorSteamId64, actionType, ... })`.
 2. Postgres fires `trg_audit_log_ins` (BEFORE INSERT, FOR EACH ROW) which executes `audit_log_append()`.
-3. `audit_log_append()` acquires a transaction-scoped advisory lock with key `hashtextextended('audit_log', 0)`. This serializes concurrent inserts so the hash chain is linear. Only then does it assign `NEW.id` from `audit_log_id_seq` (the column has no default since migration 0119), so id order equals chain order.
+3. `audit_log_append()` acquires a transaction-scoped advisory lock with key `hashtextextended('audit_log', 0)`. This serializes concurrent inserts so the hash chain is linear. Only then does it assign `NEW.id` from `audit_log_id_seq` (the column has no default since migration 0135), so id order equals chain order.
 4. It reads the current maximum `row_hash` with `SELECT row_hash FROM audit_log ORDER BY id DESC LIMIT 1`.
 5. It sets `NEW.prev_hash` to the value just read (NULL if this is the first row).
-6. It computes `NEW.row_hash` as:
+6. It sets `NEW.hash_version := 2` and computes `NEW.row_hash` as:
    ```sql
    digest(
      COALESCE(prev, ''::bytea) ||
      convert_to(
-       action_type || '|' || COALESCE(target_type,'') || '|' || COALESCE(target_id,'')
-       || '|' || context::text || '|' || audit_log_created_at_text(created_at),
+       'v2' || audit_log_hash_field_v2(NEW.id::text)
+            || audit_log_hash_field_v2(<created_at in UTC, microseconds>)
+            || ... one length-prefixed field per remaining column ...,
        'UTF8'
      ),
      'sha256'
    )
    ```
+   where `audit_log_hash_field_v2(NULL)` is `'|-'` and `audit_log_hash_field_v2(v)` is `'|' || octet_length(v) || ':' || v`. The exact column list is in `0135_audit_log_chain_v2.sql` and `apps/api/src/lib/audit-chain.ts`.
 7. The modified `NEW` row is inserted.
-8. Any attempt to UPDATE or DELETE a row instead fires `audit_log_deny()` which raises `audit_log is append-only`.
+8. Any attempt to UPDATE, DELETE or TRUNCATE the table instead fires `audit_log_deny()` which raises `audit_log is append-only`.
 
-### Why actor fields are excluded from the hash
+### Why actor fields are hashed
 
-The hash covers action semantics (`action_type`, `target_type`, `target_id`, `context`, `created_at`). Actor identity columns (`actor_steam_id64`, `actor_ip`, etc.) can be set to NULL by FK cascades when a player row is deleted — that would break the chain after a legitimate delete. Excluding actor fields from the hash means player deletions do not invalidate historical audit entries.
+The v1 form (rows written before migration 0135, `hash_version = 1`) hashed only `action_type|target_type|target_id|context::text|created_at::text`, so actor, IP, snapshots, status code and duration could be rewritten without breaking the chain. The v2 form covers every column. That is safe against FK actions because the actor references are `NO ACTION` (migration 0133): a player or token referenced by `audit_log` cannot be deleted, only anonymised, so an actor column never changes after the row is written.
 
 ### Verifying the chain
 
