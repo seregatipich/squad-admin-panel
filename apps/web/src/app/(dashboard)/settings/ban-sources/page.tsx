@@ -120,15 +120,21 @@ export default function BanSourcesPage() {
   const formId = useId();
 
   const refresh = useCallback(async () => {
-    const [sourcesRes, meRes] = await Promise.all([
-      fetch('/api/v1/ban-sources', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (sourcesRes.ok) {
-      setSources((await sourcesRes.json()) as BanSource[]);
-      setError(null);
+    try {
+      const [sourcesRes, meRes] = await Promise.all([
+        fetch('/api/v1/ban-sources', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (sourcesRes.ok) {
+        setSources((await sourcesRes.json()) as BanSource[]);
+        setError(null);
+      } else {
+        setError(`Не удалось загрузить источники (HTTP ${sourcesRes.status})`);
+      }
+      if (meRes.ok) setMe((await meRes.json()) as Me);
+    } catch (err) {
+      setError(`Не удалось загрузить источники: ${(err as Error).message}`);
     }
-    if (meRes.ok) setMe((await meRes.json()) as Me);
   }, []);
 
   useEffect(() => {

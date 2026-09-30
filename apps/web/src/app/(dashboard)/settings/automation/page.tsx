@@ -29,6 +29,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { sampleFor as sampleForCondition } from './helpers';
 
 interface AutomationRule {
   id: string;
@@ -175,25 +176,7 @@ function buildAction(form: Form): Record<string, unknown> {
 
 /** A representative sample for the dry-run, derived from the rule's condition. */
 function sampleFor(rule: AutomationRule): Record<string, unknown> {
-  const condition = rule.condition;
-  switch (rule.condition_type) {
-    case 'chat_keyword':
-      return {
-        chat_message: String(condition.keyword ?? ''),
-        player: { steam_id64: '76561190000000001', name: 'DryRunPlayer' },
-      };
-    case 'player_count':
-      return { player_count: Number(condition.threshold ?? 0) };
-    case 'time_of_day':
-      return { now: new Date().toISOString() };
-    case 'player_flag':
-      return {
-        player_flags: [String(condition.flag ?? '')],
-        player: { steam_id64: '76561190000000001', name: 'DryRunPlayer' },
-      };
-    default:
-      return {};
-  }
+  return sampleForCondition(rule.condition_type, rule.condition);
 }
 
 export default function AutomationPage() {

@@ -85,9 +85,11 @@ export interface AltDetectionSettingsForm {
   weight_shared_name: number;
   weight_young_account: number;
   weight_steamid_proximity: number;
+  weight_coplay_overlap: number;
   steamid_delta_threshold: number;
   medium_threshold: number;
   high_threshold: number;
+  coplay_overlap_threshold_seconds: number;
 }
 
 /** Every field of {@link AltDetectionSettingsForm}, in form order. */
@@ -96,9 +98,11 @@ const ALT_DETECTION_SETTINGS_FORM_KEYS = [
   'weight_shared_name',
   'weight_young_account',
   'weight_steamid_proximity',
+  'weight_coplay_overlap',
   'steamid_delta_threshold',
   'medium_threshold',
   'high_threshold',
+  'coplay_overlap_threshold_seconds',
 ] as const satisfies readonly (keyof AltDetectionSettingsForm)[];
 
 /**

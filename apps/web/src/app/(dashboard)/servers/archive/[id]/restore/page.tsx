@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
 import {
   Button,
@@ -78,6 +78,15 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
   const [newServerId, setNewServerId] = useState<string | null>(null);
   const [lines, setLines] = useState<InstallProgressLine[]>([]);
   const [restoreSummary, setRestoreSummary] = useState<RestoreConfigsResponse | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Closes a still-open install-progress socket on unmount (route change,
+  // back navigation) so it does not keep running against an unmounted page.
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -115,7 +124,16 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
       body: JSON.stringify({ slug, display_name: displayName }),
     });
     if (restoreRes.status === 409) {
-      setError('Этот идентификатор уже занят активным сервером');
+      const body = (await restoreRes.json().catch(() => ({}))) as { error?: string };
+      setError(
+        body.error === 'slug_in_use'
+          ? 'Этот идентификатор уже занят активным сервером'
+          : body.error === 'external_server'
+            ? 'Это внешний сервер: он подключается заново через «Подключить существующий», а не восстанавливается из архива.'
+            : body.error === 'archive_settings_missing'
+              ? 'В архиве нет настроек сервера — восстановление невозможно.'
+              : `Не удалось создать сервер из архива (HTTP 409)`,
+      );
       setStage('form');
       return;
     }
@@ -144,6 +162,8 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     const ws = new WebSocket(
       `${proto}://${window.location.host}/api/v1/servers/${restoreBody.id}/install/ws`,
     );
+    wsRef.current = ws;
+    let done = false;
     ws.onmessage = (ev) => {
       try {
         const frame = JSON.parse(ev.data) as Partial<InstallProgressLine> & {
@@ -152,12 +172,14 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
           error?: string;
         };
         if (frame.error) {
+          done = true;
           setError(String(frame.error));
           setStage('error');
           ws.close();
           return;
         }
         if (frame.done) {
+          done = true;
           ws.close();
           if (frame.final === 'done') {
             void overlayConfigs(restoreBody.id);
@@ -176,6 +198,14 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     };
     ws.onerror = () => {
       setError('Потеряно соединение с API во время установки');
+      setStage('error');
+    };
+    // A close without a prior `done`/`error` frame (dropped connection, or the
+    // backend replaying only a terminal snapshot) must not leave the wizard
+    // stuck on "Установка…" with no way forward (#660).
+    ws.onclose = () => {
+      if (done) return;
+      setError('Соединение с установкой закрылось раньше отчёта о завершении');
       setStage('error');
     };
   }
@@ -201,14 +231,17 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
   async function startServer() {
     if (!newServerId) return;
     setStage('starting');
-    const r = await fetch(`/api/v1/servers/${newServerId}/start`, {
+    // /restart, not /start: install() already starts the container, and
+    // overlayConfigs() has since written the archived Server.cfg/Admins.cfg
+    // over it — only a restart (stop + start) picks those up (#659).
+    const r = await fetch(`/api/v1/servers/${newServerId}/restart`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({}),
     });
     if (!r.ok) {
-      setError(`Не удалось запустить сервер (HTTP ${r.status})`);
+      setError(`Не удалось перезапустить сервер (HTTP ${r.status})`);
       setStage('error');
       return;
     }

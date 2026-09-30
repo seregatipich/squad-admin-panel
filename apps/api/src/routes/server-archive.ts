@@ -1,5 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  configVersions,
+  players,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, desc, eq, isNotNull, isNull, like } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -54,15 +60,19 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           created_at: servers.createdAt,
           deleted_at: servers.deletedAt,
           deleted_by_player_id: servers.deletedByPlayerId,
+          deleted_by_steam_id64: players.steamId64,
           deletion_backup_marker_id: servers.deletionBackupMarkerId,
         })
         .from(servers)
+        .leftJoin(players, eq(players.id, servers.deletedByPlayerId))
         .where(isNotNull(servers.deletedAt))
         .orderBy(desc(servers.deletedAt));
       return {
         items: rows.map((r) => ({
           ...r,
           deleted_by_player_id: r.deleted_by_player_id ?? null,
+          deleted_by_steam_id64:
+            r.deleted_by_steam_id64 === null ? null : r.deleted_by_steam_id64.toString(),
         })),
         total: rows.length,
       };
@@ -83,6 +93,12 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      const deletedByPlayer = row.deletedByPlayerId
+        ? await app.db.query.players.findFirst({
+            where: eq(players.id, row.deletedByPlayerId),
+            columns: { steamId64: true },
+          })
+        : null;
       const settingsRow = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, row.id),
       });
@@ -118,6 +134,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           description: row.description,
           deleted_at: row.deletedAt,
           deleted_by_player_id: row.deletedByPlayerId ?? null,
+          deleted_by_steam_id64: deletedByPlayer?.steamId64?.toString() ?? null,
           deletion_backup_marker_id: row.deletionBackupMarkerId,
           tags: row.tags,
         },

@@ -10,9 +10,11 @@ const SETTINGS = {
   weight_shared_name: 20,
   weight_young_account: 15,
   weight_steamid_proximity: 10,
+  weight_coplay_overlap: 30,
   steamid_delta_threshold: 5000,
   medium_threshold: 40,
   high_threshold: 70,
+  coplay_overlap_threshold_seconds: 36_000,
   updated_at: null,
   updated_by_player_id: null,
 };
@@ -125,9 +127,11 @@ describe('AltDetectionPage', () => {
         weight_shared_name: 20,
         weight_young_account: 15,
         weight_steamid_proximity: 10,
+        weight_coplay_overlap: 30,
         steamid_delta_threshold: 5000,
         medium_threshold: 40,
         high_threshold: 70,
+        coplay_overlap_threshold_seconds: 36_000,
       });
     },
     TEST_TIMEOUT_MS,

@@ -148,15 +148,32 @@ export default function AlertsPage() {
   const [pendingDelete, setPendingDelete] = useState<AlertRule | null>(null);
 
   const refresh = useCallback(async () => {
-    const [rulesRes, eventsRes, meRes] = await Promise.all([
-      fetch('/api/v1/alert-rules', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/alerts', { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-    ]);
-    if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
-    if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
-    if (meRes.ok) setMe((await meRes.json()) as Me);
-    setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
+    try {
+      const [rulesRes, eventsRes, meRes] = await Promise.all([
+        fetch('/api/v1/alert-rules', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/alerts', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      // A failed leg falls back to whatever was already loaded (or an empty
+      // list on the very first load) instead of leaving its state null
+      // forever — otherwise `loading` below never clears and the retry
+      // banner sits behind a permanent skeleton (#670).
+      if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
+      else setRules((prev) => prev ?? []);
+      if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
+      else setEvents((prev) => prev ?? []);
+      if (meRes.ok) setMe((await meRes.json()) as Me);
+      else setMe((prev) => prev ?? { permissions: [] });
+      setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
+    } catch {
+      // Network-level failure (offline, DNS, aborted): still surface the
+      // retry banner instead of leaving the page an unhandled rejection
+      // with no error UI at all.
+      setRules((prev) => prev ?? []);
+      setEvents((prev) => prev ?? []);
+      setMe((prev) => prev ?? { permissions: [] });
+      setLoadFailed(true);
+    }
   }, []);
 
   useEffect(() => {

@@ -129,7 +129,28 @@ export function PublicationSection() {
       </Card>
     );
   }
-  if (!settings) return null;
+  if (!settings) {
+    // A failed GET that isn't 401/403 (network error, 5xx) must not make the
+    // whole section vanish for a user who does have can_manage_ban_sources —
+    // they need the error and a way to retry (#676).
+    if (error) {
+      return (
+        <Card>
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить настройки публикации"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void refresh()}>
+                Повторить
+              </Button>
+            }
+          />
+        </Card>
+      );
+    }
+    return null;
+  }
 
   return (
     <section className="space-y-2">

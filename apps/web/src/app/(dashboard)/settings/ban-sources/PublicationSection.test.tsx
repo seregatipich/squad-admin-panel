@@ -100,6 +100,23 @@ describe('PublicationSection', () => {
   );
 
   it(
+    // #676: a non-401/403 GET failure (network error, 5xx) must show an
+    // error banner with retry — not vanish entirely like the 401/403 case,
+    // which would hide the section from a user who does have permission.
+    'shows an error banner with retry (not nothing) on a non-permission GET failure',
+    async () => {
+      vi.stubGlobal('fetch', mockFetch({ getStatus: 500 }));
+      render(<PublicationSection />);
+
+      expect(
+        await screen.findByText('Не удалось загрузить настройки публикации'),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'hides on a 403 that only occurs on save (PUT)',
     async () => {
       vi.stubGlobal('fetch', mockFetch({ putStatus: 403 }));
