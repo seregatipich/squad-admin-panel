@@ -7,15 +7,15 @@ export const SEED_THRESHOLD_MAX = 100;
 export const VIP_EXPIRY_WINDOW_DAYS_MIN = 1;
 export const VIP_EXPIRY_WINDOW_DAYS_MAX = 90;
 export const VIP_EXPIRY_WINDOWS_MAX_COUNT = 10;
-export const DEFAULT_VIP_EXPIRY_WINDOWS_DAYS = [7, 3, 1];
 
-export interface PrivilegeCost {
+interface PrivilegeCost {
   days: number;
   price: number;
 }
 
-export type PrivilegeCostCatalog = Record<string, PrivilegeCost>;
+type PrivilegeCostCatalog = Record<string, PrivilegeCost>;
 
+/** Wire shape of GET/PUT `/api/v1/settings/economy` (server `serialize()`). */
 export interface EconomySettings {
   k_online: number;
   k_boost: number;
@@ -23,9 +23,10 @@ export interface EconomySettings {
   seed_threshold: number;
   economy_enabled: boolean;
   privilege_costs: PrivilegeCostCatalog;
-  /** Optional in the wire type for rollout tolerance; the API serializes both. */
-  vip_expiry_windows_days?: number[];
-  vip_expiry_warn_in_game?: boolean;
+  seed_reward_threshold_hours_per_month: number;
+  seed_reward_role_id: string | null;
+  vip_expiry_windows_days: number[];
+  vip_expiry_warn_in_game: boolean;
   updated_at: string | null;
   updated_by_player_id: string | null;
 }
@@ -84,10 +85,8 @@ export function settingsToForm(settings: EconomySettings): EconomyFormState {
     kSeed: String(settings.k_seed),
     seedThreshold: String(settings.seed_threshold),
     economyEnabled: settings.economy_enabled,
-    vipExpiryWindows: (settings.vip_expiry_windows_days ?? DEFAULT_VIP_EXPIRY_WINDOWS_DAYS).join(
-      ', ',
-    ),
-    vipExpiryWarnInGame: settings.vip_expiry_warn_in_game ?? true,
+    vipExpiryWindows: settings.vip_expiry_windows_days.join(', '),
+    vipExpiryWarnInGame: settings.vip_expiry_warn_in_game,
   };
 }
 
@@ -200,6 +199,7 @@ export interface VipTier {
   role_id: string;
   description: string | null;
   default_days: number | null;
+  price_bonuses: number | null;
   sort_order: number;
   is_active: boolean;
   created_at: string;

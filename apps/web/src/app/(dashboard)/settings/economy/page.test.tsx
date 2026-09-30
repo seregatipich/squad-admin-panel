@@ -33,6 +33,10 @@ function makeSettings(): EconomySettings {
     seed_threshold: 40,
     economy_enabled: false,
     privilege_costs: {},
+    seed_reward_threshold_hours_per_month: 0,
+    seed_reward_role_id: null,
+    vip_expiry_windows_days: [7, 3, 1],
+    vip_expiry_warn_in_game: true,
     updated_at: null,
     updated_by_player_id: null,
   };
@@ -45,6 +49,7 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
     role_id: overrides.role_id ?? 'role-1',
     description: 'description' in overrides ? (overrides.description ?? null) : null,
     default_days: 'default_days' in overrides ? (overrides.default_days ?? null) : 30,
+    price_bonuses: overrides.price_bonuses ?? null,
     sort_order: overrides.sort_order ?? 0,
     is_active: overrides.is_active ?? true,
     created_at: overrides.created_at ?? '2026-07-01T00:00:00.000Z',
@@ -60,6 +65,7 @@ function makeTier(overrides: Partial<VipTier> = {}): VipTier {
  */
 function stubFetch(opts: {
   tiers?: VipTier[];
+  roles?: Array<{ id: string; name: string; panel_access: boolean; is_system_role: boolean }>;
   permissions?: string[];
   canManageEconomy?: boolean;
   settingsStatus?: number;
@@ -117,10 +123,12 @@ function stubFetch(opts: {
     if (url.endsWith('/api/v1/roles') && method === 'GET') {
       return Promise.resolve(
         new Response(
-          JSON.stringify([
-            { id: 'role-1', name: 'VIP Role' },
-            { id: 'role-2', name: 'Premium Role' },
-          ]),
+          JSON.stringify(
+            opts.roles ?? [
+              { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
+              { id: 'role-2', name: 'Premium Role', panel_access: false, is_system_role: false },
+            ],
+          ),
           { status: 200 },
         ),
       );
@@ -189,6 +197,26 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     // default_days renders via formatTierDuration.
     expect(scope.getByText('30 дн.')).toBeInTheDocument();
     expect(scope.getByText('бессрочно')).toBeInTheDocument();
+  });
+
+  it('disables roles with panel access or that are system roles in the tier role select (#690)', async () => {
+    stubFetch({
+      tiers: [],
+      roles: [
+        { id: 'role-1', name: 'VIP Role', panel_access: false, is_system_role: false },
+        { id: 'role-2', name: 'Panel Role', panel_access: true, is_system_role: false },
+        { id: 'role-3', name: 'Owner', panel_access: false, is_system_role: true },
+      ],
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /добавить тир/i }));
+
+    const select = within(section).getByLabelText('Роль') as HTMLSelectElement;
+    const options = Array.from(select.options);
+    expect(options.find((o) => o.value === 'role-1')?.disabled).toBe(false);
+    expect(options.find((o) => o.value === 'role-2')?.disabled).toBe(true);
+    expect(options.find((o) => o.value === 'role-3')?.disabled).toBe(true);
   });
 
   it('hides VIP tiers section without role:edit permission', async () => {
@@ -404,6 +432,37 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
         'Ошибка удаления тира: Нельзя удалить тир: у него есть активные назначения.',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('shows a network error when the tier delete request fails (#689)', async () => {
+    stubFetch({
+      tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
+      tierMutationError: 'network',
+    });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
+
+    expect(await within(section).findByText('Ошибка сети: offline')).toBeInTheDocument();
+  });
+
+  it('keeps unsaved economy form edits after a tier is saved (#688)', async () => {
+    stubFetch({ tiers: [] });
+    render(<EconomySettingsPage />);
+    const section = await screen.findByRole('region', { name: 'VIP-тиры' });
+    const toggle = screen.getByLabelText('Экономика включена');
+    fireEvent.click(toggle);
+    expect(screen.getByText('Начисления активны')).toBeInTheDocument();
+
+    const scope = within(section);
+    fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
+    fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
+
+    await waitFor(() => expect(scope.queryByLabelText('Название')).not.toBeInTheDocument());
+    expect(screen.getByText('Начисления активны')).toBeInTheDocument();
   });
 
   it('shows the HTTP status when a delete error has no code', async () => {
