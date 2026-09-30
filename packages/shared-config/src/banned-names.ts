@@ -128,8 +128,8 @@ export function isSafeBannedNameRegex(pattern: string): boolean {
     let atomEnd: number;
     let group: RegexGroupFrame | null = null;
     if (ch === ')') {
-      group = stack.pop() ?? null;
-      if (!group || stack.length === 0) return false;
+      if (stack.length === 1) return false; // unbalanced ')'
+      group = stack.pop() as RegexGroupFrame;
       atomEnd = index + 1;
     } else if (ch === '\\') {
       const next = pattern[index + 1] ?? '';

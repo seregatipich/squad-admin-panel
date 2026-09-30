@@ -83,6 +83,9 @@ describe('isSafeBannedNameRegex', () => {
     '(.*a){12}',
     '(a)\\1',
     '(?<n>a)\\k<n>',
+    '(a{2,}){2}',
+    '(a){2,}b|c)',
+    'a)',
   ])('refuses %s', (pattern) => {
     expect(isSafeBannedNameRegex(pattern)).toBe(false);
   });
@@ -96,6 +99,14 @@ describe('isSafeBannedNameRegex', () => {
     '(\\(x+\\))',
     '[(+*)]+',
     '\\(a+\\)+',
+    'a{3}',
+    'a{2,}',
+    'a{2,5}',
+    'a{x',
+    'a+?',
+    '[^a-z]+',
+    '[\\]x]+',
+    'ab\\',
   ])('accepts %s', (pattern) => {
     expect(isSafeBannedNameRegex(pattern)).toBe(true);
   });
@@ -120,6 +131,10 @@ describe('isSafeBannedNameRegex', () => {
 });
 
 describe('matchBannedName', () => {
+  it('treats a regex that does not compile as no match', () => {
+    expect(matchBannedName('[unclosed', 'regex', 'anything')).toBe(false);
+  });
+
   it('never matches an empty pattern', () => {
     expect(matchBannedName('', 'exact', 'anything')).toBe(false);
   });

@@ -48,6 +48,7 @@ describe('isPublicUnicastAddress', () => {
     'fec0::1',
     'ff02::1',
     'fe80::1%eth0',
+    '100::1',
   ])('rejects the non-public IPv6 address %s', (address) => {
     expect(isPublicUnicastAddress(address)).toBe(false);
   });
@@ -57,6 +58,7 @@ describe('isPublicUnicastAddress', () => {
     '2a00:1450:4001:82a::200e',
     '::ffff:8.8.8.8',
     '64:ff9b::808:808',
+    '2606:4700:4700:0:0:0:0:1111',
   ])('accepts the public IPv6 address %s', (address) => {
     expect(isPublicUnicastAddress(address)).toBe(true);
   });
@@ -70,6 +72,9 @@ describe('isPublicUnicastAddress', () => {
     '1::2::3',
     'gggg::1',
     '1:2:3:4:5:6:7:8:9',
+    '::ffff:1.2.3.400',
+    '1:2:3',
+    '1:2:3:4:5:6:7::8',
   ])('rejects the malformed address %j', (address) => {
     expect(isPublicUnicastAddress(address)).toBe(false);
   });

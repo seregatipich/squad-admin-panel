@@ -46,10 +46,9 @@ const NON_PUBLIC_IPV4_CIDRS: ReadonlyArray<readonly [number, number]> = [
   [ipv4('240.0.0.0'), 4], // reserved + limited broadcast
 ];
 
+/** Converts a compile-time-constant dotted quad; the constants above are all valid. */
 function ipv4(dotted: string): number {
-  const value = parseIpv4(dotted);
-  if (value === null) throw new Error(`invalid IPv4 constant ${dotted}`);
-  return value;
+  return parseIpv4(dotted) as number;
 }
 
 /** Parses strict dotted-quad IPv4 into an unsigned 32-bit integer, or `null`. */
@@ -102,8 +101,8 @@ function parseIpv6(text: string): number[] | null {
     }
     return groups;
   };
-  const head = parseGroups(halves[0] ?? '');
-  const rest = halves.length === 2 ? parseGroups(halves[1] ?? '') : [];
+  const head = parseGroups(halves[0] as string);
+  const rest = halves.length === 2 ? parseGroups(halves[1] as string) : [];
   if (head === null || rest === null) return null;
   const explicit = head.length + rest.length + tail.length;
   if (halves.length === 1) {
@@ -114,7 +113,7 @@ function parseIpv6(text: string): number[] | null {
 }
 
 function embeddedIpv4(groups: readonly number[]): number {
-  return (groups[6] ?? 0) * 65536 + (groups[7] ?? 0);
+  return (groups[6] as number) * 65536 + (groups[7] as number);
 }
 
 function isPublicIpv6(groups: readonly number[]): boolean {

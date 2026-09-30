@@ -281,12 +281,9 @@ export function compileChatFlagRule(rule: ChatFlagRuleInput): CompiledChatFlagRu
   }
   // Rules stored before a stricter ReDoS scan landed are skipped, never run (#344).
   if (!validateChatFlagPattern(rule.pattern, 'regex').ok) return null;
-  try {
-    const regex = new RegExp(rule.pattern, 'i');
-    return { id: rule.id, test: (message) => regex.test(message) };
-  } catch {
-    return null;
-  }
+  // validateChatFlagPattern already compiled the pattern, so this cannot throw.
+  const regex = new RegExp(rule.pattern, 'i');
+  return { id: rule.id, test: (message) => regex.test(message) };
 }
 
 export function compileChatFlagRules(rules: ChatFlagRuleInput[]): CompiledChatFlagRule[] {

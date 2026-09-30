@@ -190,3 +190,24 @@ describe('selectNextLayer (least_recently_played)', () => {
     expect(tie.pick).toBe('Alpha RAAS v1');
   });
 });
+
+describe('selectNextLayer (duplicate candidates)', () => {
+  it('keeps both entries of a layer listed twice and still picks deterministically', () => {
+    const input = makeInput({
+      candidates: [
+        candidate('Alpha RAAS v1'),
+        candidate('Alpha RAAS v1'),
+        candidate('Bravo RAAS v1'),
+      ],
+    });
+
+    const result = selectNextLayer(input);
+
+    expect(result.eligible.map((entry) => entry.layer)).toEqual([
+      'Alpha RAAS v1',
+      'Alpha RAAS v1',
+      'Bravo RAAS v1',
+    ]);
+    expect(selectNextLayer(input)).toEqual(result);
+  });
+});
