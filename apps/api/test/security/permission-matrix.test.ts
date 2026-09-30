@@ -1,24 +1,11 @@
 import * as schema from '@squad/db/schema';
-import {
-  playerApiTokens,
-  players,
-  rolePermissions,
-  roleSquadPermissions,
-  roles,
-} from '@squad/db/schema';
+import { playerApiTokens } from '@squad/db/schema';
 import { PERMISSIONS, type PermissionKey } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type { InjectOptions } from 'fastify';
 import postgres from 'postgres';
-import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mintApiToken } from '../../src/lib/api-tokens.js';
-import {
-  invalidatePermissionCache,
-  PANEL_PERMS_GATED_BY_INFRASTRUCTURE,
-} from '../../src/lib/rbac.js';
-import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -173,7 +160,7 @@ describe('permission matrix coverage', () => {
     expect(sorted).toEqual([
       { method: 'GET', url: '/api/v1/depot/progress/ws', required: ['server:view'] },
       { method: 'GET', url: '/api/v1/servers/:id/install/ws', required: ['server:view'] },
-      { method: 'GET', url: '/api/v1/servers/:id/logs/ws', required: ['server:view'] },
+      { method: 'GET', url: '/api/v1/servers/:id/logs/ws', required: ['server:download_logs'] },
       { method: 'GET', url: '/api/v1/ws/live', required: ['server:view'] },
     ]);
   });
@@ -183,41 +170,14 @@ let h: IntegrationHarness;
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 
-const createdRoleIds: string[] = [];
 /** Request headers that authenticate each matrix user (session cookie or API token). */
 const authHeaders = new Map<string, Record<string, string>>();
-const userKeys = new Map<string, bigint>();
-const playerIds = new Map<string, string>();
-let steamCounter = 700100;
-
 /**
- * The role flags an explicit grant of `perms` needs: rbac.ts runs explicit
- * `role_permissions` rows through the same flag gates as the derived set
- * (#36), so a key such as `host:manage` only sticks with its flag set.
- */
-function flagsFor(perms: readonly string[]) {
-  const has = (...keys: string[]) => keys.some((k) => perms.includes(k));
-  return {
-    canAssignRoles: has('user:manage_roles'),
-    canEditRoles: has('role:create', 'role:edit', 'role:delete'),
-    canManageIntegrations: has('integration:manage'),
-    canViewIps: has('player:view_ips'),
-    canManageInfrastructure: perms.some((k) =>
-      PANEL_PERMS_GATED_BY_INFRASTRUCTURE.has(k as PermissionKey),
-    ),
-    squad: [
-      ...(has('mod:kick', 'mod:warn') ? ['kick'] : []),
-      ...(has('mod:ban_temp', 'mod:ban_perm', 'mod:unban') ? ['ban'] : []),
-    ],
-  };
-}
-
-/**
- * A key set that needs `can_assign_roles`/`can_edit_roles` cannot live on a
- * role without `panel_access` (DB check `roles_flag_dependency`), and with
- * `panel_access` the role would derive far more than the set. An API token of
- * the all-powerful seeded Owner narrowed to exactly `perms` (`role ∩ scopes`,
- * `narrowToTokenScopes`) is the only way to hold precisely that set.
+ * Holds exactly `perms`: an API token of the all-powerful seeded Owner narrowed
+ * to `perms` (`role ∩ scopes`, `narrowToTokenScopes`). A session-based user
+ * cannot do this: a role without `panel_access` is dropped to anonymous (#33)
+ * and, with `panel_access`, derives far more than the set; flag-gated keys
+ * additionally need role flags that the DB ties to `panel_access` (#36).
  */
 async function createTokenUserWithPerms(key: string, perms: string[]): Promise<void> {
   const ownerPlayerId = h.seed.ownerPlayerId;
@@ -231,64 +191,6 @@ async function createTokenUserWithPerms(key: string, perms: string[]): Promise<v
     scopes: perms,
   });
   authHeaders.set(key, { authorization: `Bearer ${minted.plaintext}` });
-}
-
-async function createUserWithPerms(key: string, perms: string[]): Promise<void> {
-  const { squad, ...flags } = flagsFor(perms);
-  if (flags.canAssignRoles || flags.canEditRoles) {
-    await createTokenUserWithPerms(key, perms);
-    return;
-  }
-  const steamId = testSteamId(steamCounter++);
-  userKeys.set(key, steamId);
-
-  const roleId = uuidv7();
-  createdRoleIds.push(roleId);
-
-  let playerId: string | undefined;
-  await db.transaction(async (tx) => {
-    await tx.insert(roles).values({
-      id: roleId,
-      name: `mx-${roleId}`,
-      color: 'neutral',
-      isSystemRole: false,
-      ...flags,
-    });
-    if (squad.length > 0) {
-      await tx
-        .insert(roleSquadPermissions)
-        .values(squad.map((squadPermissionKey) => ({ roleId, squadPermissionKey })));
-    }
-    if (perms.length > 0) {
-      await tx
-        .insert(rolePermissions)
-        .values(perms.map((permissionKey) => ({ roleId, permissionKey })));
-    }
-    const stub = `Mx${String(steamId).slice(-6)}`;
-    const [upserted] = await tx
-      .insert(players)
-      .values({
-        steamId64: steamId,
-        canonicalName: stub,
-        canonicalNameNormalized: stub.toLowerCase(),
-        roleId,
-      })
-      .onConflictDoUpdate({ target: players.steamId64, set: { roleId } })
-      .returning({ id: players.id });
-    if (!upserted) throw new Error('failed to upsert matrix-test player');
-    playerId = upserted.id;
-  });
-
-  if (!playerId) throw new Error('matrix-test player was not created');
-  playerIds.set(key, playerId);
-  invalidatePermissionCache(playerId);
-  const { token } = await createSession(h.db, h.redis, {
-    playerId,
-    ip: null,
-    userAgent: 'matrix-test',
-    ttlMs: 21_600_000,
-  });
-  authHeaders.set(key, { cookie: `__Host-sid=${token}` });
 }
 
 async function inject(
@@ -325,29 +227,10 @@ describe('permission matrix', () => {
       ]),
     ];
 
-    await Promise.all(tasks.map(([key, perms]) => createUserWithPerms(key, perms)));
+    await Promise.all(tasks.map(([key, perms]) => createTokenUserWithPerms(key, perms)));
   });
 
   afterAll(async () => {
-    for (const id of createdRoleIds) {
-      await db
-        .delete(rolePermissions)
-        .where(eq(rolePermissions.roleId, id))
-        .catch(() => undefined);
-      await db
-        .delete(roles)
-        .where(eq(roles.id, id))
-        .catch(() => undefined);
-    }
-    for (const [key, steamId] of userKeys.entries()) {
-      await db
-        .update(players)
-        .set({ roleId: null })
-        .where(eq(players.steamId64, steamId))
-        .catch(() => undefined);
-      const pid = playerIds.get(key);
-      if (pid) invalidatePermissionCache(pid);
-    }
     await sql.end({ timeout: 5 }).catch(() => undefined);
     await h.cleanup();
   }, 60_000);
