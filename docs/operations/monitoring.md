@@ -1,6 +1,6 @@
 # Monitoring
 
-The panel's observability surface is intentionally minimal: two capped Redis Streams for logs and metrics, heartbeat keys for worker liveness, and the audit log for security forensics. There is no Prometheus exporter, no Grafana, and no external metrics push. (The API process does keep an in-process `prom-client` registry at `GET /metrics`, labelled by route template only; it requires the `host:metrics` permission and is not routed by Caddy, so it is reachable only from inside the compose network or with an operator session.) See [architectural decision 2026-04-25 (panel observability)](../architecture/decisions.md) for the rationale.
+The panel's observability surface is intentionally minimal: two capped Redis Streams for logs and metrics, heartbeat keys for worker liveness, and the audit log for security forensics. There is no Prometheus exporter, no Grafana, and no external metrics push. (The API process does keep an in-process `@prometheus-io/client` registry at `GET /metrics`, labelled by route template only; it requires the `host:metrics` permission and is not routed by Caddy, so it is reachable only from inside the compose network or with an operator session.) See [architectural decision 2026-04-25 (panel observability)](../architecture/decisions.md) for the rationale.
 
 ## Panel logs
 
