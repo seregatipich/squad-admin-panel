@@ -814,7 +814,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
                 durationMs: Date.now() - broadcastT0,
               },
             });
-            await new Promise((resolve) => setTimeout(resolve, 15_000));
+            // Nobody was warned when the broadcast failed, so waiting out the grace period is pointless.
+            if (broadcastOk) await new Promise((resolve) => setTimeout(resolve, 15_000));
             const endMatchT0 = Date.now();
             let endMatchOk = true;
             let endMatchVia: 'worker-rcon' | 'direct' = 'direct';
