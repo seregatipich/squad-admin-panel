@@ -195,7 +195,7 @@ describe('runDispatchLoop — stream discovery and reclaim are throttled (#843)'
 });
 
 describe('runDispatchLoop — consumer-group resilience (#844)', () => {
-  it('creates new consumer groups from the start of the stream', async () => {
+  it('starts groups found by the first discovery at the tail, so a first deploy does not replay history', async () => {
     const redis = fakeRedis();
 
     await runDispatchLoop({
@@ -207,6 +207,27 @@ describe('runDispatchLoop — consumer-group resilience (#844)', () => {
     expect(redis.xgroup).toHaveBeenCalledWith(
       'CREATE',
       'events:global',
+      DISPATCH_CONSUMER_GROUP,
+      '$',
+      'MKSTREAM',
+    );
+  });
+
+  it('creates groups for streams discovered later from the start of the stream (#844, #60)', async () => {
+    const redis = fakeRedis();
+    let discoveries = 0;
+
+    await runDispatchLoop({
+      ...baseOpts(redis),
+      shouldStop: stopAfter(2),
+      discoverStreams: async () =>
+        ++discoveries === 1 ? ['events:global'] : ['events:global', 'events:server:new'],
+      streamRefreshMs: 0,
+    });
+
+    expect(redis.xgroup).toHaveBeenCalledWith(
+      'CREATE',
+      'events:server:new',
       DISPATCH_CONSUMER_GROUP,
       '0',
       'MKSTREAM',

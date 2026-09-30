@@ -50,6 +50,7 @@ describe('automation plugin dispatch (integration)', () => {
     streamName: string,
     pluginTimeoutMs?: number,
     discoverStreams: () => Promise<string[]> = async () => [streamName],
+    streamRefreshMs?: number,
   ) {
     let stopped = false;
     stop = () => {
@@ -68,6 +69,7 @@ describe('automation plugin dispatch (integration)', () => {
       // XADDing to the shared `events:global` stream (e.g. another
       // `pnpm test:cov` worker) can never have its envelope delivered here.
       discoverStreams,
+      streamRefreshMs,
     });
   }
 
@@ -134,14 +136,13 @@ describe('automation plugin dispatch (integration)', () => {
     expect(received[0]).toEqual(envelope);
   });
 
-  it('delivers an event published before the stream was discovered (#844)', async () => {
+  // #60: the very first discovery of a fresh consumer group starts at '$' so a
+  // first deploy does not replay the stream's history into the automations.
+  it('does not replay history already in a stream at the first discovery', async () => {
     redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
     const group = `test-group-${randomUUID()}`;
     stream = `events:test:${randomUUID()}`;
-    const envelope = makeEnvelope();
-    // A new server's first event lands before the loop has ever seen its
-    // stream, so no consumer group exists yet when it is published.
-    await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(makeEnvelope()));
     const received: EventEnvelope[] = [];
     const registry = new PluginRegistry();
     registry.register(
@@ -150,9 +151,14 @@ describe('automation plugin dispatch (integration)', () => {
       }),
     );
     startLoop(registry, group, stream);
+    await sleep(600);
+
+    const live = makeEnvelope();
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(live));
 
     await pollUntil(() => received.length === 1);
-    expect(received[0]).toEqual(envelope);
+    await sleep(300);
+    expect(received).toEqual([live]);
   });
 
   it('a plugin not subscribed to the kind never receives it, while a subscribed one does', async () => {
@@ -235,8 +241,13 @@ describe('automation plugin dispatch (integration)', () => {
         received.push(envelope);
       }),
     );
-    startLoop(registry, group, stream, undefined, async () =>
-      streamExists ? [anchor, stream as string] : [anchor],
+    startLoop(
+      registry,
+      group,
+      stream,
+      undefined,
+      async () => (streamExists ? [anchor, stream as string] : [anchor]),
+      100,
     );
     await sleep(400);
 
