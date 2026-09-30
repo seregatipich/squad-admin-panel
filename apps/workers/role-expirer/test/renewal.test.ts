@@ -43,6 +43,7 @@ function makeDeps(opts: {
       }),
     expireSubscription: vi.fn().mockResolvedValue(true),
     writeAuditEntry: vi.fn().mockResolvedValue(undefined),
+    invalidatePermissionCache: vi.fn(),
     notifySubscriptionExpired: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
   } satisfies SubscriptionRenewalDeps;
@@ -190,6 +191,7 @@ describe('runSubscriptionRenewalTick', () => {
     // its audit write then threw — the old code would have let that
     // exception escape and abort the second subscription entirely.
     expect(result).toMatchObject({ renewed: 2 });
+    expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(PLAYER_ID);
     expect(deps.invalidatePermissionCache).toHaveBeenCalledWith('player-2');
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'role_expirer.renewal_failed' }),

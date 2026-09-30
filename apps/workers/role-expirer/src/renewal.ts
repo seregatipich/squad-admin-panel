@@ -175,6 +175,9 @@ export async function runSubscriptionRenewalTick(
         if (result.status === 'ok') {
           renewed += 1;
           enqueued += result.enqueued;
+          // The charge already committed: drop the cached permissions before
+          // the audit write, so a failing audit row cannot leave them stale.
+          deps.invalidatePermissionCache(subscription.playerId);
           await deps.writeAuditEntry({
             actor: { kind: 'system', label: 'role-expirer' },
             actorIp: null,
@@ -200,7 +203,6 @@ export async function runSubscriptionRenewalTick(
             },
             statusCode: 200,
           });
-          deps.invalidatePermissionCache(subscription.playerId);
           continue;
         }
 
