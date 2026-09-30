@@ -360,7 +360,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
       `pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`,
       'pnpm|turbo|run|test|--concurrency=2|--filter=@fixture/plain|--filter=@fixture/db-worker',
@@ -592,7 +592,7 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(checklistCommands(fixture), [
       'git|fetch|-q|origin|dev',
       'pnpm|exec|biome|check|apps|packages|scripts|docker/rnsquadjs',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       `pnpm|-s|turbo|ls|--filter=[${MERGE_BASE}]|--output=json`,
     ]);
   });
@@ -607,7 +607,7 @@ describe('local pre-push checklist and git hooks', () => {
       'pnpm|turbo|run|typecheck',
       'pnpm|exec|biome|check|.',
       'pnpm|turbo|run|build',
-      'gitleaks|detect|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'gitleaks|git|--config|.github/gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
       'pnpm|test:scripts',
       'pnpm|test:cov',
       'pnpm|turbo|run|test:mutation',

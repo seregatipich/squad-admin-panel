@@ -50,7 +50,55 @@ describe('RconUnixServer', () => {
     });
     expect(res.statusCode).toBe(400);
     const body = (await res.body.json()) as { ok: boolean; error: string };
-    expect(body).toEqual({ ok: false, error: 'missing method' });
+    expect(body).toEqual({ ok: false, error: 'missing or malformed method' });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 (not 500) on invalid JSON', async () => {
+    const exec = vi.fn<RconExecutor>(async () => 'unused');
+    server = new RconUnixServer(sock, exec);
+    await server.listen();
+
+    const res = await request('http://localhost/rcon', {
+      method: 'POST',
+      dispatcher: agentFor(sock),
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    expect(res.statusCode).toBe(400);
+    const body = (await res.body.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('rejects a method containing whitespace instead of forwarding it to exec', async () => {
+    const exec = vi.fn<RconExecutor>(async () => 'unused');
+    server = new RconUnixServer(sock, exec);
+    await server.listen();
+
+    const res = await request('http://localhost/rcon', {
+      method: 'POST',
+      dispatcher: agentFor(sock),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'AdminBroadcast extra command', args: [] }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('rejects a body over the size cap with 413 before buffering it fully', async () => {
+    const exec = vi.fn<RconExecutor>(async () => 'unused');
+    server = new RconUnixServer(sock, exec);
+    await server.listen();
+
+    const oversized = JSON.stringify({ method: 'AdminBroadcast', args: ['x'.repeat(20_000)] });
+    const res = await request('http://localhost/rcon', {
+      method: 'POST',
+      dispatcher: agentFor(sock),
+      headers: { 'content-type': 'application/json' },
+      body: oversized,
+    });
+    expect(res.statusCode).toBe(413);
     expect(exec).not.toHaveBeenCalled();
   });
 

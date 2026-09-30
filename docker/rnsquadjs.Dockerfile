@@ -57,6 +57,12 @@ COPY docker/rnsquadjs/plugins/panelBridge/src/ src/plugins/panelBridge/
 COPY docker/rnsquadjs/upstream.patch /tmp/upstream.patch
 RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 RUN yarn build
+# rollup/typescript and the rest of devDependencies are only needed to
+# produce lib/; prune them so the runtime stage's `COPY --from=upstream
+# /src /app` (still the whole tree — see the runtime stage comment for why)
+# doesn't carry a build-only node_modules into the image that runs with
+# --network host.
+RUN yarn install --production=true --frozen-lockfile --network-timeout 600000
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
 # Sidecars are launched with `--pull never` (docker/compose.yml), like
@@ -70,8 +76,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # The built tree already carries lib/ (rollup output incl. the bundled
-# panelBridge) and node_modules (incl. ioredis/uuid), so the runtime needs
-# nothing copied from a separate plugin stage.
+# panelBridge) and a now-production-only node_modules (incl. ioredis/uuid),
+# so the runtime needs nothing copied from a separate plugin stage. This
+# still copies the whole /src tree (source, .git, test fixtures) rather than
+# lib/ + node_modules/ + package.json alone: upstream is a third-party repo
+# whose full runtime file set (config defaults, non-lib assets read via
+# relative paths) isn't documented, so narrowing the copy without exercising
+# every upstream plugin risks silently breaking one.
 COPY --from=upstream /src /app
 COPY --from=upstream /UPSTREAM_SHA /UPSTREAM_SHA
 COPY docker/rnsquadjs/entrypoint.sh /usr/local/bin/entrypoint.sh

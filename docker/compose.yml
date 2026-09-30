@@ -17,6 +17,9 @@ x-logging: &default-logging
 x-hardening: &hardening
   cap_drop: ['ALL']
   security_opt: ['no-new-privileges:true']
+  # Bound fork bombs and reap zombies in every hardened service.
+  pids_limit: 256
+  init: true
 
 services:
   caddy:
@@ -138,6 +141,8 @@ services:
     # uid 0 (with only CAP_CHOWN): it writes the root-owned rnsquadjs tree and
     # the media volume. See docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
       - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
@@ -578,6 +583,7 @@ services:
     image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     environment:
       POSTGRES_DB: admin
       POSTGRES_USER: admin
@@ -598,6 +604,7 @@ services:
     image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     # Redis is published on the host loopback, and the bridge starts the game
     # servers and the rnsquadjs sidecars with --network host, so any process
     # there can connect: every client must authenticate (#32). The default
@@ -690,6 +697,7 @@ services:
     image: squad-panel/restic:latest
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
+    pids_limit: 256
     profiles: ['backup']
     depends_on:
       postgres:

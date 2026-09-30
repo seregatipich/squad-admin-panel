@@ -268,6 +268,10 @@ else
   RESTIC_PW=$(openssl rand -hex 32)
   APP_DB_PW=$(openssl rand -hex 32)
   PANEL_GID=$(getent group panel | cut -d: -f3)
+  # Create the file at 0600 from the first byte — cat > alone inherits the
+  # process umask (022 for root), so between the write and the chmod below
+  # any local user could read POSTGRES_PASSWORD/APP_ENCRYPTION_KEY/SESSION_SECRET.
+  (umask 077 && : > "${REPO}/.env")
   cat > "${REPO}/.env" <<EOF
 APP_DOMAIN=${APP_DOMAIN_DEFAULT}
 TLS_ISSUER=internal
@@ -291,8 +295,12 @@ EOF
   chown "${OWNER}:${OWNER}" "${REPO}/.env" 2>/dev/null || true
   step_ok "wrote .env" "mode 600, owner ${OWNER}"
   echo
-  printf '  %b⚠  SAVE THIS KEY OFFLINE — losing it = cannot decrypt stored RCON passwords:%b\n' "${C_YELLOW}${C_BOLD}" "${C_RST}"
-  printf '  %bAPP_ENCRYPTION_KEY=%s%b\n\n' "${C_CYAN}" "${ENC_KEY}" "${C_RST}"
+  if [[ ${HAS_TTY} -eq 1 ]]; then
+    printf '  %b⚠  SAVE THIS KEY OFFLINE — losing it = cannot decrypt stored RCON passwords:%b\n' "${C_YELLOW}${C_BOLD}" "${C_RST}"
+    printf '  %bAPP_ENCRYPTION_KEY=%s%b\n\n' "${C_CYAN}" "${ENC_KEY}" "${C_RST}"
+  else
+    step_warn "APP_ENCRYPTION_KEY not printed (no TTY) — read it from ${REPO}/.env (mode 600) instead of a log"
+  fi
 fi
 
 APP_DOMAIN=$(awk -F= '/^APP_DOMAIN=/ {print $2}' "${REPO}/.env")

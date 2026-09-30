@@ -10,6 +10,7 @@ const redis = vi.hoisted(() => ({
   xadd: vi.fn(),
   set: vi.fn(),
   quit: vi.fn(),
+  on: vi.fn(),
 }));
 
 vi.mock('ioredis', () => ({
@@ -304,5 +305,39 @@ describe('RCON status key refresh', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(statusWrites(`rnsquadjs:status:${SERVER_ID}:shadow`)).toHaveLength(0);
     await bridge.stop();
+  });
+});
+
+describe('production-mode listen failure', () => {
+  beforeEach(() => {
+    redis.xadd.mockResolvedValue('0-1');
+    redis.set.mockResolvedValue('OK');
+    redis.quit.mockResolvedValue('OK');
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    delete process.env.PANEL_BRIDGE_MODE;
+    delete process.env.PANEL_BRIDGE_SOCKET;
+    cleanupSocketDirs();
+  });
+
+  it('unwires listeners, unsubscribes status, and quits redis when the rcon socket fails to bind', async () => {
+    process.env.PANEL_BRIDGE_MODE = 'production';
+    // A parent directory that does not exist makes RconUnixServer#listen reject.
+    process.env.PANEL_BRIDGE_SOCKET = join(
+      mkdtempSync(join(tmpdir(), 'panelbridge-index-')),
+      'no-such-dir',
+      'rcon.sock',
+    );
+    const emitter = new EventEmitter();
+    const statusUnsubscribe = vi.fn();
+
+    await expect(startPanelBridge(makeContext(emitter, statusUnsubscribe))).rejects.toThrow();
+
+    expect(emitter.listenerCount('PLAYER_CONNECTED')).toBe(0);
+    expect(emitter.listenerCount('CHAT_MESSAGE')).toBe(0);
+    expect(statusUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(redis.quit).toHaveBeenCalledTimes(1);
   });
 });
