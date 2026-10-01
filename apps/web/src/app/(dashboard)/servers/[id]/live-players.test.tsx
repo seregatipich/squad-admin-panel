@@ -403,6 +403,28 @@ describe('LivePlayers — колонки команд и порядок в от�
   );
 
   it(
+    'shows the match faction next to the unit name, and the faction alone when the unit is unnamed',
+    async () => {
+      stubRosterFetch(undefined, {
+        ...ROSTER,
+        teams: [{ team_id: 1, name: '58th Motorized Brigade' }],
+        team_factions: [
+          { team_id: 1, faction: 'Russian Ground Forces' },
+          { team_id: 2, faction: 'United States Army' },
+        ],
+      });
+      render(<LivePlayers serverId="srv-1" />);
+      await screen.findByText('Leader');
+      const named = screen.getByRole('region', { name: '58th Motorized Brigade' });
+      expect(named).toHaveTextContent('Команда 1 · Russian Ground Forces');
+      const unnamed = screen.getByRole('region', { name: 'Команда 2' });
+      expect(unnamed).toHaveTextContent('United States Army');
+      expect(unnamed).not.toHaveTextContent('Команда 2 ·');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'falls back to «Команда N» / «Отряд N» and still renders both columns without the snapshot',
     async () => {
       stubRosterFetch(undefined, {

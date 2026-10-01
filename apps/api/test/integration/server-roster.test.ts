@@ -1,4 +1,4 @@
-import { players } from '@squad/db/schema';
+import { matches, players, servers } from '@squad/db/schema';
 import { squadCrownsKey } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -103,7 +103,13 @@ describeIfDb('GET /api/v1/servers/:id/roster', () => {
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
-    expect(resp.json()).toEqual({ polled_at: null, players: [], teams: [], squads: [] });
+    expect(resp.json()).toEqual({
+      polled_at: null,
+      players: [],
+      teams: [],
+      squads: [],
+      team_factions: [],
+    });
   });
 
   it('returns team names and squad metadata from the squads snapshot next to the players', async () => {
@@ -267,6 +273,67 @@ describeIfDb('GET /api/v1/servers/:id/roster', () => {
     });
     const body = resp.json<{ players: Array<{ squad_crown: unknown }> }>();
     expect(body.players.map((player) => player.squad_crown)).toEqual([null, null, null]);
+  });
+
+  it('returns the factions of the open match, not of finished ones', async () => {
+    const cookie = await loginAsOwner(h);
+    const serverId = uuidv7();
+    await h.db.insert(servers).values({
+      id: serverId,
+      displayName: 'Roster Faction Server',
+      slug: `roster-faction-${serverId}`,
+    });
+    await h.db.insert(matches).values([
+      {
+        serverId,
+        startedAt: new Date('2026-07-05T08:00:00.000Z'),
+        endedAt: new Date('2026-07-05T09:00:00.000Z'),
+        team1Faction: 'Old Faction A',
+        team2Faction: 'Old Faction B',
+      },
+      {
+        serverId,
+        startedAt: new Date('2026-07-05T09:30:00.000Z'),
+        team1Faction: 'Russian Ground Forces',
+        team2Faction: null,
+      },
+    ]);
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId));
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/roster`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json<{ team_factions: unknown }>().team_factions).toEqual([
+      { team_id: 1, faction: 'Russian Ground Forces' },
+    ]);
+  });
+
+  it('returns no factions when every match of the server has ended', async () => {
+    const cookie = await loginAsOwner(h);
+    const serverId = uuidv7();
+    await h.db.insert(servers).values({
+      id: serverId,
+      displayName: 'Roster Ended Server',
+      slug: `roster-ended-${serverId}`,
+    });
+    await h.db.insert(matches).values({
+      serverId,
+      startedAt: new Date('2026-07-05T08:00:00.000Z'),
+      endedAt: new Date('2026-07-05T09:00:00.000Z'),
+      team1Faction: 'Old Faction A',
+      team2Faction: 'Old Faction B',
+    });
+    await h.redis.set(`rcon:roster:${serverId}`, storedRoster(serverId));
+
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${serverId}/roster`,
+      headers: { cookie },
+    });
+    expect(resp.json<{ team_factions: unknown }>().team_factions).toEqual([]);
   });
 
   it('rejects an unauthenticated request', async () => {

@@ -207,12 +207,26 @@ describe('collectRosterLookups', () => {
 });
 
 describe('buildRosterResponse', () => {
+  it('passes the open match factions through on every branch', () => {
+    const factions = [{ team_id: 1, faction: 'Russian Ground Forces' }];
+    expect(buildRosterResponse(null, [], null, new Map(), factions).team_factions).toEqual(
+      factions,
+    );
+    expect(
+      buildRosterResponse(storedRoster([]), [], null, new Map(), factions).team_factions,
+    ).toEqual(factions);
+    expect(
+      buildRosterResponse(storedRoster([entry({})]), [], null, new Map(), factions).team_factions,
+    ).toEqual(factions);
+  });
+
   it('returns an empty roster for a null store', () => {
     expect(buildRosterResponse(null, [])).toEqual({
       polled_at: null,
       players: [],
       teams: [],
       squads: [],
+      team_factions: [],
     });
   });
 
@@ -222,6 +236,7 @@ describe('buildRosterResponse', () => {
       players: [],
       teams: [],
       squads: [],
+      team_factions: [],
     });
   });
 
