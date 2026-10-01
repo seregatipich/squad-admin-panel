@@ -27,6 +27,8 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface Member {
   id: string;
@@ -118,11 +120,13 @@ function actionErrorText(failure: string, code: unknown, status: number): string
 
 const NETWORK_ERROR_TEXT = 'сетевая ошибка, проверьте соединение и повторите';
 
+const NO_ROLES: RoleOption[] = [];
+
 export default function RoleMembersPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [data, setData] = useState<MembersResponse | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
-  const [roles, setRoles] = useState<RoleOption[]>([]);
+  const { data: me = null } = useApiResource<Me>('/api/v1/me');
+  const { data: roles = NO_ROLES } = useApiResource<RoleOption[]>('/api/v1/roles');
   const [q, setQ] = useState('');
   const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -139,44 +143,22 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
   /** Loads the current page; a response that is no longer the latest request is dropped. */
   const load = useCallback(async () => {
     const requestId = ++latestLoad.current;
-    const url = new URL(`/api/v1/roles/${id}/members`, window.location.origin);
-    url.searchParams.set('limit', String(PAGE_SIZE));
-    url.searchParams.set('offset', String(offset));
-    if (q.trim()) url.searchParams.set('q', q.trim());
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (q.trim()) params.set('q', q.trim());
     try {
-      const r = await fetch(url.toString().replace(window.location.origin, ''), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (requestId !== latestLoad.current) return;
-      if (!r.ok) {
-        setErr(`HTTP ${r.status}`);
-        return;
-      }
-      const body = (await r.json()) as MembersResponse;
+      const body = await apiFetch<MembersResponse>(`/api/v1/roles/${id}/members?${params}`);
       if (requestId !== latestLoad.current) return;
       setSelected(new Set());
       setData(body);
-    } catch {
+    } catch (e) {
       if (requestId !== latestLoad.current) return;
-      setErr('Сетевая ошибка');
+      setErr(e instanceof ApiError ? `HTTP ${e.status}` : 'Сетевая ошибка');
     }
   }, [id, offset, q]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setMe(j as Me | null))
-      .catch(() => {});
-    fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((j) => setRoles(j as RoleOption[]))
-      .catch(() => {});
-  }, []);
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
@@ -200,15 +182,18 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
    * Runs a mutating request and reports a failure in the dismissible action
    * banner, without replacing the page. Resolves to whether the request succeeded.
    */
-  async function runAction(failure: string, request: () => Promise<Response>): Promise<boolean> {
+  async function runAction(failure: string, request: () => Promise<void>): Promise<boolean> {
     setActionErr(null);
     try {
-      const r = await request();
-      if (r.ok) return true;
-      const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-      setActionErr(actionErrorText(failure, e.error, r.status));
-    } catch {
-      setActionErr(`${failure}: ${NETWORK_ERROR_TEXT}`);
+      await request();
+      return true;
+    } catch (e) {
+      if (e instanceof ApiError) {
+        const body = e.jsonBody<Record<string, unknown>>() ?? {};
+        setActionErr(actionErrorText(failure, body.error, e.status));
+      } else {
+        setActionErr(`${failure}: ${NETWORK_ERROR_TEXT}`);
+      }
     }
     return false;
   }
@@ -217,22 +202,14 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
     if (!canManage) return;
     setPendingRemove(null);
     const ok = await runAction('Ошибка', () =>
-      fetch(`/api/v1/roles/${id}/members/${playerId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      }),
+      apiSend(`/api/v1/roles/${id}/members/${playerId}`, { method: 'DELETE' }),
     );
     if (ok) await load();
   }
 
   async function addMember(playerId: string) {
     const ok = await runAction('Ошибка', () =>
-      fetch(`/api/v1/roles/${id}/members`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ player_id: playerId }),
-      }),
+      apiSend(`/api/v1/roles/${id}/members`, { method: 'POST', json: { player_id: playerId } }),
     );
     if (!ok) return;
     setAddOpen(false);
@@ -243,11 +220,9 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
     if (!canManage || selected.size === 0) return;
     setPendingBulkRemove(false);
     const ok = await runAction('Ошибка', () =>
-      fetch(`/api/v1/roles/${id}/members/bulk-delete`, {
+      apiSend(`/api/v1/roles/${id}/members/bulk-delete`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ player_ids: [...selected] }),
+        json: { player_ids: [...selected] },
       }),
     );
     if (ok) await load();
@@ -255,11 +230,9 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
 
   async function moveSelected(targetRoleId: string) {
     const ok = await runAction('Ошибка перемещения', () =>
-      fetch(`/api/v1/roles/${id}/members/move`, {
+      apiSend(`/api/v1/roles/${id}/members/move`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ player_ids: [...selected], target_role_id: targetRoleId }),
+        json: { player_ids: [...selected], target_role_id: targetRoleId },
       }),
     );
     if (!ok) return;
@@ -566,29 +539,24 @@ function ImportModal({
     setErrors([]);
     setTopError(null);
     try {
-      const r = await fetch(`/api/v1/roles/${roleId}/members/import`, {
+      await apiSend(`/api/v1/roles/${roleId}/members/import`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ csv }),
+        json: { csv },
       });
-      if (r.status === 201) {
-        onImported();
+      onImported();
+    } catch (e) {
+      if (!(e instanceof ApiError)) {
+        setTopError(NETWORK_ERROR_TEXT);
         return;
       }
-      const body = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        errors?: ImportRowError[];
-      };
-      if (r.status === 422 && Array.isArray(body.errors)) {
+      const body = e.jsonBody<{ error?: string; errors?: ImportRowError[] }>() ?? {};
+      if (e.status === 422 && Array.isArray(body.errors)) {
         setErrors(body.errors);
         return;
       }
       setTopError(
-        body.error ? (ACTION_ERROR_LABELS[body.error] ?? body.error) : `HTTP ${r.status}`,
+        body.error ? (ACTION_ERROR_LABELS[body.error] ?? body.error) : `HTTP ${e.status}`,
       );
-    } catch {
-      setTopError(NETWORK_ERROR_TEXT);
     } finally {
       setBusy(false);
     }
@@ -729,21 +697,16 @@ function AddMemberModal({
     const handler = setTimeout(async () => {
       const url = `/api/v1/players/search?q=${encodeURIComponent(trimmed.slice(0, PLAYER_SEARCH_MAX_LENGTH))}`;
       try {
-        const r = await fetch(url, {
-          credentials: 'include',
-          cache: 'no-store',
+        const found = await apiFetch<{ items: PlayerSearchItem[] }>(url, {
           signal: controller.signal,
         });
-        if (!r.ok) {
-          setResults([]);
-          setSearchErr(`Не удалось выполнить поиск: ${r.status}`);
-          return;
-        }
-        setResults(((await r.json()) as { items: PlayerSearchItem[] }).items);
-      } catch {
+        setResults(found.items);
+      } catch (e) {
         if (controller.signal.aborted) return;
         setResults([]);
-        setSearchErr(`Не удалось выполнить поиск: ${NETWORK_ERROR_TEXT}`);
+        setSearchErr(
+          `Не удалось выполнить поиск: ${e instanceof ApiError ? e.status : NETWORK_ERROR_TEXT}`,
+        );
       }
     }, 250);
     return () => {

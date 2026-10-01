@@ -76,6 +76,16 @@ export class ApiError extends Error {
       return null;
     }
   }
+
+  /**
+   * What a page appends to its own failure caption: the API's `error` code
+   * from a JSON body, else the HTTP status.
+   */
+  codeOrStatus(): string | number {
+    const body = this.jsonBody<{ error?: unknown } | null>();
+    const code = body?.error;
+    return typeof code === 'string' ? code : this.status;
+  }
 }
 
 /**

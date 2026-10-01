@@ -387,6 +387,16 @@ describe('ApiError.jsonBody', () => {
   });
 });
 
+describe('ApiError.codeOrStatus', () => {
+  it('prefers the API error code and falls back to the status', () => {
+    expect(new ApiError('/x', 409, '{"error":"name_taken"}').codeOrStatus()).toBe('name_taken');
+    expect(new ApiError('/x', 500, '{"message":"boom"}').codeOrStatus()).toBe(500);
+    expect(new ApiError('/x', 502, '<html>').codeOrStatus()).toBe(502);
+    expect(new ApiError('/x', 503, 'null').codeOrStatus()).toBe(503);
+    expect(new ApiError('/x', 400, '{"error":{"nested":1}}').codeOrStatus()).toBe(400);
+  });
+});
+
 describe('nullOnHttpError', () => {
   it('turns an API error status into null', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no', { status: 403 })));
