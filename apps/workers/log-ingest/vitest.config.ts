@@ -7,6 +7,10 @@ const maxForks = Number(process.env.VITEST_MAX_FORKS) || 4;
 
 export default defineConfig({
   test: {
+    include: [
+      '**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      '../_test-shared/database-isolation.regression.test.ts',
+    ],
     exclude: ['**/node_modules/**', '**/dist/**'],
     pool: 'forks',
     poolOptions: { forks: { maxForks, minForks: 1 } },
