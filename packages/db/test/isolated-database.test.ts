@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, expect, inject, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   clonePackageTestDatabase,
   createIsolatedPackageTestDatabase,
@@ -9,7 +10,6 @@ import {
 } from './helpers/isolated-database.js';
 
 const BASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-const describeIfDb = BASE_URL ? describe : describe.skip;
 
 function maintenanceUrl(baseUrl: string): string {
   const url = new URL(baseUrl);

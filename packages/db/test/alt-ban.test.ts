@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { raiseAltBanAlert } from '../src/alt-ban.js';
 import { createDatabaseClient, type DatabaseClient } from '../src/client.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let sql: ReturnType<typeof postgres>;
 let db: DatabaseClient;

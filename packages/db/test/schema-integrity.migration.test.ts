@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
@@ -16,7 +17,6 @@ import {
  * audit-integrity.test.ts. Runs against this worker's migrated clone.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const STEAM_ID_BASE = 76561190077000000n;
 let steamSeq = 0n;

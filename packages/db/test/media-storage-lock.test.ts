@@ -1,11 +1,11 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { withMediaStoragePathLock } from '../src/media-storage-lock.js';
 import * as schema from '../src/schema/index.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;

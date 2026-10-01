@@ -1,7 +1,8 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
@@ -14,7 +15,6 @@ import {
  * them for an unanchored, escaped LIKE.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('migration 0126 player_name_trgm_indexes', () => {
   it('adds GIN trigram indexes that serve an unanchored LIKE on player names', async () => {

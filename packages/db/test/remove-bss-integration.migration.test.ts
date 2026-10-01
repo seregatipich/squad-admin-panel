@@ -1,14 +1,14 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
 } from './helpers/isolated-database.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = '76561190000000101';
 const STORE_VIP_STEAM_ID = '76561190000000102';

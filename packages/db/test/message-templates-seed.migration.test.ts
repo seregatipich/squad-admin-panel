@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 
 /**
  * 0119 seeds the built-in message templates once (#40, finding #197), replacing
@@ -12,7 +13,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEED_SQL = readFileSync(

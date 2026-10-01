@@ -12,13 +12,13 @@ import {
 } from '../src/admins-cfg-outbox.js';
 import * as schema from '../src/schema/index.js';
 import { ADMINS_CFG_RELOAD_OUTCOMES, adminsCfgSyncOutbox, servers } from '../src/schema/index.js';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
 } from './helpers/isolated-database.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;

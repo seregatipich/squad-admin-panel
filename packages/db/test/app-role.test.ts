@@ -1,13 +1,13 @@
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appRoleFromEnv, provisionAppRole } from '../src/app-role.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 // #47 (#1250): api and workers must not reach Postgres as the superuser that
 // owns the schema. The migrator provisions a least-privilege login role; these
 // tests connect AS that role and prove what it can and cannot do.
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 // Roles are cluster-wide, so every run gets its own name and drops it again.
 const ROLE = `panel_app_t${process.pid}_${Date.now().toString(36)}`;

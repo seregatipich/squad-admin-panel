@@ -9,9 +9,9 @@ import {
   vipSubscriptions,
 } from '../src/schema/index.js';
 import { sessions } from '../src/schema/sessions.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;

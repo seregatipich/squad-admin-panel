@@ -2,15 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import type { DatabaseClient } from '../src/client.js';
 import { recordIpObservation } from '../src/geoip/observe.js';
 import type { GeoFields } from '../src/geoip/resolver.js';
 import * as schema from '../src/schema/index.js';
 import { playerIpHistory, players } from '../src/schema/index.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const PLAYER_ID = '000000c3-0000-4000-8000-000000000000';
 

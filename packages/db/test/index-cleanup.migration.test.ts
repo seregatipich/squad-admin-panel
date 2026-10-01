@@ -1,5 +1,6 @@
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 
 /**
  * Migration 0136 (issue #78, findings 1117/1124/1125/1136/1141): indexes
@@ -7,7 +8,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * index so at most one snapshot per (server_id, mode) is `open`.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let sql: postgres.Sql;
 

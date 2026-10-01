@@ -1,8 +1,9 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { VIP_RENEWAL_LEAD_MS } from '../src/economy/vip-grant.js';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
@@ -16,7 +17,6 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const ROLE_EXPIRES_AT = new Date('2026-12-01T00:00:00.000Z');
 const HOUR_MS = 3_600_000;
