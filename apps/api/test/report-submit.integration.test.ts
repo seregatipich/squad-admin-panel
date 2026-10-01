@@ -9,7 +9,8 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
@@ -26,8 +27,6 @@ import {
 const OWNER_STEAM = testSteamId(951001);
 const NO_PANEL_STEAM = testSteamId(951002);
 const REPORTER_STEAM = testSteamId(951003);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let serverId: string;

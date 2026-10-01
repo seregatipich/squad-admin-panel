@@ -9,7 +9,8 @@ import {
 } from '@squad/db/schema';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -24,8 +25,6 @@ import {
 const OWNER_STEAM = testSteamId(895001);
 const MANAGER_STEAM = testSteamId(895002);
 const NOBODY_STEAM = testSteamId(895003);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let managerCookie: string;

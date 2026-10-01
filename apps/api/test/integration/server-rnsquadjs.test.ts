@@ -2,7 +2,8 @@ import { players, roles } from '@squad/db/schema';
 import { RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { sidecarStatusKey } from '../../src/routes/server-rnsquadjs.js';
 import { narrowedOwnerHeaders } from '../helpers/narrowed-token.js';
@@ -13,8 +14,6 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = testSteamId(982000);
 

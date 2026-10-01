@@ -4,7 +4,8 @@ import { and, sql as drizzleSql, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -67,8 +68,6 @@ afterEach(async () => {
     await db.delete(players).where(eq(players.steamId64, sid));
   }
 });
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('users list — role_id NOT NULL filter', () => {
   it('players with role_id set appear in joined query', async () => {

@@ -4,6 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -25,8 +26,6 @@ const EDITOR_STEAM = testSteamId(741003);
 const TARGET_STEAM = testSteamId(741004);
 const TARGET_B_STEAM = testSteamId(741005);
 const SEEDED = [SECOND_OWNER_STEAM, ASSIGNER_STEAM, EDITOR_STEAM, TARGET_STEAM, TARGET_B_STEAM];
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('role management guards (#41)', () => {
   let h: IntegrationHarness;

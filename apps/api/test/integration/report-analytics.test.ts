@@ -11,7 +11,7 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { recomputeReporterStats } from '../../src/lib/reporter-stats.js';
@@ -24,6 +24,7 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 
 function okOutcome(): WorkerRconCommandOutcome {
@@ -35,8 +36,6 @@ function okOutcome(): WorkerRconCommandOutcome {
     via: 'worker-rcon',
   } as WorkerRconCommandOutcome;
 }
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM = testSteamId(954000);
 const HANDLER_STEAM = testSteamId(954001);

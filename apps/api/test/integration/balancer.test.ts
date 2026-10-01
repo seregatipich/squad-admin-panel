@@ -9,7 +9,8 @@ import {
 } from '@squad/db/schema';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createBalancerProposalSignature } from '../../src/lib/balancer-proposal-signature.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -36,8 +37,6 @@ const DELETED_SERVER_ID = '019e0083-0000-7000-8000-0000000000c3';
 let h: IntegrationHarness;
 let ownerCookie: string;
 let noPanelCookie: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 interface SettingsBody {
   settings: {

@@ -2,7 +2,8 @@ import { players, roles } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   buildIntegrationApp,
@@ -13,8 +14,6 @@ import {
 
 const OWNER_STEAM = 76561198914500001n;
 const SECOND_OWNER_STEAM = 76561198914500002n;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — last-Owner invariant', () => {
   let h: IntegrationHarness;

@@ -10,7 +10,8 @@ import {
 } from '@squad/db/schema';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { ADMINS_CFG_SYNC_STREAM_PREFIX } from '../../src/lib/admins-cfg-sync.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -30,8 +31,6 @@ const ASSIGN_ONLY_STEAM = testSteamId(830003);
 const DAY_MS = 86_400_000;
 const TIER_PRICE = 100;
 const TIER_DAYS = 30;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerCookie: string;

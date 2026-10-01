@@ -9,7 +9,7 @@ import {
 } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -27,6 +27,7 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 
 const OWNER_STEAM = testSteamId(942001);
@@ -133,8 +134,6 @@ function okOutcome(): WorkerRconCommandOutcome {
     via: 'worker-rcon',
   } as WorkerRconCommandOutcome;
 }
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 beforeAll(async () => {
   h = await buildIntegrationApp({

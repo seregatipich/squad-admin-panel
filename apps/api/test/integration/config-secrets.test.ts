@@ -8,7 +8,8 @@ import { configVersions, playerApiTokens, serverCredentials, servers } from '@sq
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { mintApiToken } from '../../src/lib/api-tokens.js';
 import { decryptString, deserialize, encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
@@ -28,8 +29,6 @@ const RCON_SECRET = 'Rc0n-Secret-Pw-9f1c';
 const OUT_OF_BAND_PASSWORD = 'Host-Side-Pw-5e2d';
 const LICENSE_SECRET = 'LIC-KEY-SECRET-77aa';
 const DEPOT_ROOT = '/depot-test-config-secrets';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let cookie: string;

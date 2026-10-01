@@ -11,7 +11,7 @@ import {
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -30,9 +30,8 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM = testSteamId(951000);
 const HANDLER_STEAM = testSteamId(951001);

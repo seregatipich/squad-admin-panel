@@ -3,7 +3,8 @@ import { type SQL, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { FastifyInstance } from 'fastify';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { computeAnalyticsAggregates } from '../../src/routes/analytics.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
@@ -16,8 +17,6 @@ import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './
  * subquery; these tests pin a single pass over the table and prove the
  * rewrite returns exactly what the per-tick definition returns.
  */
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const WINDOW_FROM = '2026-06-10T00:30:00.000Z';
 const WINDOW_TO = '2026-06-12T05:00:00.000Z';

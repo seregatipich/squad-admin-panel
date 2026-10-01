@@ -4,7 +4,8 @@ import { and, sql as drizzleSql, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import {
   invalidatePermissionCache,
   invalidatePermissionCacheForRole,
@@ -116,8 +117,6 @@ afterEach(async () => {
   }
   createdRoleIds.length = 0;
 });
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('player single-role assignment', () => {
   it('assigning a role updates players.role_id', async () => {

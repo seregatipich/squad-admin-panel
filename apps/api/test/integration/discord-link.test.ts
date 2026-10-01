@@ -1,8 +1,8 @@
 import { auditLog, playerDiscordLinks, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -18,8 +18,6 @@ const OWNER_STEAM = testSteamId(979001);
 
 const STATE_COOKIE = '__Host-discord-state';
 const STATE_REDIS_PREFIX = 'discord-oauth-state:';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 

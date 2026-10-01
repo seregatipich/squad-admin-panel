@@ -4,6 +4,7 @@ import { players } from '@squad/db/schema';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import authPlugin from '../../src/plugins/auth.js';
@@ -20,8 +21,6 @@ import {
 
 const OWNER_STEAM = testSteamId(984700);
 const NO_ROLE_STEAM = testSteamId(984701);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let bareApp: Awaited<ReturnType<typeof Fastify>>;

@@ -1,7 +1,8 @@
 import type { DatabaseClient } from '@squad/db';
 import { players, roles } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
@@ -10,8 +11,6 @@ import {
   type IntegrationHarness,
   makeFakeBridge,
 } from './integration/harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let steamCounter = 76561198000210000n;
 function nextSteam(): bigint {

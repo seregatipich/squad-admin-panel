@@ -21,6 +21,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import playerDossierRoutes, {
@@ -33,8 +34,6 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM = testSteamId(192001);
 const SERVER_A = '019e0000-0000-7000-8000-0000000192a1';

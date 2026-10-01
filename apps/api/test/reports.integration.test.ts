@@ -1,7 +1,8 @@
 import { playerReports, players, roles, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
@@ -20,8 +21,6 @@ const PANEL_ONLY_STEAM = testSteamId(950103);
 const NO_PANEL_STEAM = testSteamId(950104);
 const REPORTER_STEAM = testSteamId(950111);
 const TARGET_STEAM = testSteamId(950112);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let serverAId: string;

@@ -1,6 +1,7 @@
 import { players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { ROLE_ASSIGNMENTS_LIMIT_MAX } from '../src/routes/role-assignments.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
@@ -18,8 +19,6 @@ const EXPIRING_SOON_EOS_ID = 'eos-role-assignments-test-720005';
 const ALREADY_EXPIRED_EOS_ID = 'eos-role-assignments-test-720006';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('GET /api/v1/role-assignments', () => {
   let h: IntegrationHarness;

@@ -3,7 +3,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { auditLog, discordIntegration, discordWebhooks, players, roles } from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { decryptString, deserialize, encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -47,8 +48,6 @@ const WEBHOOK_URL = `https://discord.com/api/webhooks/112233445566778899/${WEBHO
 const BOT_TOKEN = 'fake-bot-token-fixture-do-not-use-0011223344556677';
 
 let h: IntegrationHarness;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db

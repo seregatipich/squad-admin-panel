@@ -1,7 +1,8 @@
 import { adminsCfgSyncOutbox, panelMeta, players, roles, servers } from '@squad/db/schema';
 import { eq, inArray, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -19,8 +20,6 @@ const MEMBER_A_STEAM = testSteamId(165010);
 const MEMBER_B_STEAM = testSteamId(165011);
 const IMPORT_KNOWN_STEAM = testSteamId(165020);
 const UNKNOWN_STEAM = testSteamId(165099);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerCookie: string;

@@ -3,6 +3,7 @@ import { PERMISSIONS, type PermissionKey } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   invalidateAllPermissionCaches,
   loadUserPermissions,
@@ -42,8 +43,6 @@ const INFRASTRUCTURE_KEYS: readonly PermissionKey[] = [
 
 let h: IntegrationHarness;
 let steamSeq = 0;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function seedPlayerOnRole(roleId: string): Promise<{ playerId: string; cookie: string }> {
   steamSeq += 1;

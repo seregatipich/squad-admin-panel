@@ -2,7 +2,8 @@ import { clanMembers, clans, players, roles } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   AUDIT_CHAIN_COLUMNS_SQL,
   type AuditChainRow,
@@ -23,8 +24,6 @@ const OWNER_STEAM = testSteamId(880001);
 const MANAGER_STEAM = testSteamId(880002);
 const LEADER_STEAM = testSteamId(880003);
 const NOBODY_STEAM = testSteamId(880004);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerCookie: string;

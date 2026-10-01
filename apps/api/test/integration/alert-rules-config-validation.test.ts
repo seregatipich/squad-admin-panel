@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -12,8 +13,6 @@ const OWNER_STEAM = testSteamId(944001);
 
 let h: IntegrationHarness;
 let ownerCookie: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 beforeAll(async () => {
   h = await buildIntegrationApp({

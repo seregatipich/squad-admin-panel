@@ -97,12 +97,12 @@ describe('worker database provisioning', () => {
     }
   });
 
-  it('does not count the describeIfDb presence gate as a use', () => {
+  it('does not count a suite gated with describeIfDb as a use', () => {
     expect(
       sourceUsesWorkerDatabase(
         [
+          "import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';",
           "import { buildIntegrationApp } from './integration/harness.js';",
-          'const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;',
           'const h = await buildIntegrationApp({ seedOwner: { steamId64: 1n } });',
         ].join('\n'),
       ),
@@ -116,9 +116,9 @@ describe('worker database provisioning', () => {
     ['hostDbUrl()', 'const sql = postgres(hostDbUrl());'],
     ['the reusePublicSchema harness', 'await buildIntegrationApp({ reusePublicSchema: true });'],
     [
-      'a read next to the presence gate',
+      'a read next to the describeIfDb gate',
       [
-        'const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;',
+        "import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';",
         'beforeAll(() => { sql = postgres(process.env.DATABASE_URL!); });',
       ].join('\n'),
     ],

@@ -8,7 +8,8 @@ import {
   servers,
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness } from './harness.js';
 
@@ -18,8 +19,6 @@ const SERVER_ID = '019f9600-0000-7000-8000-000000000001';
 const PUBLIC_CLAN_ID = '019f9600-0000-7000-8000-000000000002';
 const PRIVATE_CLAN_ID = '019f9600-0000-7000-8000-000000000003';
 const MATCH_ID = '019f9600-0000-7000-8000-000000000004';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 

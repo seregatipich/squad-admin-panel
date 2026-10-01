@@ -1,7 +1,8 @@
 import { players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -13,8 +14,6 @@ import {
 
 const OWNER_STEAM = 76561198000001500n;
 const MEMBER_STEAM = 76561198000001501n;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('role loses panel_access: member sessions', () => {
   let h: IntegrationHarness;

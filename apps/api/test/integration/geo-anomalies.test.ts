@@ -7,7 +7,8 @@ import {
 } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { FEED_CANDIDATE_CAP } from '../../src/routes/player-geo-anomalies.js';
@@ -23,8 +24,6 @@ let h: IntegrationHarness;
 let anomalyPlayerId: string;
 let noPanelCookie: string;
 let noIpsCookie: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 interface AnomaliesResponse {
   config: { country_switch_window_hours: number; multi_country_threshold: number };

@@ -14,7 +14,7 @@ import { moderationActionPayload, STREAM_NAME } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
 import pino from 'pino';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import {
   ensureConsumerGroup,
   NOTIFY_CONSUMER_GROUP,
@@ -37,10 +37,9 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM = testSteamId(987000);
 const UNBANNER_STEAM = testSteamId(987001);

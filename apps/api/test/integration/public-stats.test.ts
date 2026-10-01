@@ -3,7 +3,8 @@ import { matches, playerDailyPresence, playerSessions, players, servers } from '
 import { eq } from 'drizzle-orm';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import publicStatsRoutes, {
   PUBLIC_STATS_CACHE_TTL_SECONDS,
@@ -43,8 +44,6 @@ interface PublicStatsBody {
   popular_maps: Array<{ map: string; matches: number }>;
   popular_layers: Array<{ layer: string; matches: number }>;
 }
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 function fetchPublicStats(query: string) {
   return h.app.inject({ method: 'GET', url: `/api/v1/public/stats${query}` });

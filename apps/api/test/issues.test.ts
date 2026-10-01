@@ -2,7 +2,8 @@ import type { DatabaseClient } from '@squad/db';
 import { auditLog, issues, players, roles } from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import {
@@ -10,8 +11,6 @@ import {
   type IntegrationHarness,
   makeFakeBridge,
 } from './integration/harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let steamCounter = 76561198000090000n;
 function nextSteam(): bigint {

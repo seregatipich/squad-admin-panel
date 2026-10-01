@@ -4,7 +4,8 @@
  */
 import { serverCredentials, servers } from '@squad/db/schema';
 import { eq, isNull } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const OWNER_STEAM_ID = 76561198000000778n;
@@ -19,8 +20,6 @@ const externalBody = {
   game_port: 7787,
   max_players: 100,
 };
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 

@@ -1,15 +1,14 @@
 import { matches, players, servers } from '@squad/db/schema';
 import { squadCrownsKey } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = 76561198000000998n;
 const LINKED_EOS = 'aaaa0123456789abcdef0123456789ab';
