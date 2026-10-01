@@ -14,7 +14,7 @@ Controls which Steam users can log into the panel and what they can do once insi
 
 ## Non-responsibilities
 
-- In-game Squad admin groups (Admins.cfg) — that is Эпик 3; only the `admin_group:view` and `admin_group:edit` permission stubs live here.
+- In-game Squad admin groups (Admins.cfg) — that is Epic 3; only the `admin_group:view` and `admin_group:edit` permission stubs live here.
 - Per-server permission scoping — `role_server_scopes` was dropped. All permissions are global.
 - Multi-tenancy / organisations — `organizations` and `organization_members` were dropped.
 - Setup wizard — replaced by the first-login Owner trick.

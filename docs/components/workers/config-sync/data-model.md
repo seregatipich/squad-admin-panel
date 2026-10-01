@@ -51,10 +51,10 @@ Each successful sync emits a row with `action_type ∈ { 'admins_cfg.synced', 'a
 
 ### Redis RCON command stream (not Postgres)
 
-`rcon:commands:<server_id>` — для нового outbox команда
-`AdminReloadServerConfig` с `request_id=admins-cfg-sync:<outbox_id>`; живой
-сервер считается применённым только после точного `ok=true` результата. Старые
-сообщения без `_outbox_id` используют совместимый best-effort режим.
+`rcon:commands:<server_id>` — for a new outbox, the command
+`AdminReloadServerConfig` with `request_id=admins-cfg-sync:<outbox_id>`; a live
+server is considered applied only after an exact `ok=true` result. Old
+messages without `_outbox_id` use the compatible best-effort mode.
 
 ## In-memory model — managed segment
 

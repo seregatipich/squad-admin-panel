@@ -23,7 +23,7 @@ every retry; acknowledging the entry" means the event was given up on.
 
 1. Check the banner on `/settings/integrations/discord` — it renders whatever
    the worker wrote to `discord:role-sync:status`.
-2. «У бота нет права Manage Roles» means Discord answered `403`. The bot needs
+2. «У бота нет права Manage Roles» (The bot lacks the Manage Roles permission) means Discord answered `403`. The bot needs
    the **Manage Roles** permission *and* must sit above every mapped role in the
    guild's role hierarchy — being above only some of them fails on the rest.
 3. Silence with no banner usually means the integration row is not finished:
@@ -35,7 +35,7 @@ every retry; acknowledging the entry" means the event was given up on.
 
 **A role change did not propagate:** the `XADD` is best-effort. The hourly
 reconcile (`DISCORD_ROLE_SYNC_RECONCILE_MS`) repairs it; «Синхронизировать
-сейчас» on the settings page runs it immediately.
+сейчас» (Sync now) on the settings page runs it immediately.
 
 **Status channel is not renaming:**
 

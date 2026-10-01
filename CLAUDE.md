@@ -97,6 +97,7 @@ The branch model is machine-enforced (Claude Code `PreToolUse` hook, lefthook `b
 - Never commit secrets; keep sensitive configuration in environment variables and document required vars in `.env.example`.
 - Do not add `.md` files to the repository root. The only permitted root files of that kind are `README.md`, this `CLAUDE.md`, and the `AGENTS.md` pointer to it. Planning notes, roadmaps, handoffs, and other artifacts go in `docs/`.
 - Update README/runbooks/migration notes when behavior, setup, or operations change.
+- Write documentation in English; only quoted product UI strings (the web UI is Russian-only) and literals emitted by the code stay Russian.
 
 ## Commands
 

@@ -55,14 +55,14 @@ PLAYWRIGHT_BASE_URL=https://squad-panel.lan \
 | `login.spec.ts` | Steam button render, `auth_failed` error param, `not_authorized` + steam_id64 display. |
 | `dashboard.spec.ts` | Owner sees every top-bar entry and its pages once a dropdown is opened, heading visible, unauthed redirects to /login. |
 | `servers-new.spec.ts` | Cyrillic→latin slug auto-gen, form field render, API error message display. |
-| `roles.spec.ts` | All 5 roles listed, Owner Системная badge, Owner has no delete button. |
+| `roles.spec.ts` | All 5 roles listed, Owner Системная (System) badge, Owner has no delete button. |
 | `users.spec.ts` | Table renders with Owner row; assign-role modal opens/closes and renders a locale-independent date-only expiry plus explained comment. |
 | `player-detail.spec.ts` | Profile section and PanelAccessSection are visible for Owner; the inline role editor uses the same date-only expiry contract. |
 | `auth.spec.ts` | Steam button on login, dashboard → /login redirect. |
 | `live-refresh.spec.ts` | 8 polling surfaces verified without page reload (a–h). |
 | `server-detail-live.spec.ts` | Server detail re-polls without reload; no freshness pill rendered. |
 | `server-logs-resilience.spec.ts` | Log WS: live pill, pre-install copy, error-banner retry. |
-| `disk-breakdown.spec.ts` | Dashboard `[data-testid="disk-card"]` click opens `<DiskBreakdownModal>` (`role="dialog"` named «Что занимает панель»), «Всего:» and «По типу» sections render, refresh button («Обновить») drives `cache_age_seconds` to 0 (text «обновлено 0 сек назад»), Escape and backdrop click both close the dialog. |
+| `disk-breakdown.spec.ts` | Dashboard `[data-testid="disk-card"]` click opens `<DiskBreakdownModal>` (`role="dialog"` named «Что занимает панель» (What the panel occupies)), «Всего:» (Total:) and «По типу» (By type) sections render, refresh button («Обновить» (Refresh)) drives `cache_age_seconds` to 0 (text «обновлено 0 сек назад» (updated 0 s ago)), Escape and backdrop click both close the dialog. |
 
 ## Auth fixture design
 
@@ -100,6 +100,6 @@ These are covered at the API layer in `apps/api/test/e2e/install-lifecycle.e2e.t
 ## Important edge cases
 
 - Cookies are `__Host-`-prefixed → Playwright needs HTTPS (`ignoreHTTPSErrors: true` for internal CA).
-- The RCON status indicator renders `— (сервер не запущен)` when server is `stopped`.
+- The RCON status indicator renders `— (сервер не запущен)` (server not running) when server is `stopped`.
 - `player_name_history` has a unique constraint — `ON CONFLICT DO NOTHING` in seedPlayer.
 - Deleting a test player may fail if `audit_log.actor_steam_id64` has a FK reference. `teardownOwner` swallows this and leaves the player tombstoned with `role_id=NULL`.

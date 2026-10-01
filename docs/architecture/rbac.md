@@ -33,13 +33,13 @@ Current keys by category:
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
 
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
-`admin_group:view` и `admin_group:edit` являются production-active: ими защищены
-`/api/v1/admins-cfg/drift`, `/api/v1/admins-cfg/drift/all` и
+`admin_group:view` and `admin_group:edit` are production-active: they protect
+`/api/v1/admins-cfg/drift`, `/api/v1/admins-cfg/drift/all` and
 `/api/v1/admins-cfg/sync`.
-`whitelist:view` и `whitelist:edit` тоже production-active — ими защищены роуты
-`/api/v1/whitelist/*`. Whitelist-роль — это обычная **глобальная** роль
-(`panel_meta.whitelist_role_id`), которая реплицируется в `Admins.cfg` каждого
-сервера через `publishAdminsCfgSyncForAllServers` (см. решение WL-2 в
+`whitelist:view` and `whitelist:edit` are production-active too — they protect the routes
+`/api/v1/whitelist/*`. The whitelist role is an ordinary **global** role
+(`panel_meta.whitelist_role_id`) that is replicated into each server's `Admins.cfg`
+via `publishAdminsCfgSyncForAllServers` (see decision WL-2 in
 [`decisions.md`](./decisions.md))._
 
 Routes refer to these as literal strings; the type system narrows them to `PermissionKey`.

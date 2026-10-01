@@ -2,7 +2,7 @@
 
 ## Symptom: Wedge after reinstall — `claimFirstOwner` returns `already_claimed` despite fresh DB
 
-**Symptom.** Operator runs the reinstall procedure (drop+recreate DB, flush Redis, run migrator), then logs in via Steam. The login succeeds but lands on the «Мой VIP» self-service page (`/me`) instead of the dashboard — the session was issued with scope `self_service` because the player has no `panel_access`. DB shows `panel_meta.first_owner_claimed = false` and `players.role_id IS NULL` for the operator's record — yet the Owner trick failed to fire.
+**Symptom.** Operator runs the reinstall procedure (drop+recreate DB, flush Redis, run migrator), then logs in via Steam. The login succeeds but lands on the «Мой VIP» (My VIP) self-service page (`/me`) instead of the dashboard — the session was issued with scope `self_service` because the player has no `panel_access`. DB shows `panel_meta.first_owner_claimed = false` and `players.role_id IS NULL` for the operator's record — yet the Owner trick failed to fire.
 
 **Root cause.** Pre-2026-04-25 versions of `claimFirstOwner` short-circuited on the presence of `/var/lib/squad-panel/.first-owner-claimed`. The sentinel file persists across DB resets (it lives on the host filesystem, not in any Docker volume that `docker compose down -v` would wipe). After reinstall the DB was clean, but the stale sentinel from the previous installation made every first-login return `already_claimed` without consulting the DB.
 

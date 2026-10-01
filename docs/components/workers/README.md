@@ -3,7 +3,7 @@
 All workers live under [`apps/workers/`](../../../apps/workers/). Each is a standalone Node 22 process that:
 
 - reports liveness via `worker:heartbeat:{name}` (TTL 30 s) using [`packages/shared-config/src/heartbeat.ts`](../../../packages/shared-config/src/heartbeat.ts),
-- корректно завершает работу по `SIGINT`/`SIGTERM`, включая сигнал во время первого обращения к базе, Redis или мосту.
+- shuts down gracefully on `SIGINT`/`SIGTERM`, including a signal received during the first call to the database, Redis or the bridge.
 
 Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 

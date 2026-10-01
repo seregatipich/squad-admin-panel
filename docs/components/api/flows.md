@@ -212,7 +212,7 @@ The behavior class also gates whether step 5 fires RCON at all: **only `hot_relo
 |---|---|---|
 | `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | The **only** class where step 5 sends RCON `AdminReloadServerConfig`, so Squad re-reads the file live. (Squad also re-reads some of these on its own when a relevant command fires, e.g. an admin runs `/admin`.) |
 | `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | Applies from the next match. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the UI shows a "next match" hint. |
-| `requires_restart` | `CustomOptions.cfg`, `License.cfg`\*, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" button (needs `server:restart`). |
+| `requires_restart` | `CustomOptions.cfg`, `License.cfg`\*, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" (Restart server) button (needs `server:restart`). |
 
 \* `License.cfg` keeps its `requires_restart` class but is panel-managed (SRV-6, #45): the editor shows it masked and rejects writes/restores with `panel_managed_file`; it is written only by the server-settings license flow, which bypasses `writeVersion` entirely (see the editor exception above the flow).
 

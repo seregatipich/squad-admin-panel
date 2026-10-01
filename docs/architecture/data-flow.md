@@ -266,7 +266,7 @@ ListPlayers → parse → publish rcon.players_polled
 ShowServerInfo (keepalive — RCON socket dies silently otherwise)
 ```
 
-When a server transitions to `stopped`/`failed`, the supervisor drops it from `targets`. `rcon:status:{id}` expires after 300 s; the API surfaces this as `{state: 'not_polled'}` (rendered "— (сервер не запущен)").
+When a server transitions to `stopped`/`failed`, the supervisor drops it from `targets`. `rcon:status:{id}` expires after 300 s; the API surfaces this as `{state: 'not_polled'}` (rendered "— (сервер не запущен)" (server not running)).
 
 ## Error cases
 

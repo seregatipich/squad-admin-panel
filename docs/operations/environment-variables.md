@@ -4,8 +4,8 @@
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `APP_VERSION` | production release | `dev` | api | Точный SHA production-выпуска: deploy-workflow передаёт его в `scripts/deploy-stand.sh`, тот записывает его в `.env.stand`, а `/health` возвращает для приёмки. | no |
-| `PANEL_IMAGE_TAG` | the stand host | — | docker/compose.stand.yml | Тег образов `squad-panel/{api,web,workers,caddy}`, которые запускает `docker/compose.stand.yml` (обычно SHA выпуска). Deploy-workflow передаёт его в `scripts/deploy-stand.sh`, после успешного выпуска тот записывает его в `.env.stand`, чтобы обычные `docker compose --env-file .env.stand …` находили образы. Без значения compose останавливается с `PANEL_IMAGE_TAG_is_required`. | no |
+| `APP_VERSION` | production release | `dev` | api | The exact SHA of the production release: the deploy workflow passes it to `scripts/deploy-stand.sh`, which writes it to `.env.stand`, and `/health` returns it for acceptance checks. | no |
+| `PANEL_IMAGE_TAG` | the stand host | — | docker/compose.stand.yml | Tag of the `squad-panel/{api,web,workers,caddy}` images that `docker/compose.stand.yml` runs (usually the release SHA). The deploy workflow passes it to `scripts/deploy-stand.sh`, which, after a successful release, writes it to `.env.stand` so that ordinary `docker compose --env-file .env.stand …` commands find the images. Without a value, compose stops with `PANEL_IMAGE_TAG_is_required`. | no |
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
 | `PANEL_PUBLIC_URL` | yes | — | api | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID; must be an HTTPS origin in production. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |

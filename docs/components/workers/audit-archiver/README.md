@@ -6,7 +6,7 @@ Cold-archives `audit_log` rows older than 90 days to preserve the verified SHA-2
 
 ## Current status — P0 stub
 
-The worker is deployed and publishes a heartbeat, but the archival logic is deferred to Phase 1. The current `src/index.ts` is a no-op loop that publishes status `"архивация не реализована (P1)"` in `worker:heartbeat:audit-archiver`.
+The worker is deployed and publishes a heartbeat, but the archival logic is deferred to Phase 1. The current `src/index.ts` is a no-op loop that publishes status `"архивация не реализована (P1)"` ("archiving not implemented (P1)") in `worker:heartbeat:audit-archiver`.
 
 Phase 1 will implement:
 

@@ -4,7 +4,7 @@
 
 ### `admins-cfg:status:<server_id>` stuck at `state: 'unreachable'`
 
-**Symptom**: drift banner on `/servers/<id>` shows "Admins.cfg недоступен на этом сервере".
+**Symptom**: drift banner on `/servers/<id>` shows "Admins.cfg недоступен на этом сервере" (Admins.cfg is unavailable on this server).
 
 **Note on transient errors** — the banner is debounced by `UNREACHABLE_DEBOUNCE_MS = 30 s`, and `bridge-client` retries idempotent calls (including `file_read` / `file_atomic_write`) once on transport errors. If you see this banner at all, the outage already survived: (a) the bridge-client in-call retry, (b) the worker's per-server backoff replay, and (c) the 30 s UI debounce. Treat it as a real condition, not a one-off blip.
 
@@ -33,9 +33,9 @@ ls -ld /var/lib/squad-panel/configs/<server_id>/ServerConfig/
 sudo -u squad bash scripts/verify-bridge.sh   # full RPC smoke test
 ```
 
-**Fixes**: re-run `sudo systemctl restart panel-host-bridge`, or finish the server install. Then click "Повторить синхронизацию" in the UI banner — the worker will re-read.
+**Fixes**: re-run `sudo systemctl restart panel-host-bridge`, or finish the server install. Then click "Повторить синхронизацию" (Retry synchronization) in the UI banner — the worker will re-read.
 
-### Drift banner says "Admins.cfg на этом сервере изменён вне панели"
+### Drift banner says "Admins.cfg на этом сервере изменён вне панели" (Admins.cfg on this server was changed outside the panel)
 
 **Symptom**: Last segment hash in the file ≠ last DB hash.
 
@@ -64,9 +64,9 @@ redis-cli xinfo groups events:admins-cfg-sync:<server_id>
 redis-cli xpending events:admins-cfg-sync:<server_id> config-sync
 ```
 
-**Fix**: устраните ошибку bridge, PostgreSQL или Redis; worker заберёт pending
-запись через reclaim. Повреждённое сообщение worker журналирует, затем атомарно
-выполняет `XACK` и точный `XDEL`, поэтому оно не остаётся вечным хвостом stream.
+**Fix**: fix the bridge, PostgreSQL or Redis error; the worker will pick up the pending
+entry via reclaim. A corrupted message is logged by the worker, then it atomically
+performs `XACK` and an exact `XDEL`, so it does not stay as a permanent stream tail.
 
 ### Squad doesn't pick up new admins
 

@@ -20,7 +20,7 @@ All tests live in `packages/shared-config/test/` and run under vitest.
 |---|---|
 | `log-stream.test.ts` | `encodeLogEntry`/`decodeLogEntry` round-trip with all fields; field omission when `serverId`/`ctx` absent; unknown source-code throws; stable source/level code mapping |
 | `log-stream-sink.test.ts` | pino → XADD fields encoding; `src` field routing to per-record source; `serverId` passthrough; Redis error swallowing; minimum-level filter; pino-http meta key stripping; per-instance error latch |
-| `graceful-shutdown.test.ts` | Ранний `SIGTERM` сохраняется до готовности; повторные сигналы выполняют очистку один раз; ошибка очистки возвращает код `1` |
+| `graceful-shutdown.test.ts` | An early `SIGTERM` is kept until ready; repeated signals run cleanup once; a cleanup error returns exit code `1` |
 | `metrics-pack.test.ts` | Pack to 8-integer tuple; round-trip within ±0.01 tolerance; stable stream constants; negative clamping |
 | `permissions.test.ts` | Key uniqueness; every category in `PERMISSION_CATEGORIES`; `dangerous`/`unimplemented` are `true` or absent (never `false`); non-empty labels; `PERMISSION_KEYS` derivation; `isPermissionKey` type guard |
 | `rcon-host.test.ts` | Explicit creds win; fallback to `RCON_HOST_DEFAULT`; fallback to `127.0.0.1`; empty-string treated as null |

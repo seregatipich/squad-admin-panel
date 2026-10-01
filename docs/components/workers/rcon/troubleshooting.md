@@ -22,7 +22,7 @@ docker compose logs worker-rcon --since 5m | grep 'rcon auth'
 
 ## `rcon:status:{id}` is absent but the server is running
 
-**Symptom:** API returns `{ state: "not_polled" }`, panel shows "— (сервер не запущен)".
+**Symptom:** API returns `{ state: "not_polled" }`, panel shows "— (сервер не запущен)" ("— (server is not running)").
 
 **Possible causes:**
 

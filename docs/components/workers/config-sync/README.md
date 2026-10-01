@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Worker строит управляемый сегмент `Admins.cfg` из БД и пишет его через bridge.
-Для каждой новой outbox-записи он устойчиво сохраняет результат по серверу:
-живой сервер требует точного подтверждения `AdminReloadServerConfig`, неживому
-достаточно готового файла. Старые сообщения без `_outbox_id` остаются
-совместимыми с прежним best-effort поведением.
+The worker builds the managed `Admins.cfg` segment from the DB and writes it through the bridge.
+For every new outbox entry it durably stores a per-server result:
+a live server requires an exact `AdminReloadServerConfig` confirmation, while for a non-live one
+a ready file is enough. Old messages without `_outbox_id` remain
+compatible with the previous best-effort behavior.
 
 ## What it does NOT do
 
@@ -41,7 +41,7 @@ apps/workers/config-sync/
 - `@squad/db` + `drizzle-orm` — reads roles / role_squad_permissions / players.
 - `ioredis` — XREADGROUP consumer for `events:admins-cfg-sync:<server_id>` streams + status publishing + RCON reload enqueue.
 - `@squad/shared-config` — shared heartbeat / log-stream sink.
-- `@squad/shared-types` — схемы запроса и результата `AdminReloadServerConfig`.
+- `@squad/shared-types` — request and result schemas of `AdminReloadServerConfig`.
 - `uuid` — v7 `request_id` for the enqueued RCON command (byte-parity with sibling workers).
 
 ## Components that depend on it

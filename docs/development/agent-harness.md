@@ -193,14 +193,14 @@ The `go` job runs natively: the hosted image ships a C compiler, so `go test -ra
 needs no container, and `actions/setup-go` caches modules keyed by
 `apps/bridge/go.sum`.
 
-Для снижения локальной нагрузки перед `git push` можно задать
-`VITEST_MAX_FORKS=2`. Переменная включена в `globalPassThroughEnv` Turbo: она
-доходит до Vitest, но не меняет ключи кэша, поскольку влияет только на число
-одновременных процессов. Stryker также ограничен двумя процессами в своём
-конфигурационном файле, поэтому мутационная проверка не занимает все ядра
-рабочей машины. Предварительный шлюз одновременно запускает не больше двух
-затронутых пакетных тестов; для осознанной локальной настройки служит
-`PREPUSH_TURBO_CONCURRENCY`, значение по умолчанию — `2`.
+To reduce the local load before `git push`, you can set
+`VITEST_MAX_FORKS=2`. The variable is in Turbo's `globalPassThroughEnv`: it
+reaches Vitest but does not change the cache keys, since it only affects the number of
+concurrent processes. Stryker is also limited to two processes in its
+configuration file, so mutation testing does not take up all the cores
+of the workstation. The pre-push gate runs at most two
+affected-package test suites at a time; for deliberate local tuning use
+`PREPUSH_TURBO_CONCURRENCY`, whose default value is `2`.
 
 ## Deploy troubleshooting
 

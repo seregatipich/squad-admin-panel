@@ -41,7 +41,7 @@ The global `onRequest` hook (`apps/api/src/plugins/auth.ts`) gates every route o
 
 ### Context
 
-WL-2 ([#66](https://github.com/breaking-squad/squad-admin-panel/issues/66)) asked to first *decide* whether the panel still needs a per-server "whitelist-group template" — a construct that would let an operator define a whitelist group once and push it to every server in a single action. The task flagged the item as a probable duplicate (spec §2.1, "роли и так глобальны") and gave a two-branch acceptance: (a) record the decision; only (b) build the template if it is kept. This entry records branch (a).
+WL-2 ([#66](https://github.com/breaking-squad/squad-admin-panel/issues/66)) asked to first *decide* whether the panel still needs a per-server "whitelist-group template" — a construct that would let an operator define a whitelist group once and push it to every server in a single action. The task flagged the item as a probable duplicate (spec §2.1, "roles are global anyway") and gave a two-branch acceptance: (a) record the decision; only (b) build the template if it is kept. This entry records branch (a).
 
 ### Decision
 
@@ -133,11 +133,11 @@ This issue (`ROT-1`) ships the `layers` catalog and `GET /api/v1/layers` against
 
 ### Context
 
-The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
+The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Epic 2 Phase 2 spec called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
 
 ### Decision
 
-1. **Roles carry both axes.** Add three boolean access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) to `roles`. Add a separate M2M `role_squad_permissions(role_id, squad_permission_key)` for the 21 in-game keys. Hex colors for spec roles; back-compat with palette names for existing rows. Single Owner system role hardcoded to all flags + all 21 squad perms. `Никаких отдельных panel-permissions, никаких clearance levels` per the spec — panel permissions are derived from the flags by `loadUserPermissions`. Legacy rows in `role_permissions` remain honoured (unioned with the derived set) so existing tests and fine-grained overrides keep working. *Superseded in part by #36:* explicit rows now pass the same flag gates as the derived set, the stored legacy rows were deleted by migration 0121, and a fourth-axis flag `can_manage_infrastructure` (0120) gates the host/server-lifecycle/config keys that `panel_access` used to grant.
+1. **Roles carry both axes.** Add three boolean access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) to `roles`. Add a separate M2M `role_squad_permissions(role_id, squad_permission_key)` for the 21 in-game keys. Hex colors for spec roles; back-compat with palette names for existing rows. Single Owner system role hardcoded to all flags + all 21 squad perms. `No separate panel-permissions, no clearance levels` per the spec — panel permissions are derived from the flags by `loadUserPermissions`. Legacy rows in `role_permissions` remain honoured (unioned with the derived set) so existing tests and fine-grained overrides keep working. *Superseded in part by #36:* explicit rows now pass the same flag gates as the derived set, the stored legacy rows were deleted by migration 0121, and a fourth-axis flag `can_manage_infrastructure` (0120) gates the host/server-lifecycle/config keys that `panel_access` used to grant.
 
 2. **Login gate flips to `panel_access`.** The Steam OpenID callback used to redirect to `/no-access` when `permissions.size === 0`; it now redirects when `panelAccess === false`. A role like `QueuePriority` (only `reserve`, no panel access) can be assigned to a player and lands them in `Admins.cfg` without granting them panel login.
 
@@ -153,7 +153,7 @@ The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parall
 
 - **Single role concept** — operators thought of "Admin" as one entity; splitting it into "panel role" and "in-game role" was the friction the spec set out to remove.
 - **Async sync via Redis Streams** — keeps the API mutation path fast and decouples the file write from the request lifecycle. Stream's at-least-once delivery + sha256 idempotency means a redelivered message never corrupts the file.
-- **Markers + drift sweep** — co-exists with sqstat / manual ops without us writing a parser for `Admins.cfg`. Passive sweeps surface manual edits instead of erasing them; Force-sync from UI is the escape hatch when the spec's "оператор паникует и правит руками" scenario occurs.
+- **Markers + drift sweep** — co-exists with sqstat / manual ops without us writing a parser for `Admins.cfg`. Passive sweeps surface manual edits instead of erasing them; Force-sync from UI is the escape hatch when the spec's "the operator panics and edits by hand" scenario occurs.
 - **Derived panel permissions** — keeps every existing route's `permissions: ['server:install']` guard valid. Nothing in the route layer had to change.
 
 ### Consequences
@@ -240,7 +240,7 @@ The panel had an RBAC schema that was never fully enforced: `player_role_assignm
 ### Rationale
 
 - **Single role over M:N**: The spec was written from the invariant "one role per user". A M:N table simulating 1:1 is tech debt from day one; pre-launch is the cheapest time to remove it.
-- **Registry-objects over flat strings**: One source of truth; types are inferred; no migration needed for new keys; the role editor UI can display categories, danger warnings, and "в разработке" without any server-side logic.
+- **Registry-objects over flat strings**: One source of truth; types are inferred; no migration needed for new keys; the role editor UI can display categories, danger warnings, and "in development" without any server-side logic.
 - **Drop multi-tenancy**: Never used, never enforced, never planned for the foreseeable future. Removing it eliminates ~4 tables, one audit column, and a whole class of join complexity from every RBAC query.
 - **SQL seeder over application seeder**: Idempotent by construction (migration runs exactly once). No boot-time race conditions. Roles are guaranteed present before the API starts.
 - **Advisory lock for first-Owner**: Handles the race condition where two simultaneous first logins both see `first_owner_claimed = false`. The lock is advisory (no deadlock risk) and scoped to the transaction.
@@ -369,7 +369,7 @@ Email/password + TOTP login was scoped for Phase 0 but never shipped to users. S
 
 - Steam OpenID 2.0 is the only login method. `/api/v1/auth/login` and TOTP endpoints are removed.
 - Identity anchor moves from `users.id uuid` to `players.steam_id64 bigint`. The `users` table is dropped.
-- "Pending users" UI is replaced by "players without panel role" — assignment lives in `/players/<steam_id64>` profile under "Доступ к панели".
+- "Pending users" UI is replaced by "players without panel role" — assignment lives in `/players/<steam_id64>` profile under "Доступ к панели" (Panel access).
 - First Steam-login after fresh install becomes Owner exactly once via dual anchor:
   - `organizations.settings.first_owner_claimed: true`.
   - Bridge-managed sentinel file `/var/lib/squad-panel/.first-owner-claimed`.
@@ -391,7 +391,7 @@ The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel
 
 ### Alternatives considered
 
-- **Soft-cut behind a feature flag** — kept email/password as a backdoor. Rejected: doubled the auth attack surface and the spec explicitly required "единственный способ входа".
+- **Soft-cut behind a feature flag** — kept email/password as a backdoor. Rejected: doubled the auth attack surface and the spec explicitly required "the only way to sign in".
 - **Discord OAuth as alternative** — rejected for Phase 1; Discord remains a linked identity for notifications/bot scope (P1+).
 - **Steam OAuth instead of OpenID 2.0** — Steam has no OAuth endpoint. OpenID 2.0 is the only public auth surface Steam offers.
 
