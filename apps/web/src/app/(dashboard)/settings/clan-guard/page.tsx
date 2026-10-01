@@ -17,6 +17,7 @@ import {
   Switch,
   TextInput,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 import { type ClanGuardSettings, formatUpdatedAt, validateGracePeriod } from './helpers';
 
 interface Me {
@@ -38,22 +39,22 @@ export default function ClanGuardSettingsPage() {
   const refresh = useCallback(async () => {
     try {
       const [settingsRes, meRes] = await Promise.all([
-        fetch('/api/v1/settings/clan-guard', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<ClanGuardSettings>('/api/v1/settings/clan-guard'),
+        apiResult<Me>('/api/v1/me'),
       ]);
       let loadErr: string | null = null;
       if (settingsRes.ok) {
-        const loaded = (await settingsRes.json()) as ClanGuardSettings;
+        const loaded = settingsRes.data;
         setSettings(loaded);
         setEnabled(loaded.enabled);
         setGracePeriodInput(String(loaded.grace_period_seconds));
       } else {
-        loadErr = `Не удалось загрузить настройки: ${settingsRes.status}`;
+        loadErr = `Не удалось загрузить настройки: ${settingsRes.error.status}`;
       }
       if (meRes.ok) {
-        setMe((await meRes.json()) as Me);
+        setMe(meRes.data);
       } else {
-        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.status}`;
+        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.error.status}`;
       }
       setGlobalErr(loadErr);
     } catch {
@@ -79,18 +80,15 @@ export default function ClanGuardSettingsPage() {
     setGlobalErr(null);
     setSaving(true);
     try {
-      const res = await fetch('/api/v1/settings/clan-guard', {
+      const res = await apiResult<ClanGuardSettings>('/api/v1/settings/clan-guard', {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled, grace_period_seconds: validation.value }),
+        json: { enabled, grace_period_seconds: validation.value },
       });
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setGlobalErr(`Ошибка сохранения: ${err.error ?? res.status}`);
+        setGlobalErr(`Ошибка сохранения: ${res.error.codeOrStatus()}`);
         return;
       }
-      const fresh = (await res.json()) as ClanGuardSettings;
+      const fresh = res.data;
       setSettings(fresh);
       setEnabled(fresh.enabled);
       setGracePeriodInput(String(fresh.grace_period_seconds));

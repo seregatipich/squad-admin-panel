@@ -13,6 +13,7 @@ import {
   Skeleton,
   Switch,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 
 type PublishScope = 'all_active' | 'permanent_only';
 
@@ -66,21 +67,19 @@ export function PublicationSection() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/settings/banlist-publication', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
+      const res = await apiResult<PublicationSettings>('/api/v1/settings/banlist-publication');
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as PublicationSettings;
-      setSettings(body);
-      setEnabled(body.enabled);
-      setScope(body.publish_scope);
+      setSettings(res.data);
+      setEnabled(res.data.enabled);
+      setScope(res.data.publish_scope);
     } catch (err) {
-      setError(`Не удалось загрузить настройки публикации: ${(err as Error).message}`);
+      setError(`Не удалось загрузить настройки публикации: ${describeHttpError(err)}`);
     } finally {
       setLoading(false);
     }
@@ -95,21 +94,19 @@ export function PublicationSection() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch('/api/v1/settings/banlist-publication', {
+      const res = await apiResult<PublicationSettings>('/api/v1/settings/banlist-publication', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled, publish_scope: scope }),
+        json: { enabled, publish_scope: scope },
       });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
-      }
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.message ?? body.error ?? res.status));
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        const body = res.error.jsonBody<Record<string, unknown>>() ?? {};
+        throw new Error(String(body.message ?? body.error ?? res.error.status));
       }
-      const fresh = (await res.json()) as PublicationSettings;
+      const fresh = res.data;
       setSettings(fresh);
       setEnabled(fresh.enabled);
       setScope(fresh.publish_scope);
