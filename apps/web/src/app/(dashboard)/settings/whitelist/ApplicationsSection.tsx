@@ -16,6 +16,7 @@ import {
   Select,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiResult } from '@/lib/api';
 import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 
 interface ApplicationSettings {
@@ -141,12 +142,9 @@ export function ApplicationsSection({
         page: String(requestedPage),
         page_size: String(PAGE_SIZE),
       });
-      const res = await fetch(`/api/v1/whitelist/applications?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { items: ApplicationItem[]; total: number };
+      const body = await apiFetch<{ items: ApplicationItem[]; total: number }>(
+        `/api/v1/whitelist/applications?${params.toString()}`,
+      );
       if (generation === listGeneration.current) {
         setItems(body.items);
         setTotal(body.total);
@@ -160,19 +158,14 @@ export function ApplicationsSection({
 
   const loadSettings = useCallback(async () => {
     try {
-      const [settingsRes, rolesRes] = await Promise.all([
-        fetch('/api/v1/whitelist/applications/settings', {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+      const [loaded, rolesRes] = await Promise.all([
+        apiFetch<ApplicationSettings>('/api/v1/whitelist/applications/settings'),
+        apiResult<RoleOption[]>('/api/v1/roles'),
       ]);
-      if (!settingsRes.ok) throw new Error(`HTTP ${settingsRes.status}`);
-      const loaded = (await settingsRes.json()) as ApplicationSettings;
       setSettings(loaded);
       setEnabled(loaded.enabled);
       setDefaultDays(loaded.default_days == null ? '' : String(loaded.default_days));
-      if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
+      if (rolesRes.ok) setRoleOptions(rolesRes.data);
     } catch (e) {
       setError(`Не удалось загрузить заявки: ${describeLoadError(e)}`);
     }
@@ -205,18 +198,15 @@ export function ApplicationsSection({
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch('/api/v1/whitelist/applications/settings', {
+      const res = await apiResult<ApplicationSettings>('/api/v1/whitelist/applications/settings', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled, default_days: parsedDays }),
+        json: { enabled, default_days: parsedDays },
       });
       if (!res.ok) {
-        setError(`Ошибка сохранения: ${describeHttpStatus(res.status)}`);
+        setError(`Ошибка сохранения: ${describeHttpStatus(res.error.status)}`);
         return;
       }
-      const fresh = (await res.json()) as ApplicationSettings;
-      setSettings(fresh);
+      setSettings(res.data);
       setNotice('Настройки портала сохранены.');
     } catch {
       setError(`Ошибка сети: ${describeLoadError(null)}`);
@@ -253,15 +243,15 @@ export function ApplicationsSection({
       const note = notePick[id]?.trim();
       if (note) payload.review_note = note;
 
-      const res = await fetch(`/api/v1/whitelist/applications/${id}`, {
+      const res = await apiResult<unknown>(`/api/v1/whitelist/applications/${id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
+        discardBody: true,
       });
       if (!res.ok) {
-        const e = (await res.json().catch(() => ({}))) as { error?: string };
-        const reason = (e.error && DECISION_ERROR_TEXT[e.error]) || describeHttpStatus(res.status);
+        const e = res.error.jsonBody<{ error?: string }>();
+        const reason =
+          (e?.error && DECISION_ERROR_TEXT[e.error]) || describeHttpStatus(res.error.status);
         setError(`Не удалось обработать заявку: ${reason}`);
         return;
       }

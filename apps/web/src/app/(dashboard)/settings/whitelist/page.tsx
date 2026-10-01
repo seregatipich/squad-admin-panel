@@ -23,6 +23,7 @@ import {
   Textarea,
   Th,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { ApplicationsSection } from './ApplicationsSection';
 
@@ -109,22 +110,22 @@ export default function WhitelistSettingsPage() {
   const refresh = useCallback(async () => {
     try {
       const [settingsRes, rolesRes, meRes] = await Promise.all([
-        fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<WhitelistSettings>('/api/v1/whitelist/settings'),
+        apiResult<RoleOption[]>('/api/v1/roles'),
+        apiResult<Me>('/api/v1/me'),
       ]);
       if (settingsRes.ok) {
-        const loaded = (await settingsRes.json()) as WhitelistSettings;
+        const loaded = settingsRes.data;
         setSettings(loaded);
         setPicked(loaded.whitelist_role_id ?? '');
         setErr(null);
       } else {
-        setErr(`Не удалось загрузить настройки: ${describeHttpStatus(settingsRes.status)}`);
+        setErr(`Не удалось загрузить настройки: ${describeHttpStatus(settingsRes.error.status)}`);
       }
       if (rolesRes.ok) {
-        setRoleOptions((await rolesRes.json()) as RoleOption[]);
+        setRoleOptions(rolesRes.data);
         setRolesForbidden(false);
-      } else if (rolesRes.status === 403) {
+      } else if (rolesRes.error.status === 403) {
         // whitelist:edit and role:view are independent permissions
         // (packages/shared-config/src/permissions.ts) — this is not a
         // failure, just an empty role picker, so it must not clobber a
@@ -132,12 +133,12 @@ export default function WhitelistSettingsPage() {
         setRoleOptions([]);
         setRolesForbidden(true);
       } else {
-        setErr(`Не удалось загрузить настройки: ${rolesRes.status}`);
+        setErr(`Не удалось загрузить настройки: ${rolesRes.error.status}`);
       }
       if (meRes.ok) {
-        setMe((await meRes.json()) as Me);
+        setMe(meRes.data);
       } else {
-        setErr(`Не удалось загрузить настройки: ${meRes.status}`);
+        setErr(`Не удалось загрузить настройки: ${meRes.error.status}`);
       }
     } catch (e) {
       setErr(`Ошибка сети: ${(e as Error).message}`);
@@ -161,20 +162,17 @@ export default function WhitelistSettingsPage() {
     setErr(null);
     setNotice(null);
     try {
-      const res = await fetch('/api/v1/whitelist/settings', {
+      const res = await apiResult<WhitelistSettings>('/api/v1/whitelist/settings', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ whitelist_role_id: picked || null }),
+        json: { whitelist_role_id: picked || null },
       });
       if (!res.ok) {
         setErr(
-          `Ошибка сохранения: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
+          `Ошибка сохранения: ${describeWhitelistError(res.error.jsonBody(), res.error.status)}`,
         );
         return;
       }
-      const fresh = (await res.json()) as WhitelistSettings;
-      setSettings(fresh);
+      setSettings(res.data);
       setNotice('Роль для whitelist сохранена.');
     } catch {
       setErr(`Ошибка сети: ${describeLoadError(null)}`);
@@ -189,19 +187,15 @@ export default function WhitelistSettingsPage() {
     setErr(null);
     setImportResult(null);
     try {
-      const res = await fetch('/api/v1/whitelist/import', {
+      const res = await apiResult<ImportResult>('/api/v1/whitelist/import', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ csv }),
+        json: { csv },
       });
       if (!res.ok) {
-        setErr(
-          `Ошибка импорта: ${describeWhitelistError(await res.json().catch(() => null), res.status)}`,
-        );
+        setErr(`Ошибка импорта: ${describeWhitelistError(res.error.jsonBody(), res.error.status)}`);
         return;
       }
-      setImportResult((await res.json()) as ImportResult);
+      setImportResult(res.data);
     } catch {
       setErr(`Ошибка сети: ${describeLoadError(null)}`);
     } finally {
