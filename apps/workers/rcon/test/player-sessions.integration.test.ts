@@ -26,6 +26,11 @@ function makePlayer(overrides: Partial<RconPlayer> = {}): RconPlayer {
   };
 }
 
+// player_sessions is range-partitioned monthly around the migration date (previous
+// month through three months ahead), so fixture instants must fall in the current
+// month: a hard-coded date stops having a partition once the calendar moves on.
+const MONTH = new Date().toISOString().slice(0, 7);
+
 let sql: ReturnType<typeof postgres>;
 let db: DatabaseClient;
 let serverId: string;
@@ -80,7 +85,7 @@ describeIfDb('reconcilePlayerSessions', () => {
     const b = makePlayer();
     await upsertPlayers(db, [a, b]);
 
-    const poll1 = new Date('2026-03-01T00:00:00.000Z');
+    const poll1 = new Date(`${MONTH}-01T00:00:00.000Z`);
     const first = await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [a, b],
@@ -88,7 +93,7 @@ describeIfDb('reconcilePlayerSessions', () => {
     });
     expect(first).toEqual({ opened: 2, closed: 0 });
 
-    const poll2 = new Date('2026-03-01T00:00:30.000Z');
+    const poll2 = new Date(`${MONTH}-01T00:00:30.000Z`);
     const second = await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [a, b],
@@ -107,14 +112,14 @@ describeIfDb('reconcilePlayerSessions', () => {
     const leaves = makePlayer();
     await upsertPlayers(db, [stays, leaves]);
 
-    const poll1 = new Date('2026-03-02T00:00:00.000Z');
+    const poll1 = new Date(`${MONTH}-02T00:00:00.000Z`);
     await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [stays, leaves],
       pollAt: poll1,
     });
 
-    const poll2 = new Date('2026-03-02T00:10:00.000Z');
+    const poll2 = new Date(`${MONTH}-02T00:10:00.000Z`);
     const result = await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [stays],
@@ -137,7 +142,7 @@ describeIfDb('reconcilePlayerSessions', () => {
     await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [solo],
-      pollAt: new Date('2026-03-03T00:00:00.000Z'),
+      pollAt: new Date(`${MONTH}-03T00:00:00.000Z`),
     });
     const before = await openSessionCount();
     expect(before).toBeGreaterThan(0);
@@ -145,7 +150,7 @@ describeIfDb('reconcilePlayerSessions', () => {
     const result = await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [],
-      pollAt: new Date('2026-03-03T00:05:00.000Z'),
+      pollAt: new Date(`${MONTH}-03T00:05:00.000Z`),
     });
     expect(result.closed).toBe(before);
     expect(await openSessionCount()).toBe(0);
@@ -157,7 +162,7 @@ describeIfDb('reconcilePlayerSessions', () => {
     await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [seeder],
-      pollAt: new Date('2026-03-04T00:00:00.000Z'),
+      pollAt: new Date(`${MONTH}-04T00:00:00.000Z`),
       mode: 'seed',
     });
     const [row] = await sessionsFor(await playerIdByEos(seeder.eos_id));
@@ -169,11 +174,11 @@ describeIfDb('reconcilePlayerSessions', () => {
     const stale = makePlayer();
     await upsertPlayers(db, [recent, stale]);
 
-    const pollAt = new Date('2026-03-05T00:01:00.000Z');
+    const pollAt = new Date(`${MONTH}-05T00:01:00.000Z`);
     const firstSeenByEosId = new Map([
-      [recent.eos_id, '2026-03-05T00:00:50.000Z'],
+      [recent.eos_id, `${MONTH}-05T00:00:50.000Z`],
       // Older than 2 × 30s: an RCON reconnect must not credit the offline gap.
-      [stale.eos_id, '2026-03-04T00:00:00.000Z'],
+      [stale.eos_id, `${MONTH}-04T00:00:00.000Z`],
     ]);
     await reconcilePlayerSessions(db, {
       serverId,
@@ -184,9 +189,9 @@ describeIfDb('reconcilePlayerSessions', () => {
     });
 
     const [recentRow] = await sessionsFor(await playerIdByEos(recent.eos_id));
-    expect(recentRow?.connectedAt?.toISOString()).toBe('2026-03-05T00:00:50.000Z');
+    expect(recentRow?.connectedAt?.toISOString()).toBe(`${MONTH}-05T00:00:50.000Z`);
     const [staleRow] = await sessionsFor(await playerIdByEos(stale.eos_id));
-    expect(staleRow?.connectedAt?.toISOString()).toBe('2026-03-05T00:00:00.000Z');
+    expect(staleRow?.connectedAt?.toISOString()).toBe(`${MONTH}-05T00:00:00.000Z`);
   });
 });
 
@@ -198,10 +203,10 @@ describeIfDb('closeServerSessions', () => {
     await reconcilePlayerSessions(db, {
       serverId,
       onlinePlayers: [one, two],
-      pollAt: new Date('2026-03-06T00:00:00.000Z'),
+      pollAt: new Date(`${MONTH}-06T00:00:00.000Z`),
     });
 
-    const closedAt = new Date('2026-03-06T00:02:00.000Z');
+    const closedAt = new Date(`${MONTH}-06T00:02:00.000Z`);
     const closed = await closeServerSessions(db, serverId, closedAt, 'server_crashed');
     expect(closed).toBeGreaterThanOrEqual(2);
     expect(await openSessionCount()).toBe(0);
