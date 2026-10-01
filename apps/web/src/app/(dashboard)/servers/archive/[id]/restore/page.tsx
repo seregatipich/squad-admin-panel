@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { use, useEffect, useRef, useState } from 'react';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
 import {
   Button,
@@ -14,6 +14,8 @@ import {
   Skeleton,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface ArchiveDetail {
   server: {
@@ -88,7 +90,17 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
   const [lines, setLines] = useState<InstallProgressLine[]>([]);
   const [restoreSummary, setRestoreSummary] = useState<RestoreConfigsResponse | null>(null);
   const [retryStep, setRetryStep] = useState<RetryStep | null>(null);
-  const [missingPermissions, setMissingPermissions] = useState<string[]>([]);
+  // Pre-check of the rights the wizard needs, so it is not started only to
+  // fail halfway (config:edit is a separate right from server:install). A
+  // failed /me read does not block the form: the API enforces rights anyway.
+  const { data: me } = useApiResource<{ permissions: string[] }>('/api/v1/me');
+  const missingPermissions = useMemo(
+    () =>
+      me && Array.isArray(me.permissions)
+        ? REQUIRED_PERMISSIONS.filter((key) => !me.permissions.includes(key))
+        : [],
+    [me],
+  );
   const wsRef = useRef<WebSocket | null>(null);
 
   // Closes a still-open install-progress socket on unmount (route change,
@@ -103,18 +115,13 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     let cancelled = false;
     async function load() {
       try {
-        const r = await fetch(`/api/v1/servers/archive/${id}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as ArchiveDetail;
+        const j = await apiFetch<ArchiveDetail>(`/api/v1/servers/archive/${id}`);
         if (cancelled) return;
         setArchive(j);
         setSlug(`${j.server.slug}-restored`.slice(0, MAX_SLUG_LENGTH));
         setDisplayName(`${j.server.display_name} (restored)`);
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setError(describeHttpError(e));
       }
     }
     void load();
@@ -123,29 +130,12 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     };
   }, [id]);
 
-  // Pre-check of the rights the wizard needs, so it is not started only to
-  // fail halfway (config:edit is a separate right from server:install). A
-  // failed /me read does not block the form: the API enforces rights anyway.
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? (r.json() as Promise<{ permissions: string[] }>) : null))
-      .then((me) => {
-        if (cancelled || !me) return;
-        setMissingPermissions(REQUIRED_PERMISSIONS.filter((key) => !me.permissions.includes(key)));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
       await restoreFromArchive();
     } catch (err) {
-      setError(`Сбой сети или ответа API: ${(err as Error).message}`);
+      setError(`Сбой сети или ответа API: ${describeHttpError(err)}`);
       setStage('error');
     }
   }
@@ -154,14 +144,12 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     setError(null);
     setStage('creating');
 
-    const restoreRes = await fetch(`/api/v1/servers/archive/${id}/restore`, {
+    const restoreRes = await apiResult<RestoreResponse>(`/api/v1/servers/archive/${id}/restore`, {
       method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ slug, display_name: displayName }),
+      json: { slug, display_name: displayName },
     });
-    if (restoreRes.status === 409) {
-      const body = (await restoreRes.json().catch(() => ({}))) as { error?: string };
+    if (!restoreRes.ok && restoreRes.error.status === 409) {
+      const body = restoreRes.error.jsonBody<{ error?: string }>() ?? {};
       setError(
         body.error === 'slug_in_use'
           ? 'Этот идентификатор уже занят активным сервером'
@@ -174,33 +162,31 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
       setStage('form');
       return;
     }
-    if (restoreRes.status === 400) {
+    if (!restoreRes.ok && restoreRes.error.status === 400) {
       setError('Сервер не создан: проверьте идентификатор и отображаемое имя');
       setStage('form');
       return;
     }
     if (!restoreRes.ok) {
-      setError(`Не удалось создать сервер из архива (HTTP ${restoreRes.status})`);
+      setError(`Не удалось создать сервер из архива (HTTP ${restoreRes.error.status})`);
       setStage('error');
       return;
     }
-    const restoreBody = (await restoreRes.json()) as RestoreResponse;
-    setNewServerId(restoreBody.id);
-    await installServer(restoreBody.id);
+    setNewServerId(restoreRes.data.id);
+    await installServer(restoreRes.data.id);
   }
 
   async function installServer(serverId: string) {
     setError(null);
     setRetryStep('install');
     setStage('installing');
-    const installRes = await fetch(`/api/v1/servers/${serverId}/install`, {
+    const installRes = await apiResult<unknown>(`/api/v1/servers/${serverId}/install`, {
       method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
+      json: {},
+      discardBody: true,
     });
     if (!installRes.ok) {
-      setError(`Не удалось запустить установку (HTTP ${installRes.status})`);
+      setError(`Не удалось запустить установку (HTTP ${installRes.error.status})`);
       setStage('error');
       return;
     }
@@ -262,22 +248,19 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     setRetryStep('restore-configs');
     setStage('restoring-configs');
     try {
-      const r = await fetch(`/api/v1/servers/${targetId}/restore-configs`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ from_archive_id: id }),
-      });
+      const r = await apiResult<RestoreConfigsResponse>(
+        `/api/v1/servers/${targetId}/restore-configs`,
+        { method: 'POST', json: { from_archive_id: id } },
+      );
       if (!r.ok) {
-        setError(`Не удалось наложить бэкап конфигов (HTTP ${r.status})`);
+        setError(`Не удалось наложить бэкап конфигов (HTTP ${r.error.status})`);
         setStage('error');
         return;
       }
-      const body = (await r.json()) as RestoreConfigsResponse;
-      setRestoreSummary(body);
+      setRestoreSummary(r.data);
       setStage('configs-restored');
     } catch (err) {
-      setError(`Не удалось наложить бэкап конфигов: ${(err as Error).message}`);
+      setError(`Не удалось наложить бэкап конфигов: ${describeHttpError(err)}`);
       setStage('error');
     }
   }
@@ -290,14 +273,13 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     // /restart, not /start: install() already starts the container, and
     // overlayConfigs() has since written the archived Server.cfg/Admins.cfg
     // over it — only a restart (stop + start) picks those up (#659).
-    const r = await fetch(`/api/v1/servers/${newServerId}/restart`, {
+    const r = await apiResult<unknown>(`/api/v1/servers/${newServerId}/restart`, {
       method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
+      json: {},
+      discardBody: true,
     });
     if (!r.ok) {
-      setError(`Не удалось перезапустить сервер (HTTP ${r.status})`);
+      setError(`Не удалось перезапустить сервер (HTTP ${r.error.status})`);
       setStage('error');
       return;
     }

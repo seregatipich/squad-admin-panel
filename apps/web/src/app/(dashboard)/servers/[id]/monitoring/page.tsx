@@ -1,9 +1,11 @@
 'use client';
 
-import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { use, useState } from 'react';
 import { MetricsChart } from '@/components/MetricsChart';
 import { Button, InlineBanner, PageContainer, SegmentedControl, Skeleton } from '@/components/ui';
+import { apiFetch } from '@/lib/api';
 import { CHART_SERIES } from '@/lib/chart-tokens';
+import { usePolledResource } from '@/lib/use-polled-resource';
 
 interface MetricsPoint {
   timestamp: string;
@@ -30,47 +32,29 @@ const RANGE_ITEMS = [
 ];
 
 const POLL_MS = 30_000;
+const METRICS_TIMEOUT_MS = 30_000;
+const NO_POINTS: MetricsPoint[] = [];
 
 export default function MonitoringPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [points, setPoints] = useState<MetricsPoint[]>([]);
   const [range, setRange] = useState<Range>('1h');
-  const [err, setErr] = useState<string | null>(null);
-  /**
-   * Только первое обращение к серверу показывает заглушки: опрос раз в 30
-   * секунд иначе схлопывал бы готовые графики в мерцающие прямоугольники.
-   */
-  const [firstLoad, setFirstLoad] = useState(true);
-
-  /** Номер последнего запроса: ответ прежнего периода не должен затирать новый. */
-  const latestRequest = useRef(0);
-
-  const load = useCallback(async () => {
-    const request = ++latestRequest.current;
-    try {
+  // Опрос раз в 30 секунд не схлопывает готовые графики в заглушки: хук
+  // оставляет прежние данные, пока идёт повторный запрос, а заглушки видны
+  // только до первого ответа по этому серверу и периоду.
+  const metrics = usePolledResource<{ points: MetricsPoint[] }>(
+    `${id}:${range}`,
+    (signal) => {
       const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
-      const r = await fetch(`/api/v1/servers/${id}/metrics?since=${encodeURIComponent(since)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = (await r.json()) as { points: MetricsPoint[] };
-      if (request !== latestRequest.current) return;
-      setPoints(data.points);
-      setErr(null);
-    } catch (e) {
-      if (request !== latestRequest.current) return;
-      setErr((e as Error).message);
-    } finally {
-      if (request === latestRequest.current) setFirstLoad(false);
-    }
-  }, [id, range]);
-
-  useEffect(() => {
-    void load();
-    const timer = setInterval(load, POLL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+      return apiFetch<{ points: MetricsPoint[] }>(
+        `/api/v1/servers/${id}/metrics?since=${encodeURIComponent(since)}`,
+        { signal, timeoutMs: METRICS_TIMEOUT_MS },
+      );
+    },
+    { intervalMs: POLL_MS },
+  );
+  const points = metrics.data?.points ?? NO_POINTS;
+  const err = metrics.errorMessage;
+  const firstLoad = metrics.loading;
 
   return (
     // Графики нарисованы в фиксированном viewBox 600×160 и растягиваются без
@@ -93,7 +77,7 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
           title="Метрики не загрузились"
           description={err}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void metrics.refresh()}>
               Повторить
             </Button>
           }

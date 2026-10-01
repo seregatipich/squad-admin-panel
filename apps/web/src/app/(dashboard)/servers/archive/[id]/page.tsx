@@ -1,5 +1,5 @@
 'use client';
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useState } from 'react';
 import {
   Badge,
   Button,
@@ -23,6 +23,8 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface ArchiveServer {
   id: string;
@@ -74,58 +76,23 @@ interface BackupContent {
 export default function ArchiveDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const locale = useIntlLocale();
   const { id } = use(params);
-  const [data, setData] = useState<ArchiveDetail | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const archive = useApiResource<ArchiveDetail>(`/api/v1/servers/archive/${id}`);
+  const data = archive.data ?? null;
+  const err = archive.errorMessage;
   const [fileErr, setFileErr] = useState<string | null>(null);
   const [openFile, setOpenFile] = useState<BackupContent | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
-
-  /**
-   * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
-   * в замыкании эффекта: тот же запрос запускает и кнопка «Повторить», у
-   * которой отменять нечего.
-   */
-  const loadArchive = useCallback(
-    async (isStale: () => boolean = () => false) => {
-      try {
-        const r = await fetch(`/api/v1/servers/archive/${id}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as ArchiveDetail;
-        if (!isStale()) {
-          setData(j);
-          setErr(null);
-        }
-      } catch (e) {
-        if (!isStale()) setErr((e as Error).message);
-      }
-    },
-    [id],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadArchive(() => cancelled);
-    return () => {
-      cancelled = true;
-    };
-  }, [loadArchive]);
 
   async function viewFile(filename: string) {
     setLoadingFile(filename);
     setFileErr(null);
     try {
-      const r = await fetch(
+      const body = await apiFetch<BackupContent>(
         `/api/v1/servers/archive/${id}/configs/${encodeURIComponent(filename)}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as BackupContent;
       setOpenFile(body);
     } catch (e) {
-      setFileErr(`Не удалось открыть файл ${filename}: ${(e as Error).message}`);
+      setFileErr(`Не удалось открыть файл ${filename}: ${describeHttpError(e)}`);
     } finally {
       setLoadingFile(null);
     }
@@ -170,7 +137,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
           action={
             <Button
               onClick={() => {
-                void loadArchive();
+                void archive.refresh();
               }}
             >
               Повторить

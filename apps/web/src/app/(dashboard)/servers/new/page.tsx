@@ -12,6 +12,7 @@ import {
   SegmentedControl,
   TextInput,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { nameToSlug, sanitizeSlug } from './_slug';
 
 interface ProgressLine {
@@ -97,7 +98,7 @@ export default function NewServerWizard() {
     try {
       await createAndInstall();
     } catch (err) {
-      setError(`Не удалось создать сервер: ${(err as Error).message}`);
+      setError(`Не удалось создать сервер: ${describeHttpError(err)}`);
       setSubmitting(false);
     }
   }
@@ -106,40 +107,37 @@ export default function NewServerWizard() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = form;
-    const res = await fetch('/api/v1/servers', {
+    const res = await apiResult<CreateResponse>('/api/v1/servers', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
+      json: payload,
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      const body = res.error.jsonBody<{ message?: string }>();
       const msg = body?.message ?? '';
       const human = msg.includes('body/slug')
         ? 'Идентификатор должен начинаться с латинской буквы или цифры (a-z, 0-9, дефис).'
         : msg.includes('body/display_name')
           ? 'Название обязательно.'
-          : msg || `HTTP ${res.status}`;
+          : msg || `HTTP ${res.error.status}`;
       setError(`Не удалось создать сервер: ${human}`);
       setSubmitting(false);
       return;
     }
-    const created = (await res.json()) as CreateResponse;
+    const created = res.data;
     setServerId(created.id);
     setStep('installing');
     setSubmitting(false);
-    const install = await fetch(`/api/v1/servers/${created.id}/install`, {
+    const install = await apiResult<unknown>(`/api/v1/servers/${created.id}/install`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({}),
+      json: {},
+      discardBody: true,
     });
     if (!install.ok) {
-      const body = (await install.json().catch(() => null)) as { error?: string } | null;
+      const body = install.error.jsonBody<{ error?: string }>();
       setError(
         body?.error === 'depot_update_in_progress'
           ? 'Сервер создан, но установка не запущена: сейчас идёт обновление файлов игры. Дождитесь его окончания.'
-          : `Не удалось запустить установку (HTTP ${install.status})`,
+          : `Не удалось запустить установку (HTTP ${install.error.status})`,
       );
       setStep('error');
       return;
@@ -192,7 +190,7 @@ export default function NewServerWizard() {
     try {
       await connectExternal();
     } catch (err) {
-      setError(`Не удалось подключить сервер: ${(err as Error).message}`);
+      setError(`Не удалось подключить сервер: ${describeHttpError(err)}`);
       setSubmitting(false);
     }
   }
@@ -201,17 +199,12 @@ export default function NewServerWizard() {
     setError(null);
     setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = external;
-    const res = await fetch('/api/v1/servers/external', {
+    const res = await apiResult<CreateResponse>('/api/v1/servers/external', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
+      json: payload,
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as {
-        message?: string;
-        error?: string;
-      } | null;
+      const body = res.error.jsonBody<{ message?: string; error?: string }>();
       const msg = body?.message ?? '';
       const human =
         body?.error === 'slug_in_use'
@@ -220,13 +213,12 @@ export default function NewServerWizard() {
             ? 'Идентификатор должен начинаться с латинской буквы или цифры (a-z, 0-9, дефис).'
             : msg.includes('body/rcon_host')
               ? 'Адрес RCON — имя хоста или IP без схемы и порта.'
-              : msg || `HTTP ${res.status}`;
+              : msg || `HTTP ${res.error.status}`;
       setError(`Не удалось подключить сервер: ${human}`);
       setSubmitting(false);
       return;
     }
-    const created = (await res.json()) as CreateResponse;
-    router.push(`/servers/${created.id}`);
+    router.push(`/servers/${res.data.id}`);
   }
 
   if (step === 'form') {
