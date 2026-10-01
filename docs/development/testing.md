@@ -30,7 +30,7 @@ Pure functions, parsers, validators, pure reducers. Vitest / `go test -race`. Fa
 
 Locations:
 
-- `apps/api/test/*.test.ts` (most of them)
+- `apps/api/test/*.test.ts` — only the pure-function files. Most of the directory is Tier 2: the API suite's global setup (`test/integration/global-setup.ts`) builds a migrated template database before any file runs, so even a file that never touches the database needs Postgres to be reachable
 - `apps/bridge/internal/**/*_test.go`
 - `packages/**/test/*.test.ts`
 - `apps/workers/**/test/*.test.ts`
@@ -121,6 +121,16 @@ TEST_REDIS_URL=<isolated-redis>/15 \
 pnpm test:scripts
 ```
 
+### Repository contract tests
+
+`scripts/infra-contracts/*.test.ts` are vitest suites that read repository files — `docker/compose.yml` and the stand compose files, the Dockerfiles, the Caddyfile, every workspace `package.json` — and assert the hardening, image-pinning, Redis-auth, bridge-permission and runtime-dependency contracts. They are not API tests and need no database, which is why they live outside `apps/api/test`: there they were collected by the API shards behind the Postgres-cloning global setup. They run as the last step of `pnpm test:scripts` (`vitest run --root scripts/infra-contracts`, with `vitest` a root dev dependency), so the CI `scripts` job runs them; `scripts/static-contracts.test.ts` fails when that step disappears from the command. Run them alone, without any service:
+
+```bash
+pnpm exec vitest run --root scripts/infra-contracts
+```
+
+A change under `docker/` is therefore checked by the `scripts` job, not by the API shards. There is no test that pins prose in `docs/`: a documentation sentence is reviewed, not asserted (the former `security-md-audit-claim` test also failed on any legitimate `pnpm audit` step in CI).
+
 ### Tier 3 — end-to-end (e2e)
 
 Drives the **live panel** over HTTPS, uses the **real host bridge** RPC surface, creates an actual Docker container, boots Squad, verifies RCON AUTH succeeds with a real `ShowServerInfo` JSON response, edits configs, gracefully stops. This is the suite the project bets correctness on. Excluded from `pnpm turbo run test`.
@@ -203,6 +213,18 @@ The worker packages add `apps/workers/_test-shared/redis-per-worker.ts`, which g
 ### Harness lifetime
 
 Build the integration harness **once per file** — `buildIntegrationApp()` in `beforeAll`, `h.cleanup()` in `afterAll` — never in `beforeEach`. Each build clones a database, registers every route and drops the database again, about half a second per call; when 80 files did it per test, that alone was 73% of the api suite's test time. Keep tests independent with unique fixtures (`testSteamId()`, generated names and ids) and, where a test asserts over a whole table, reset exactly the rows it depends on in a `beforeEach` (for example `h.db.delete(issues)` in the issue filter suite). `harness-per-file.regression.test.ts` fails the suite when a test file builds the harness in `beforeEach`.
+
+### Waiting in tests
+
+Never sleep for a fixed time (`await new Promise((r) => setTimeout(r, 200))`) to let something happen or to prove that it did not: the first is a flake on a slow runner, the second passes whether or not the code is right. Wait for the thing itself.
+
+- **Something should happen:** poll the condition with `vi.waitFor(() => expect(...))`, or await the event. A poll loop is fine; a blind sleep is not.
+- **Something should not happen over a WebSocket:** `wsRoundTrip(ws)` from `test/helpers/ws-round-trip.ts` resolves when the server answers a ping, and the server answers after every frame it had already queued for that socket, so a frame that was going to arrive has arrived. A broadcast sentinel event (`flushLiveBus` in `media-uploaded-live.test.ts`) does the same for several sockets.
+- **Something should not be written to `audit_log`:** the hook writes after the response and writes are serialised on the hash chain, so fire one more audited request and wait for its row; a missing row for the earlier request is then really missing.
+- **A request should be parked on a lock:** `waitForBlockedBackendOn(h.url, timeout, count)` in `test/helpers/row-lock.ts` polls `pg_stat_activity` for `count` backends waiting on a lock, over its own connection (the harness pool holds two, and the requests under test occupy them). `raceAgainstOpenTransaction` takes the same `minBlocked` count.
+- **A route answers 409 before it claims anything:** assert the state it would have changed (status, bridge calls) right after the reply; no background work exists to wait for.
+- **Redis TTLs and idle times** run on Redis's clock, not on fake timers: poll for the effect (`XAUTOCLAIM` returning the entry, renewals counted through a spy on `eval`).
+- **Timers in the code under test** (`setInterval` renewers): fake only those with `vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })` and `advanceTimersByTimeAsync`.
 
 ### Why it matters
 
