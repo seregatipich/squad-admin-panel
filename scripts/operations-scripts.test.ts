@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -15,11 +13,21 @@ import {
   writeFileSync,
 } from 'node:fs';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import {
+  type CommandResult,
+  copyScript,
+  executable,
+  loggingShim,
+  logLines,
+  REPOSITORY_ROOT,
+  run,
+  runAsync,
+  shimDirectory,
+  temporaryRoot,
+} from './test-helpers/ops.ts';
 
-const REPOSITORY_ROOT = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '..');
 const OPERATIONS_SCRIPTS = [
   'scripts/bootstrap.sh',
   'scripts/deploy-stand.sh',
@@ -31,119 +39,6 @@ const OPERATIONS_SCRIPTS = [
   'scripts/uninstall.sh',
   'scripts/verify-bridge.sh',
 ] as const;
-const temporaryRoots: string[] = [];
-
-interface CommandResult {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function temporaryRoot(prefix: string): string {
-  const root = mkdtempSync(path.join(tmpdir(), `${prefix} with spaces `));
-  temporaryRoots.push(root);
-  return root;
-}
-
-function copyScript(relativePath: string): { root: string; script: string } {
-  const root = temporaryRoot('squad-operations');
-  const script = path.join(root, relativePath);
-  mkdirSync(path.dirname(script), { recursive: true });
-  copyFileSync(path.join(REPOSITORY_ROOT, relativePath), script);
-  chmodSync(script, 0o755);
-  return { root, script };
-}
-
-function executable(file: string, body: string): void {
-  writeFileSync(file, `#!/usr/bin/env bash\nset -u\n${body}\n`, { mode: 0o755 });
-}
-
-function shimDirectory(): string {
-  const directory = path.join(temporaryRoot('squad-operation-shims'), 'bin');
-  mkdirSync(directory, { recursive: true });
-  return directory;
-}
-
-function loggingShim(directory: string, name: string, body = 'exit 0'): void {
-  executable(
-    path.join(directory, name),
-    [
-      `printf '%s' '${name}' >> "\${OPS_LOG:?}"`,
-      `for argument in "$@"; do printf '|%s' "$argument" >> "\${OPS_LOG:?}"; done`,
-      `printf '\\n' >> "\${OPS_LOG:?}"`,
-      body,
-    ].join('\n'),
-  );
-}
-
-// Git exports these to its hooks, so under the pre-push checklist they name
-// this repository; a child that runs git in a fixture repository would then
-// operate on this one instead ("this operation must be run in a work tree").
-const GIT_LOCATION_VARIABLES = [
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_COMMON_DIR',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-  'GIT_PREFIX',
-];
-
-function childEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const inherited = { ...process.env };
-  for (const name of GIT_LOCATION_VARIABLES) delete inherited[name];
-  return { ...inherited, ...overrides };
-}
-
-function run(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
-): CommandResult {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: childEnvironment(options.env),
-    input: options.input,
-    encoding: 'utf8',
-    timeout: 15_000,
-  });
-  if (result.error) throw result.error;
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
-}
-
-async function runAsync(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
-): Promise<CommandResult> {
-  const child = spawn(command, args, {
-    cwd: options.cwd ?? REPOSITORY_ROOT,
-    env: childEnvironment(options.env),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-    stderr += chunk;
-  });
-  child.stdin.end(options.input);
-  const timeout = setTimeout(() => child.kill('SIGKILL'), 15_000);
-  const [status] = (await once(child, 'close')) as [number | null];
-  clearTimeout(timeout);
-  return { status, stdout, stderr };
-}
-
-function logLines(file: string): string[] {
-  if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
-}
-
-after(() => {
-  for (const root of temporaryRoots.reverse()) rmSync(root, { recursive: true, force: true });
-});
 
 describe('operation script static contracts', () => {
   for (const relativePath of OPERATIONS_SCRIPTS) {
@@ -197,6 +92,46 @@ describe('operation script static contracts', () => {
     // test:scripts builds the one package its contracts load; a full Turbo
     // build here only spends CI minutes.
     assert.doesNotMatch(scriptsJob, /turbo run build/u);
+  });
+});
+
+describe('infra hardening contracts (#47)', () => {
+  const read = (relativePath: string) =>
+    readFileSync(path.join(REPOSITORY_ROOT, relativePath), 'utf8');
+
+  it('install-host-bridge points the bridge backup RPCs at the deploy directory and its compose file', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    const dropIn = installer.slice(
+      installer.indexOf('panel-host-bridge.service.d/install.conf" <<EOF'),
+    );
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_DIR=\$\{REPO_DIR\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_FILE=\$\{PANEL_COMPOSE_FILE\}\n/);
+    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_ENV_FILES=\$\{PANEL_COMPOSE_ENV_FILES\}\n/);
+    assert.match(installer, /PANEL_COMPOSE_FILE="\$\{PANEL_COMPOSE_FILE:-docker\/compose\.yml\}"/);
+    assert.match(installer, /PANEL_COMPOSE_ENV_FILES="\$\{PANEL_COMPOSE_ENV_FILES:-\.env\}"/);
+  });
+
+  it('install-host-bridge creates the media directory the api and media-publisher bind', () => {
+    const installer = read('scripts/install-host-bridge.sh');
+    assert.match(installer, /"\$\{DATA_DIR\}\/media" \\/);
+  });
+
+  it('bootstrap generates the restic password and the least-privilege database login', () => {
+    const bootstrap = read('scripts/bootstrap.sh');
+    const envBlock = bootstrap.slice(bootstrap.indexOf('cat > "${REPO}/.env" <<EOF'));
+    assert.match(envBlock, /\nRESTIC_PASSWORD=\$\{RESTIC_PW\}\n/);
+    assert.match(envBlock, /\nPANEL_DB_USER=panel_app\n/);
+    assert.match(envBlock, /\nPANEL_DB_PASSWORD=\$\{APP_DB_PW\}\n/);
+    assert.match(bootstrap, /RESTIC_PW=\$\(openssl rand -hex 32\)/);
+    assert.match(bootstrap, /APP_DB_PW=\$\(openssl rand -hex 32\)/);
+  });
+
+  it('restore.sh loads the restored RDB into a one-off server that takes the redis password', () => {
+    const restore = read('scripts/restore.sh');
+    assert.match(
+      restore,
+      /redis-server --dir \/data --dbfilename dump\.rdb --appendonly no --save "" --requirepass "\$REDISCLI_AUTH" &/,
+    );
   });
 });
 
@@ -2075,6 +2010,15 @@ describe('rebuild confirmation, ordering, and stop-on-failure behavior', () => {
  * conversion script for real under `sh` with fake `redis-server`/`redis-cli`,
  * so the bounded waits are exercised as shipped. Multi-line `-c` scripts are
  * logged as `SCRIPT:<kind>` and saved whole under `scripts/<n>.sh`.
+
+
+/**
+ * `scripts/restore.sh --apply` against stand-in tools (#48). The `docker` shim
+ * answers the compose queries, emulates the backup container's staging run by
+ * writing the dumps into the fixture's backup-dump volume, and runs the Redis
+ * conversion script for real under `sh` with fake `redis-server`/`redis-cli`,
+ * so the bounded waits are exercised as shipped. Multi-line `-c` scripts are
+ * logged as `SCRIPT:<kind>` and saved whole under `scripts/<n>.sh`.
  */
 describe('restore apply: staging, worker pause, transactional pg_restore, Redis rollback', () => {
   function restoreFixture(): {
@@ -2752,46 +2696,6 @@ describe('backup-restore postgres readiness (#291)', () => {
       logLines(fixture.log).filter((line) => line.startsWith('docker|')).length,
       7,
       'expected the attempt budget to be honoured',
-    );
-  });
-});
-
-describe('infra hardening contracts (#47)', () => {
-  const read = (relativePath: string) =>
-    readFileSync(path.join(REPOSITORY_ROOT, relativePath), 'utf8');
-
-  it('install-host-bridge points the bridge backup RPCs at the deploy directory and its compose file', () => {
-    const installer = read('scripts/install-host-bridge.sh');
-    const dropIn = installer.slice(
-      installer.indexOf('panel-host-bridge.service.d/install.conf" <<EOF'),
-    );
-    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_DIR=\$\{REPO_DIR\}\n/);
-    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_FILE=\$\{PANEL_COMPOSE_FILE\}\n/);
-    assert.match(dropIn, /\nEnvironment=PANEL_COMPOSE_ENV_FILES=\$\{PANEL_COMPOSE_ENV_FILES\}\n/);
-    assert.match(installer, /PANEL_COMPOSE_FILE="\$\{PANEL_COMPOSE_FILE:-docker\/compose\.yml\}"/);
-    assert.match(installer, /PANEL_COMPOSE_ENV_FILES="\$\{PANEL_COMPOSE_ENV_FILES:-\.env\}"/);
-  });
-
-  it('install-host-bridge creates the media directory the api and media-publisher bind', () => {
-    const installer = read('scripts/install-host-bridge.sh');
-    assert.match(installer, /"\$\{DATA_DIR\}\/media" \\/);
-  });
-
-  it('bootstrap generates the restic password and the least-privilege database login', () => {
-    const bootstrap = read('scripts/bootstrap.sh');
-    const envBlock = bootstrap.slice(bootstrap.indexOf('cat > "${REPO}/.env" <<EOF'));
-    assert.match(envBlock, /\nRESTIC_PASSWORD=\$\{RESTIC_PW\}\n/);
-    assert.match(envBlock, /\nPANEL_DB_USER=panel_app\n/);
-    assert.match(envBlock, /\nPANEL_DB_PASSWORD=\$\{APP_DB_PW\}\n/);
-    assert.match(bootstrap, /RESTIC_PW=\$\(openssl rand -hex 32\)/);
-    assert.match(bootstrap, /APP_DB_PW=\$\(openssl rand -hex 32\)/);
-  });
-
-  it('restore.sh loads the restored RDB into a one-off server that takes the redis password', () => {
-    const restore = read('scripts/restore.sh');
-    assert.match(
-      restore,
-      /redis-server --dir \/data --dbfilename dump\.rdb --appendonly no --save "" --requirepass "\$REDISCLI_AUTH" &/,
     );
   });
 });
