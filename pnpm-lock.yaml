@@ -303,6 +303,9 @@ importers:
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
