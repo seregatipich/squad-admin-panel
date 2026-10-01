@@ -47,6 +47,7 @@ export default function MediaPublishingIntegrationPage() {
     data: status,
     error: loadError,
     errorMessage: loadErrorMessage,
+    refresh,
     setData: setStatus,
   } = useApiResource<MediaPublishingStatus>(ENDPOINT);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -93,7 +94,7 @@ export default function MediaPublishingIntegrationPage() {
           tone="crit"
           title={error}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void refresh()}>
               Повторить
             </Button>
           }
