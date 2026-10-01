@@ -52,8 +52,7 @@ function trendTooltipLabel(label: ReactNode, bars: readonly TrendBar[]): string 
  * month trend whose tooltip carries the month's K/D.
  *
  * Default-exported and reached only through `next/dynamic` in
- * {@link ../DossierSkillTab}, which keeps recharts out of the curated static
- * import graphs (`apps/web/test/pages-graph.test.ts`).
+ * {@link ../DossierSkillTab}, which keeps recharts out of the initial bundle.
  *
  * @param kills Lifetime kills for the selected window, the donut's first slice.
  * @param deaths Lifetime deaths for the selected window, the donut's second slice.
