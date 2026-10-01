@@ -16,76 +16,26 @@ import {
   Select,
   Skeleton,
   Switch,
-  Table,
-  TableBody,
-  TableHead,
-  TableRow,
-  Td,
   TextInput,
-  Th,
 } from '@/components/ui';
 import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import {
   addCandidate,
   buildCandidatesPayload,
   buildSettingsPayload,
+  type CatalogLayer,
   describeApiError,
   type MapVoteCandidate,
+  type MapVoteResponse,
   type MapVoteSettingsForm,
+  type PickRow,
+  type PreviewResponse,
   removeCandidateAt,
+  type VersionRow,
   validateCandidates,
   validateSettings,
 } from './helpers';
-
-interface MapVoteResponse {
-  enabled: boolean;
-  selection: 'weighted_random' | 'least_recently_played';
-  layer_cooldown: number;
-  map_cooldown: number;
-  broadcast_template: string | null;
-  can_edit: boolean;
-  candidates: MapVoteCandidate[];
-}
-
-interface PreviewResponse {
-  eligible: Array<{ layer: string; weight: number; probability: number }>;
-  excluded: Array<{ layer: string; reason: string }>;
-  would_pick: string | null;
-}
-
-interface PickRow {
-  id: string;
-  match_id: string;
-  layer: string;
-  selection: string;
-  applied: boolean;
-  failure_reason: string | null;
-  created_at: string;
-}
-
-interface VersionRow {
-  id: string;
-  sha256: string;
-  parent_version_id: string | null;
-  author: string | null;
-  message: string | null;
-  created_at: string;
-}
-
-interface CatalogLayer {
-  id: string;
-  name: string;
-  map: string;
-  gamemode: string;
-  deprecated: boolean;
-}
-
-const EXCLUSION_LABELS: Record<string, string> = {
-  disabled: 'выключен',
-  deprecated: 'устаревший слой',
-  layer_cooldown: 'кулдаун слоя',
-  map_cooldown: 'кулдаун карты',
-};
+import { PicksCard, PreviewCard, VersionsCard } from './MapVotePanels';
 
 /** Fetches an auxiliary block; a failed request yields `null` instead of failing the page. */
 async function fetchOptional<T>(url: string): Promise<T | null> {
@@ -538,173 +488,17 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         ) : null}
       </Card>
 
-      <Card padding="none">
-        <CardHeader
-          title="Предпросмотр выбора"
-          description={
-            preview?.would_pick
-              ? `Сейчас был бы выбран слой ${preview.would_pick}`
-              : 'Подходящих кандидатов нет'
-          }
-        />
-        <CardBody className="space-y-4">
-          {preview && preview.eligible.length > 0 ? (
-            <div data-testid="preview-eligible">
-              <Table ariaLabel="Кандидаты, участвующие в выборе">
-                <TableHead sticky={false}>
-                  <TableRow>
-                    <Th>Слой</Th>
-                    <Th align="right">Вес</Th>
-                    <Th align="right">Вероятность</Th>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {preview.eligible.map((row) => (
-                    <TableRow key={row.layer}>
-                      <Td>
-                        <span className="font-mono">{row.layer}</span>
-                      </Td>
-                      <Td numeric>{row.weight}</Td>
-                      <Td numeric>{Math.round(row.probability * 100)}%</Td>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : null}
-          {preview && preview.excluded.length > 0 ? (
-            <div data-testid="preview-excluded">
-              <Table ariaLabel="Кандидаты, исключённые из выбора">
-                <TableHead sticky={false}>
-                  <TableRow>
-                    <Th>Слой</Th>
-                    <Th>Почему исключён</Th>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {preview.excluded.map((row) => (
-                    <TableRow key={row.layer}>
-                      <Td>
-                        <span className="font-mono">{row.layer}</span>
-                      </Td>
-                      <Td>{EXCLUSION_LABELS[row.reason] ?? row.reason}</Td>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : null}
-          {!preview ? (
-            <EmptyState
-              title="Предпросмотр недоступен"
-              description="Панель ещё не рассчитала, какой слой был бы выбран следующим."
-            />
-          ) : null}
-        </CardBody>
-      </Card>
+      <PreviewCard preview={preview} />
 
-      <Card padding="none">
-        <CardHeader title="История выборов" count={picks.length} />
-        {picks.length === 0 ? (
-          <EmptyState
-            title="Выборов ещё не было"
-            description="Как только панель выберет слой, запись появится здесь."
-          />
-        ) : (
-          <div data-testid="picks-list">
-            <Table ariaLabel="История автоматических выборов слоя">
-              <TableHead sticky={false}>
-                <TableRow>
-                  <Th>Слой</Th>
-                  <Th>Когда</Th>
-                  <Th>Результат</Th>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {picks.map((pick) => (
-                  <TableRow key={pick.id}>
-                    <Td>
-                      <span className="font-mono">{pick.layer}</span>
-                    </Td>
-                    <Td>{new Date(pick.created_at).toLocaleString('ru-RU')}</Td>
-                    <Td>
-                      {pick.applied ? (
-                        <Badge tone="good">Применён</Badge>
-                      ) : (
-                        <Badge tone="warn">{pick.failure_reason ?? 'не применён'}</Badge>
-                      )}
-                    </Td>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </Card>
-      <Card padding="none">
-        <CardHeader
-          title="История изменений"
-          count={versions.length}
-          description="Каждое сохранение на этой странице попадает в ту же историю версий, что и правки конфигов: автор, время, отпечаток и откат."
-        />
-        {versions.length === 0 ? (
-          <EmptyState
-            title="Изменений ещё не было"
-            description="Первая запись появится после сохранения правил или пула слоёв."
-          />
-        ) : (
-          <div data-testid="versions-list">
-            <Table ariaLabel="История изменений автовыбора карты">
-              <TableHead sticky={false}>
-                <TableRow>
-                  <Th>Когда</Th>
-                  <Th>Кто</Th>
-                  <Th>Что изменилось</Th>
-                  <Th>Отпечаток</Th>
-                  {canRestore ? <Th align="right">Действия</Th> : null}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {versions.map((version) => (
-                  <TableRow key={version.id}>
-                    <Td>{new Date(version.created_at).toLocaleString('ru-RU')}</Td>
-                    <Td>{version.author ?? '—'}</Td>
-                    <Td>{version.message ?? '—'}</Td>
-                    <Td>
-                      <span className="font-mono text-ink-3" title={version.sha256}>
-                        {version.sha256.slice(0, 8)}
-                      </span>
-                    </Td>
-                    {canRestore ? (
-                      <Td align="right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            size="sm"
-                            disabled={saving}
-                            onClick={() => void restoreVersion(version.id)}
-                          >
-                            Откатить
-                          </Button>
-                          {pendingRestore === version.id ? (
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              disabled={saving}
-                              onClick={() => void restoreVersion(version.id, true)}
-                            >
-                              Откатить без них
-                            </Button>
-                          ) : null}
-                        </div>
-                      </Td>
-                    ) : null}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </Card>
+      <PicksCard picks={picks} />
+
+      <VersionsCard
+        versions={versions}
+        canRestore={canRestore}
+        saving={saving}
+        pendingRestore={pendingRestore}
+        onRestore={(versionId, dropUnknown) => void restoreVersion(versionId, dropUnknown)}
+      />
     </PageContainer>
   );
 }

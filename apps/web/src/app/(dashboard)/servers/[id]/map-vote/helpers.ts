@@ -10,6 +10,54 @@ export interface MapVoteCandidate {
   deprecated: boolean;
 }
 
+/** Combined state of `GET /map-vote`. */
+export interface MapVoteResponse {
+  enabled: boolean;
+  selection: 'weighted_random' | 'least_recently_played';
+  layer_cooldown: number;
+  map_cooldown: number;
+  broadcast_template: string | null;
+  can_edit: boolean;
+  candidates: MapVoteCandidate[];
+}
+
+/** What the next auto-pick would consider and choose. */
+export interface PreviewResponse {
+  eligible: Array<{ layer: string; weight: number; probability: number }>;
+  excluded: Array<{ layer: string; reason: string }>;
+  would_pick: string | null;
+}
+
+/** One recorded auto-pick. */
+export interface PickRow {
+  id: string;
+  match_id: string;
+  layer: string;
+  selection: string;
+  applied: boolean;
+  failure_reason: string | null;
+  created_at: string;
+}
+
+/** One saved version of the map-vote rules and pool. */
+export interface VersionRow {
+  id: string;
+  sha256: string;
+  parent_version_id: string | null;
+  author: string | null;
+  message: string | null;
+  created_at: string;
+}
+
+/** A layer of the catalog the pool is picked from. */
+export interface CatalogLayer {
+  id: string;
+  name: string;
+  map: string;
+  gamemode: string;
+  deprecated: boolean;
+}
+
 /** Editable map-vote settings, camelCase page state for `PUT /map-vote/settings`. */
 export interface MapVoteSettingsForm {
   enabled: boolean;
