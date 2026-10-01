@@ -277,11 +277,13 @@ describe('match detail links', () => {
 
 describe('match combat-log links', () => {
   it('links a match card to the combat log filtered by server and match day range', () => {
+    // Built from local calendar components: the href uses the viewer's local dates, so UTC
+    // literals would only give these days when the machine runs in UTC.
     expect(
       buildMatchCombatLogHref({
         server_id: 'srv-1',
-        started_at: '2026-07-04T22:30:00.000Z',
-        ended_at: '2026-07-05T00:15:00.000Z',
+        started_at: new Date(2026, 6, 4, 22, 30).toISOString(),
+        ended_at: new Date(2026, 6, 5, 0, 15).toISOString(),
       }),
     ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-07-04&to=2026-07-05');
   });
