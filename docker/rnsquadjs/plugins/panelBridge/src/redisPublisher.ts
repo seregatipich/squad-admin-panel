@@ -10,9 +10,9 @@ export interface RconStatus {
 
 /**
  * Approximate cap (`XADD MAXLEN ~`) on the per-server event stream, matching
- * the legacy `worker-log-ingest` producer. The shadow stream is read only by
- * `scripts/rnsquadjs-shadow-diff.mjs` and nothing else trims it, so without
- * this cap every damage/chat event would grow Redis memory forever (#16).
+ * the legacy `worker-log-ingest` producer. Nothing else trims the shadow
+ * stream (no repository consumer reads it), so without this cap every
+ * damage/chat event would grow Redis memory forever (#16).
  */
 export const EVENT_STREAM_MAXLEN = '10000';
 

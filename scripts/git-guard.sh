@@ -3,7 +3,7 @@
 #
 # Single source of truth for the agent enforcement harness. Every layer is a
 # thin adapter around this script:
-#   - Claude Code PreToolUse hook  -> check-command  (.claude/hooks/git-guard-hook.sh)
+#   - Claude Code PreToolUse hook  -> check-command  (scripts/git-guard-hook.sh)
 #   - lefthook pre-commit          -> check-commit
 #   - lefthook pre-push            -> check-push
 #
