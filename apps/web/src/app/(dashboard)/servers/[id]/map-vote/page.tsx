@@ -24,6 +24,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import {
   addCandidate,
   buildCandidatesPayload,
@@ -89,8 +90,7 @@ const EXCLUSION_LABELS: Record<string, string> = {
 /** Fetches an auxiliary block; a failed request yields `null` instead of failing the page. */
 async function fetchOptional<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
-    return res.ok ? ((await res.json()) as T) : null;
+    return await apiFetch<T>(url);
   } catch {
     return null;
   }
@@ -137,12 +137,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     async (preserve: { settings?: boolean; candidates?: boolean } = {}) => {
       setErr(null);
       try {
-        const stateRes = await fetch(`/api/v1/servers/${id}/map-vote`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
-        const state = (await stateRes.json()) as MapVoteResponse;
+        const state = await apiFetch<MapVoteResponse>(`/api/v1/servers/${id}/map-vote`);
 
         // Вспомогательные блоки грузятся независимо: их сбой не должен
         // ронять форму, у которой состояние уже есть.
@@ -174,7 +169,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         setCanRestore(versionsBody?.can_restore ?? false);
         setCanEdit(state.can_edit);
       } catch (e) {
-        setErr((e as Error).message);
+        setErr(describeHttpError(e));
       } finally {
         setLoading(false);
       }
@@ -196,14 +191,12 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/map-vote/versions/${versionId}/restore`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ drop_unknown_layers: dropUnknown }),
-      });
-      if (res.status === 409) {
-        const body = (await res.json().catch(() => ({}))) as { layers?: string[] };
+      const res = await apiResult<{ count: number; dropped_layers?: string[] }>(
+        `/api/v1/servers/${id}/map-vote/versions/${versionId}/restore`,
+        { method: 'POST', json: { drop_unknown_layers: dropUnknown } },
+      );
+      if (!res.ok && res.error.status === 409) {
+        const body = res.error.jsonBody<{ layers?: string[] }>() ?? {};
         const missing = (body.layers ?? []).join(', ');
         setErr(
           `В этой версии есть слои, которых больше нет в каталоге: ${missing}. Нажмите «Откатить без них», чтобы восстановить остальное.`,
@@ -211,8 +204,8 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
         setPendingRestore(versionId);
         return;
       }
-      if (!res.ok) throw new Error(await describeApiError(res));
-      const body = (await res.json()) as { count: number; dropped_layers?: string[] };
+      if (!res.ok) throw new Error(describeApiError(res.error));
+      const body = res.data;
       const dropped = body.dropped_layers ?? [];
       setPendingRestore(null);
       setMsg(
@@ -222,7 +215,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
       );
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setSaving(false);
     }
@@ -254,20 +247,19 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/map-vote/settings`, {
+      const res = await apiResult<unknown>(`/api/v1/servers/${id}/map-vote/settings`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildSettingsPayload(form)),
+        json: buildSettingsPayload(form),
+        discardBody: true,
       });
-      if (!res.ok) throw new Error(await describeApiError(res));
+      if (!res.ok) throw new Error(describeApiError(res.error));
       setMsg('Настройки сохранены');
       // Candidates below may still be mid-edit and unsaved — reloading must
       // not silently discard them just because settings were saved (#624).
       const candidatesDirty = JSON.stringify(candidates) !== lastLoadedCandidatesRef.current;
       await load({ candidates: candidatesDirty });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setSaving(false);
     }
@@ -283,19 +275,18 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/map-vote/candidates`, {
+      const res = await apiResult<unknown>(`/api/v1/servers/${id}/map-vote/candidates`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildCandidatesPayload(candidates, confirmDeprecated)),
+        json: buildCandidatesPayload(candidates, confirmDeprecated),
+        discardBody: true,
       });
-      if (!res.ok) throw new Error(await describeApiError(res));
+      if (!res.ok) throw new Error(describeApiError(res.error));
       setMsg('Кандидаты сохранены');
       // Settings above may still be mid-edit and unsaved (#624).
       const settingsDirty = JSON.stringify(form) !== lastLoadedFormRef.current;
       await load({ settings: settingsDirty });
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setSaving(false);
     }

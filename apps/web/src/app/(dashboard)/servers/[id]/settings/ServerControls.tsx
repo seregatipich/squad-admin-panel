@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import {
@@ -12,7 +12,9 @@ import {
   InlineBanner,
   Menu,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface ServerSnapshot {
   display_name: string;
@@ -37,62 +39,36 @@ const POLL_INTERVAL_MS = 3000;
  */
 export function ServerControls({ serverId }: { serverId: string }) {
   const router = useRouter();
-  const [server, setServer] = useState<ServerSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [pollErr, setPollErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [forceStopOpen, setForceStopOpen] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateRunning, setUpdateRunning] = useState(false);
-  // Guards against overlapping requests to the same expensive route
-  // (containerInspect + docker stats via the privileged bridge) piling up
-  // behind a slow response (#641).
-  const refreshInFlightRef = useRef(false);
 
-  const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
-    try {
-      const r = await fetch(`/api/v1/servers/${serverId}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as { server: ServerSnapshot };
-      setServer({
-        display_name: body.server.display_name,
-        status: body.server.status,
-        runtime: body.server.runtime,
-      });
-      setPollErr(null);
-    } catch (e) {
-      setPollErr((e as Error).message);
-    } finally {
-      refreshInFlightRef.current = false;
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    void refresh();
-    // `server.status` already pushes every status change live (below); this
-    // poll is only a backstop, so it can skip entirely while the tab is
-    // hidden instead of hammering the bridge/docker daemon for a screen no
-    // one is watching (#641).
-    const t = setInterval(() => {
-      if (document.hidden) return;
-      void refresh();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
+  // `server.status` already pushes every status change live (below); this
+  // poll is only a backstop, so it skips ticks while the tab is hidden instead
+  // of hammering the bridge/docker daemon for a screen no one is watching
+  // (#641). The hook also never lets a tick overlap a request still in flight:
+  // the route is expensive (containerInspect + docker stats via the privileged
+  // bridge) and must not pile up behind a slow response.
+  const snapshot = useApiResource<{ server: ServerSnapshot }>(`/api/v1/servers/${serverId}`, {
+    intervalMs: POLL_INTERVAL_MS,
+    pauseWhenHidden: true,
+  });
+  const server = snapshot.data?.server ?? null;
+  const pollErr = snapshot.errorMessage;
+  const { refresh, setData: setSnapshot } = snapshot;
 
   const onLiveStatus = useCallback(
     (event: { data: { server_id: string; status: string } }) => {
       if (event.data.server_id !== serverId) return;
-      setServer((prev) => (prev ? { ...prev, status: event.data.status } : prev));
+      setSnapshot((prev) =>
+        prev ? { server: { ...prev.server, status: event.data.status } } : prev,
+      );
     },
-    [serverId],
+    [serverId, setSnapshot],
   );
   useLiveSubscription('server.status', onLiveStatus);
 
@@ -107,15 +83,12 @@ export function ServerControls({ serverId }: { serverId: string }) {
     setActing(name);
     try {
       const method = name === 'delete' ? 'DELETE' : 'POST';
-      const r = await fetch(`/api/v1/servers/${serverId}${name === 'delete' ? '' : `/${name}`}`, {
-        method,
-        credentials: 'include',
-        headers: method === 'POST' ? { 'content-type': 'application/json' } : undefined,
-        body: method === 'POST' ? JSON.stringify({}) : undefined,
-      });
+      const r = await apiResult<unknown>(
+        `/api/v1/servers/${serverId}${name === 'delete' ? '' : `/${name}`}`,
+        { method, json: method === 'POST' ? {} : undefined, discardBody: true },
+      );
       if (!r.ok) {
-        const text = await r.text();
-        setErr(`${name} failed: HTTP ${r.status} ${text}`);
+        setErr(`${name} failed: HTTP ${r.error.status} ${r.error.responseText}`);
       } else {
         setErr(null);
         if (name === 'delete') {
@@ -126,7 +99,7 @@ export function ServerControls({ serverId }: { serverId: string }) {
       }
       await refresh();
     } catch (e) {
-      setErr(`${name} failed: ${(e as Error).message}`);
+      setErr(`${name} failed: ${describeHttpError(e)}`);
     } finally {
       setActing(null);
     }
@@ -139,15 +112,12 @@ export function ServerControls({ serverId }: { serverId: string }) {
     }
     setActing('update');
     try {
-      const r = await fetch(`/api/v1/servers/${serverId}/update`, {
+      const r = await apiResult<unknown>(`/api/v1/servers/${serverId}/update`, {
         method: 'POST',
-        credentials: 'include',
+        discardBody: true,
       });
       if (!r.ok) {
-        const body = (await r.json().catch(() => null)) as {
-          error?: string;
-          server_ids?: string[];
-        } | null;
+        const body = r.error.jsonBody<{ error?: string; server_ids?: string[] }>();
         // The depot is one volume shared by every server on the host, so the
         // API refuses while any other server is live (#20).
         if (body?.error === 'servers_running') {
@@ -160,12 +130,12 @@ export function ServerControls({ serverId }: { serverId: string }) {
           setUpdateModalOpen(true);
           return;
         }
-        throw new Error(`HTTP ${r.status}`);
+        throw new Error(`HTTP ${r.error.status}`);
       }
       setUpdateRunning(true);
       setUpdateModalOpen(true);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setActing(null);
     }
@@ -265,14 +235,14 @@ export function ServerControls({ serverId }: { serverId: string }) {
         onOpenChange={setForceStopOpen}
         serverName={server.display_name}
         onConfirm={async () => {
-          const r = await fetch(`/api/v1/servers/${serverId}/force-stop`, {
+          const r = await apiResult<unknown>(`/api/v1/servers/${serverId}/force-stop`, {
             method: 'POST',
-            credentials: 'include',
+            discardBody: true,
           });
           // The dialog shows this message, so carry the API's error code.
           if (!r.ok) {
-            const body = (await r.json().catch(() => null)) as { error?: string } | null;
-            throw new Error(body?.error ?? `HTTP ${r.status}`);
+            const body = r.error.jsonBody<{ error?: string }>();
+            throw new Error(body?.error ?? `HTTP ${r.error.status}`);
           }
           void refresh();
         }}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/lib/api';
 import {
   addCandidate,
   buildCandidatesPayload,
@@ -135,19 +136,20 @@ describe('addCandidate / removeCandidateAt', () => {
 });
 
 describe('describeApiError', () => {
-  it('maps a known error code to Russian and names the offending layer', async () => {
-    const res = new Response(
+  it('maps a known error code to Russian and names the offending layer', () => {
+    const error = new ApiError(
+      '/api/v1/servers/s/map-vote/candidates',
+      409,
       JSON.stringify({ error: 'deprecated_layer_confirmation_required', layer: 'Old v1' }),
-      { status: 409 },
     );
-    const message = await describeApiError(res);
+    const message = describeApiError(error);
     expect(message).toContain('устаревшие слои');
     expect(message).toContain('Old v1');
     expect(message).not.toContain('deprecated_layer');
   });
 
-  it('falls back to a generic Russian message with the status for unknown bodies', async () => {
-    expect(await describeApiError(new Response('boom', { status: 502 }))).toBe(
+  it('falls back to a generic Russian message with the status for unknown bodies', () => {
+    expect(describeApiError(new ApiError('/api/v1/servers/s/map-vote', 502, 'boom'))).toBe(
       'Не удалось выполнить запрос (HTTP 502).',
     );
   });

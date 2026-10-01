@@ -16,6 +16,7 @@ import {
   Skeleton,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import {
   bucketByDay,
   dayKey,
@@ -114,18 +115,10 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
   // every week switch or mutation.
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/v1/layers', {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<{ rows: LayerOption[] }>;
-      })
+    apiFetch<{ rows: LayerOption[] }>('/api/v1/layers', { signal: controller.signal })
       .then((layers) => setLayerPool(layers.rows))
       .catch((error) => {
-        if ((error as Error).name !== 'AbortError') setErr((error as Error).message);
+        if ((error as Error).name !== 'AbortError') setErr(describeHttpError(error));
       });
     return () => controller.abort();
   }, []);
@@ -134,12 +127,10 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
     async (signal?: AbortSignal) => {
       setErr(null);
       try {
-        const calendarRes = await fetch(
+        const calendar = await apiFetch<CalendarResponse>(
           `/api/v1/servers/${id}/rotation-schedule?from=${weekStart.toISOString()}&to=${rangeTo.toISOString()}`,
-          { credentials: 'include', cache: 'no-store', signal },
+          { signal },
         );
-        if (!calendarRes.ok) throw new Error(`HTTP ${calendarRes.status}`);
-        const calendar = (await calendarRes.json()) as CalendarResponse;
         if (signal?.aborted) return;
         setEntries(calendar.entries);
         setHistory(calendar.history);
@@ -151,7 +142,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
         setWarnings(calendar.warnings);
         setCanEdit(calendar.can_edit);
       } catch (error) {
-        if ((error as Error).name !== 'AbortError') setErr((error as Error).message);
+        if ((error as Error).name !== 'AbortError') setErr(describeHttpError(error));
       } finally {
         if (!signal?.aborted) setLoading(false);
       }
@@ -213,14 +204,10 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
       const url = editingId
         ? `/api/v1/servers/${id}/rotation-schedule/${editingId}`
         : `/api/v1/servers/${id}/rotation-schedule`;
-      const response = await fetch(url, {
+      const saved = await apiFetch<{ warnings?: RotationWarning[] }>(url, {
         method: editingId ? 'PATCH' : 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-      const saved = (await response.json()) as { warnings?: RotationWarning[] };
       setModalOpen(false);
       setMsg(
         saved.warnings?.length
@@ -231,7 +218,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
       );
       await load();
     } catch (error) {
-      setErr((error as Error).message);
+      setErr(describeHttpError(error, true));
     } finally {
       setSubmitting(false);
     }
@@ -245,16 +232,13 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
   async function updateEntry(entry: RotationScheduleEntry, body: Record<string, unknown>) {
     setErr(null);
     try {
-      const response = await fetch(`/api/v1/servers/${id}/rotation-schedule/${entry.id}`, {
+      await apiSend(`/api/v1/servers/${id}/rotation-schedule/${entry.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        json: body,
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await load();
     } catch (error) {
-      setErr((error as Error).message);
+      setErr(describeHttpError(error));
     }
   }
 
@@ -262,15 +246,11 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
     if (!canEdit) return;
     setErr(null);
     try {
-      const response = await fetch(`/api/v1/servers/${id}/rotation-schedule/${entry.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await apiSend(`/api/v1/servers/${id}/rotation-schedule/${entry.id}`, { method: 'DELETE' });
       setMsg('Запись удалена');
       await load();
     } catch (error) {
-      setErr((error as Error).message);
+      setErr(describeHttpError(error));
     }
   }
 
@@ -279,18 +259,15 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
     setProfileSaving(true);
     setErr(null);
     try {
-      const response = await fetch(`/api/v1/servers/${id}/rotation-profiles`, {
+      await apiSend(`/api/v1/servers/${id}/rotation-profiles`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ profiles }),
+        json: { profiles },
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
       setMsg('Профили сохранены — применятся со следующего матча');
       profilesDirtyRef.current = false;
       await load();
     } catch (error) {
-      setErr((error as Error).message);
+      setErr(describeHttpError(error, true));
     } finally {
       setProfileSaving(false);
     }

@@ -1,7 +1,8 @@
 import type { ServerLicenseState } from '@squad/shared-types';
 import { useEffect, useState } from 'react';
 import { Badge, Button, GroupedList, GroupedRow, InlineBanner, TextInput } from '@/components/ui';
-import { licenseRestartRequired, readErrorMessage } from './helpers';
+import { apiSend } from '@/lib/api';
+import { describeSettingsError, licenseRestartRequired } from './helpers';
 import { useSavedFlag } from './useSavedFlag';
 
 interface LicenseSectionProps {
@@ -34,18 +35,12 @@ export function LicenseSection({ serverId, license, container, onChanged }: Lice
     setLicenseBusy(true);
     setLicenseErr(null);
     try {
-      const r = await fetch(`/api/v1/servers/${serverId}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) throw new Error(await readErrorMessage(r));
+      await apiSend(`/api/v1/servers/${serverId}`, { method: 'PATCH', json: payload });
       setLicenseKey('');
       await onChanged();
       flashLicenseSaved();
     } catch (e) {
-      setLicenseErr((e as Error).message);
+      setLicenseErr(describeSettingsError(e));
     } finally {
       setLicenseBusy(false);
     }

@@ -217,7 +217,7 @@ describe('ServerControls', () => {
         ? ({
             ok: false,
             status: 409,
-            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+            text: async () => JSON.stringify({ error: 'servers_running', server_ids: ['a', 'b'] }),
           } as Response)
         : undefined,
     );
@@ -241,7 +241,7 @@ describe('ServerControls', () => {
         ? ({
             ok: false,
             status: 409,
-            json: async () => ({ error: 'depot_update_in_progress' }),
+            text: async () => JSON.stringify({ error: 'depot_update_in_progress' }),
           } as Response)
         : undefined,
     );
@@ -310,7 +310,11 @@ describe('ServerControls', () => {
   it('rejects the force-stop confirmation with the API error code', async () => {
     stubFetch('running', undefined, (url, init) =>
       url === `/api/v1/servers/${SERVER_ID}/force-stop` && init?.method === 'POST'
-        ? ({ ok: false, status: 403, json: async () => ({ error: 'forbidden' }) } as Response)
+        ? ({
+            ok: false,
+            status: 403,
+            text: async () => JSON.stringify({ error: 'forbidden' }),
+          } as Response)
         : undefined,
     );
     await renderControls();

@@ -1,3 +1,11 @@
+import {
+  ApiError,
+  ApiResponseError,
+  apiFetch,
+  describeHttpError,
+  type RequestOptions,
+} from '@/lib/api';
+
 /**
  * SRV-6 (#45): License.cfg is a `requires_restart` config — Squad reads it at
  * boot, so a saved license only takes effect once the container (re)starts
@@ -101,32 +109,49 @@ interface ResponseSchema<T> {
 }
 
 /**
- * Builds the operator-facing message of a failed API response.
+ * Builds the operator-facing message of a failed settings request.
  *
- * @param res - Non-2xx response.
- * @returns The body's `message`, else its `error`, else `HTTP <status>`.
+ * @param error - Value caught from `apiFetch`/`fetchValidated`.
+ * @returns For an API answer the body's `message`, else its `error`, else
+ *   `HTTP <status>`; for anything else (network failure, bad body) the error's
+ *   own message.
  */
-export async function readErrorMessage(res: Response): Promise<string> {
-  const body = await res.json().catch(() => ({}));
-  return body.message ?? body.error ?? `HTTP ${res.status}`;
+export function describeSettingsError(error: unknown): string {
+  if (!(error instanceof ApiError)) return describeHttpError(error);
+  const body = error.jsonBody<{ message?: string; error?: string }>();
+  return body?.message ?? body?.error ?? `HTTP ${error.status}`;
 }
 
 /**
- * Decodes a response body and checks it against a schema from `@squad/shared-types`.
+ * Fetches a JSON endpoint and checks the body against a schema from
+ * `@squad/shared-types`.
  *
- * @param res - 2xx response whose body is JSON.
+ * @param path - API path.
  * @param schema - Schema the body must satisfy.
  * @param what - Russian name of the payload for the error text.
+ * @param options - Request options (method, `json` body, signal).
  * @returns The parsed body.
+ * @throws ApiError when the API answers with a non-2xx status.
  * @throws Error when the body is not JSON or does not match the schema, so a
  *   drifted API contract shows up as a readable error instead of a TypeError.
  */
-export async function readJson<T>(
-  res: Response,
+export async function fetchValidated<T>(
+  path: string,
   schema: ResponseSchema<T>,
   what: string,
+  options: RequestOptions<T> = {},
 ): Promise<T> {
-  const parsed = schema.safeParse(await res.json().catch(() => undefined));
-  if (!parsed.success) throw new Error(`Неожиданный ответ сервера: ${what}`);
-  return parsed.data;
+  try {
+    return await apiFetch<T>(path, {
+      ...options,
+      parse: (body) => {
+        const parsed = schema.safeParse(body);
+        if (!parsed.success) throw new Error('schema mismatch');
+        return parsed.data;
+      },
+    });
+  } catch (error) {
+    if (error instanceof ApiResponseError) throw new Error(`Неожиданный ответ сервера: ${what}`);
+    throw error;
+  }
 }

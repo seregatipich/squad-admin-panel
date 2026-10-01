@@ -1,3 +1,5 @@
+import type { ApiError } from '@/lib/api';
+
 /** One candidate row of the GAME-1 map-vote editor, as returned by `GET /map-vote`. */
 export interface MapVoteCandidate {
   layer: string;
@@ -134,13 +136,13 @@ const ERROR_LABELS: Record<string, string> = {
 };
 
 /**
- * Turns a failed map-vote API response into a Russian message: known error
+ * Turns a failed map-vote API answer into a Russian message: known error
  * codes get their own text (with the offending layer name when the API sends
  * one), everything else falls back to a generic message with the HTTP status.
  */
-export async function describeApiError(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown; layer?: unknown } | null;
+export function describeApiError(error: ApiError): string {
+  const body = error.jsonBody<{ error?: unknown; layer?: unknown }>();
   const label = typeof body?.error === 'string' ? ERROR_LABELS[body.error] : undefined;
-  if (!label) return `Не удалось выполнить запрос (HTTP ${res.status}).`;
+  if (!label) return `Не удалось выполнить запрос (HTTP ${error.status}).`;
   return typeof body?.layer === 'string' ? `${label} Слой: ${body.layer}.` : label;
 }
