@@ -57,7 +57,30 @@ $(diff <(printf '%s\n' "$expected") <(printf '%s\n' "$combined"))"
 [ "$(printf '%s\n' "$packages" | head -n 3 | tr '\n' ' ')" = '@squad/db @squad/worker-log-ingest @squad/worker-rcon ' ] ||
   fail "packages slice does not start with db, log-ingest and rcon: $(printf '%s\n' "$packages" | head -n 3 | tr '\n' ' ')"
 
+# --- A sharded packages slice: the shards partition the packages slice. ---
+shard_count=3
+sharded=''
+for i in $(seq 1 $shard_count); do
+  part=$(dry packages "$i" $shard_count) || fail "packages shard $i/$shard_count exited non-zero"
+  [ -n "$part" ] || fail "packages shard $i/$shard_count selected nothing"
+  sharded="$sharded$part"$'\n'
+done
+[ "$(printf '%s' "$sharded" | sort)" = "$(printf '%s\n' "$packages" | sort)" ] ||
+  fail "packages shards do not add up to the packages slice:
+$(diff <(printf '%s\n' "$packages" | sort) <(printf '%s' "$sharded" | sort))"
+[ "$(printf '%s' "$sharded" | sort | uniq -d)" = '' ] || fail 'a package appears in two packages shards'
+for i in 1 2 3; do
+  [ "$(dry packages "$i" $shard_count | head -n 1)" = "$(printf '%s\n' @squad/db @squad/worker-log-ingest @squad/worker-rcon | sed -n "${i}p")" ] ||
+    fail "packages shard $i/$shard_count does not start with its own long suite"
+done
+[ "$(dry packages 1 1)" = "$packages" ] || fail 'packages 1 1 differs from the unsharded slice'
+
 # --- Bad arguments exit 2. ---
+expect_usage_error packages 1
+expect_usage_error packages 0 3
+expect_usage_error packages 4 3
+expect_usage_error packages one 3
+expect_usage_error packages 1 3 4
 expect_usage_error
 expect_usage_error everything
 expect_usage_error api
@@ -121,6 +144,12 @@ started=$(sed -n 's/^--filter \([^ ]*\) exec vitest run --coverage$/\1/p' "$fixt
 $(cat "$fixture/pnpm.log")"
 [ "$(wc -l <"$fixture/pnpm.log")" -eq "$(printf '%s\n' "$packages" | wc -l)" ] ||
   fail 'packages slice ran a package with unexpected arguments'
+
+# A sharded slice runs only its own packages.
+PNPM_WORKSPACE_CONCURRENCY=1 run_stubbed packages 2 3 || fail 'packages shard 2/3 failed with a passing pnpm'
+started=$(sed -n 's/^--filter \([^ ]*\) exec vitest run --coverage$/\1/p' "$fixture/pnpm.log")
+[ "$started" = "$(dry packages 2 3)" ] || fail "packages shard 2/3 ran:
+$(cat "$fixture/pnpm.log")"
 
 # A failure fails the slice, names the package, and still runs every other one.
 STUB_FAIL=@squad/diag PNPM_WORKSPACE_CONCURRENCY=3 run_stubbed packages &&

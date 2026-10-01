@@ -11,28 +11,31 @@ These rules are mandatory for every contributor and every coding agent (Claude C
 
 ## Workflow (every task: issue, fix, feature, module)
 
+The whole loop is: branch, implement with tests, merge into `dev`, push, promote straight away, wait once. Gates are not repeated by hand — the pre-push hook is the local gate and `ci` on `master` is the authoritative one.
+
 1. Sync and branch off `dev`:
    ```bash
    git fetch origin
    git switch -c feature/<slug> origin/dev
    ```
-2. Implement with tests (see Testing policy). Commit and push each logical chunk — do not accumulate large uncommitted diffs. **Never commit red:** before every commit, the affected package's tests plus `typecheck` and `biome check` must pass.
-3. Before merging back, sync with `dev` (`git merge origin/dev` into your branch, resolve conflicts) and run the local gate:
+2. Implement with tests (see Testing policy). Commit locally as you go; the pre-commit hook runs Biome on what you stage. While iterating, run only the affected test files (`pnpm --filter <pkg> exec vitest run <file>`). Pushing the work branch is optional and gated by nothing.
+3. Merge into `dev` — this repo uses **direct merges, not pull requests**. **Never merge red:** at this point the affected package's tests, `typecheck` and `biome check` must pass, and the push below runs exactly those checks for you:
    ```bash
-   pnpm turbo run typecheck
-   pnpm exec biome check .
-   pnpm test:cov            # or at minimum the affected package's tests
-   ```
-   For changes under `apps/bridge`: `go vet ./... && go test -race -count=1 ./...`.
-4. Merge into `dev` — this repo uses **direct merges, not pull requests**:
-   ```bash
+   git merge origin/dev                  # on the work branch: sync, resolve conflicts
    git switch dev && git pull origin dev
    git merge --no-ff feature/<slug>
-   git push origin dev
+   git push origin dev                   # pre-push checklist runs here, then the stand deploy starts
    ```
-5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook (see "Local pre-check"). It is the only check a `dev` push gets before it reaches the stand: the push starts the `deploy` workflow, which builds the images and deploys them to the stand host without tests. Watch the deploy and fix forward if it fails.
-6. Promote the finished tip to `master` so the full `ci` suite verifies it (see "Dev stand and promotion"); work is not done while that run is red.
-7. Delete the merged work branch.
+   Do not run `pnpm test:cov`, a full `typecheck` or `biome check .` by hand first: the checklist already covers what changed and `ci` covers the rest. For changes under `apps/bridge`: `go vet ./... && go test -race -count=1 ./...` (Linux only).
+4. **Promote immediately, without waiting for the deploy** — the stand deploy and the `ci` run do not depend on each other, so they run side by side:
+   ```bash
+   git push origin origin/dev:master     # fast-forward only; starts ci
+   bash scripts/verify-done.sh --wait    # one command: waits for the deploy AND ci on this exact tip
+   ```
+   A red deploy or red `ci` is fixed forward on `dev` and promoted again.
+5. Delete the merged work branch.
+
+**Several tasks in one session: batch the promotion.** Merge and push each task to `dev` as it is ready, but promote and run `verify-done.sh --wait` once for the batch — `ci` cancels superseded `master` runs anyway, so a promotion per task only buys cancelled runs. Every task in the batch is done when the verification of the final tip passes.
 
 ## Local test setup (read before running any DB-backed test)
 
@@ -51,7 +54,7 @@ The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an i
 
 ## CI gate
 
-Local green is not proof — **`ci` on `master` is the source of truth**. The workflow runs only on pushes to `master` (the fast-forward promotion from `dev`) and on explicit dispatches; `dev` pushes deploy the stand instead. After every promotion, fetch the run result and fix forward on `dev` until every check passes:
+Local green is not proof — **`ci` on `master` is the source of truth**. The workflow runs only on pushes to `master` (the fast-forward promotion from `dev`) and on explicit dispatches; `dev` pushes deploy the stand instead. After every promotion, `bash scripts/verify-done.sh --wait` waits for the result. When it reports a red run, fix forward on `dev` until every check passes:
 
 ```bash
 gh run list --branch master --workflow ci.yml --limit 1 --json databaseId,conclusion
@@ -71,7 +74,7 @@ Workflows stay limited to trusted pushes and explicit dispatches — never `pull
 
 ### Local pre-check
 
-The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push. It is deliberately light — about a minute — because it guards pushes that deploy the stand straight away, while the heavy suite runs in `ci` on promotion. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
+The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push **that updates `dev`**; work-branch pushes and the `dev`→`master` promotion skip it (nothing deploys from the former, and the latter promotes a tip the checklist already passed). It is deliberately light — about a minute — because it guards pushes that deploy the stand straight away, while the heavy suite runs in `ci` on promotion. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
 
 By default the checklist runs, in order:
 
@@ -98,47 +101,37 @@ A task — issue, fix, feature, or module — counts as **done** only when ALL o
 
 1. The work is merged into `dev`, **pushed to `origin/dev`**, and the `deploy` run for that tip is green (the stand runs it).
 2. The change is **completely covered by tests** (regression tests for fixes, integration tests for modules — see Testing policy).
-3. **ALL tests are verified passing** — the tip is promoted to `master` and the full suite is green on its `ci` run, not just the tests you added.
-4. The **Completion verification** checklist below has been executed at completion time — `scripts/verify-done.sh` exits 0 and every judgment angle is backed by evidence.
-5. When the work originated from a GitHub issue, a **100% completion evidence comment** has been posted to that issue and verified visible, as defined below.
+3. The tip is promoted to `master` and the full suite is green on its `ci` run — not just the tests you added.
+4. `bash scripts/verify-done.sh --wait` exits 0 and the judgment checks below are backed by evidence.
+5. When the work originated from a GitHub issue, the completion evidence comment below has been posted.
 
 Until every condition holds, the task is in progress: do not report it as complete and do not close the issue.
 
 ## Completion verification (MANDATORY)
 
-"Looks right" is not done. Before reporting any task complete, verify it from every angle, at completion time (not from stale mid-task results):
+"Looks right" is not done, but the checks are proportionate: the mechanical state is one command, and the judgment checks scale with what the change can break.
 
-1. **Requirements** — re-read the original task/issue and walk it point by point: every requested behavior exists and is tested; nothing was silently narrowed, reinterpreted, or dropped. If scope changed, say so explicitly instead of claiming done.
-2. **Tests prove the change** — for a fix, confirm the regression test actually fails without the fix (revert/stash, watch it fail, restore); for a feature, confirm the integration tests exercise the real wiring, not mocks of it.
-3. **Runtime behavior** — exercise the change for real, not only through tests: call the API route, run the worker, load the page. Capture actual output as evidence.
-4. **Full local gate** — `pnpm turbo run typecheck`, `pnpm exec biome check .`, and the affected packages' tests pass (see Workflow step 3).
-5. **Diff self-review** — read `git diff origin/dev...HEAD` end to end before merging: no debug leftovers, no unrelated or generated files, no scope creep, no secrets.
+1. **Mechanical state** — `bash scripts/verify-done.sh --wait` must exit 0. It proves the working tree is clean, `dev` is pushed, the branch model is intact (`git-guard doctor`), the stand deploy is green for the current `dev` tip, and that tip is promoted to `master` with a green `ci` run **for that exact SHA**. This also covers the typecheck, Biome and full test results — do not re-run them by hand.
+2. **Requirements** — re-read the original task/issue and walk it point by point: every requested behavior exists and is tested; nothing was silently narrowed, reinterpreted, or dropped. If scope changed, say so explicitly instead of claiming done.
+3. **Tests prove the change** — for a fix, confirm the regression test actually fails without the fix (revert the fix, watch it fail, restore it); for a feature, confirm the integration tests exercise the real wiring, not mocks of it.
+4. **Diff self-review** — read `git diff origin/dev...HEAD` end to end before merging: no debug leftovers, no unrelated or generated files, no scope creep, no secrets.
+5. **Runtime behavior — only when the change is observable at runtime** (an API route, a worker, a page, a migration, a script). Exercise it for real and capture the output: call the route, run the worker, load the page. Refactors, test-only, docs-only and CI/config-only changes skip this; say that in the report instead.
 6. **Docs & config** — README/runbooks/`.env.example`/migration notes updated wherever behavior, setup, or operations changed.
-7. **Mechanical state** — run `bash scripts/verify-done.sh`: it must exit 0. It proves the working tree is clean, `dev` is pushed, the branch model is intact (`git-guard doctor`), the stand deploy is green for the current `dev` tip, and that tip is promoted to `master` with a green `ci` run **for that exact SHA** — a green run on an older SHA does not count.
-8. **Evidence in the report** — every claim is backed by fresh command output (test counts, CI run IDs, actual responses). A claim without evidence is unverified; "should work" is not done.
+7. **Evidence in the report** — every claim is backed by command output (test counts, run IDs, actual responses). A claim without evidence is unverified; "should work" is not done.
 
-If any angle cannot be satisfied, the task stays in progress and the blocker must be reported — never report around it.
+If any check cannot be satisfied, the task stays in progress and the blocker must be reported — never report around it.
 
-## GitHub issue completion evidence (MANDATORY)
+## GitHub issue completion evidence (issue-originated work only)
 
-GitHub issue comments are the permanent review record for issue work. Chat summaries, local terminal output, commit messages, and CI status alone do not satisfy this requirement.
+GitHub issue comments are the permanent review record for issue work; chat summaries, terminal output and CI status alone do not satisfy it. After `bash scripts/verify-done.sh --wait` passes, post **one** comment on the originating issue with the heading **`Completion evidence — 100% verified`** using `gh issue comment <number> --repo <owner/repo> ...`; the URL `gh` prints is the proof it was published. Keep it short and link instead of restating — five parts:
 
-After the work is merged and pushed to `dev`, deployed to the stand, promoted to `master` with a green `ci` run, and `bash scripts/verify-done.sh` passes, the integrating agent must post a final comment on the originating issue with the heading **`Completion evidence — 100% verified`**. Post it with `gh issue comment <number> --repo <owner/repo> ...` (or the equivalent GitHub tool), capture the returned comment URL, and re-read the published comment to verify that it is visible and correctly rendered before reporting or closing the issue.
+1. **Requirements** — a checklist mapping each requirement or acceptance criterion to the implementation file and the test that proves it.
+2. **Tests** — the exact commands and their results with counts; for a bug fix, the regression test's red-before / green-after evidence.
+3. **Runtime check** — the scenario exercised, the tool used, and an excerpt of the observed result (or `Not applicable — <why the change is not observable at runtime>`).
+4. **Delivery** — work branch, delivered commit(s), current `dev` SHA, the `deploy` run URL and the `master` `ci` run URL, and `verify-done.sh --wait` passing.
+5. **Limitations** — must say `None` for a 100% claim. If any required check or acceptance criterion was skipped, unavailable or failed, the issue is not 100% complete: post a progress/blocker comment instead and keep it open.
 
-The final comment must contain fresh, reviewable evidence for every item below:
-
-1. **Requirements** — a point-by-point checklist mapping every issue requirement or acceptance criterion to the implementation and its proving test. Include relevant file paths and commit SHAs or links.
-2. **Automated tests** — every exact command run, its result, and useful test counts. For a bug fix, include the regression test's observed red-before / green-after evidence.
-3. **Functionality verification** — the real API, UI, CLI, worker, deployment, or other user-visible scenario exercised; the applicable tool used (for example browser automation, `curl`, a database client, or service logs); and the actual observed result. Include reviewable response excerpts, screenshots, recordings, or artifact/log links when the applicable tool can produce them. “Should work” is not evidence.
-4. **Quality gates** — fresh results for typecheck, Biome, affected/full tests, and any applicable Go, build, migration, security, or platform-specific checks.
-5. **Delivery and CI** — work branch, delivered commit(s), current `dev` SHA, the `deploy` run URL/ID, and the `master` `ci` run URL/ID with every job's conclusion.
-6. **Completion verification** — the command and passing result from `bash scripts/verify-done.sh` for the current `dev` tip.
-7. **Verification provenance** — the agent/model or session identity when available, the tools used for verification, and the verification timestamp.
-8. **Risks, skips, and limitations** — this must say `None` for a 100% completion claim. If any required check, runtime scenario, tool, or acceptance criterion was skipped, unavailable, inconclusive, or failed, the issue is not 100% complete; post a progress/blocker comment instead and keep the issue open.
-
-Do not expose secrets, credentials, private user data, or unredacted sensitive logs in evidence comments. Link safe CI artifacts or include minimal redacted excerpts instead.
-
-The evidence comment must describe the exact code and CI state being delivered. If code changes, tests are rerun, or CI is rerun after the comment is published, update the comment or publish a superseding fresh comment and verify it again. The issue may be closed only after the final evidence comment is visible. If GitHub commenting or comment verification is unavailable, the task remains in progress and the access failure must be reported as a blocker.
+Never expose secrets, credentials or private user data in the comment. If code or CI changes after the comment is published, post a superseding comment before closing the issue. If GitHub commenting is unavailable, the task stays in progress and the access failure is reported as a blocker.
 
 ### Parallel-wave handoff (feature-branch terminal state)
 
@@ -148,7 +141,7 @@ When many tasks run in parallel (one work branch each) and an **orchestrator int
 bash scripts/verify-done.sh --feature      # clean tree, on a work branch, pushed, branched off dev
 ```
 
-The judgment angles above (requirements walked, tests actually run and load-bearing, diff self-review, docs) still apply in full. The orchestrator then merges the branch into `dev`, promotes the tip, and runs the default `scripts/verify-done.sh`.
+The judgment angles above (requirements walked, tests actually run and load-bearing, diff self-review, docs) still apply in full. The orchestrator then merges the branch into `dev`, promotes the tip, and runs the default `scripts/verify-done.sh --wait`.
 
 Every parallel task agent must also post a **`Feature-branch handoff evidence — not yet 100% complete`** comment on its issue before handoff. That comment must include the branch and commit SHA, requirement coverage, exact test and quality-gate results, runtime verification evidence, verification provenance, and every skip or limitation. It must explicitly state that final completion is pending merge to `dev`, the stand deploy, the `master` `ci` run, and the integrating agent's completion verification. The task agent must return the published comment URL to the orchestrator. After integration, the orchestrator is responsible for posting and verifying the final **`Completion evidence — 100% verified`** comment described above; a handoff comment can never substitute for it.
 
@@ -162,7 +155,7 @@ Every parallel task agent must also post a **`Feature-branch handoff evidence �
   git push origin origin/dev:master
   ```
   The push runs the full `ci` workflow on `master`; `branch-guard` goes red if the SHA is not reachable from `dev`. Nothing deploys from `master` yet — production CD from `master` is a later step.
-- Promote when the work on `dev` is complete — implemented, tested, documented, committed, pushed, and deployed to the stand — and watch the `ci` run to completion. A red run is fixed forward on `dev` and promoted again.
+- Promote **right after pushing `dev`**, not after the deploy finishes: the two run concurrently and `bash scripts/verify-done.sh --wait` waits for both. Nothing deploys from `master` yet, so a tip that turns out red on the stand or in `ci` costs a fix-forward commit, not an incident. A red run is fixed forward on `dev` and promoted again.
 
 ## Enforcement harness
 

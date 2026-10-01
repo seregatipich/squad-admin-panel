@@ -61,7 +61,7 @@ Runs in parallel on the staged files:
 
 ### pre-push
 
-`branch-guard` checks the pushed refspecs, then `checklist` runs [`scripts/pre-push-checklist.sh`](../../scripts/pre-push-checklist.sh). A push to `dev` deploys the dev stand without tests, so the checklist is the last check before the stand; the full suite runs in `ci` once the tip is promoted to `master`. It therefore checks only what the branch changed, and runs on every push, the dev→master promotion included:
+`branch-guard` checks the pushed refspecs, then `checklist` runs [`scripts/pre-push-checklist.sh`](../../scripts/pre-push-checklist.sh). A push to `dev` deploys the dev stand without tests, so the checklist is the last check before the stand; the full suite runs in `ci` once the tip is promoted to `master`. It therefore checks only what the branch changed, and runs only for a push that updates `dev`: the lefthook command receives the pushed refspecs on stdin and exits at once when none of them is `refs/heads/dev` (a work-branch push deploys nothing, and the dev→master promotion carries a tip the `dev` push already passed). A manual run, or `FULL=1`, always runs:
 
 1. `git fetch origin dev` — offline, the local `origin/dev` ref is used as is.
 2. `biome check apps packages scripts docker/rnsquadjs`.

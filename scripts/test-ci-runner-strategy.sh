@@ -240,12 +240,14 @@ fi
 test_packages=$(job_block "$ci_workflow" test-packages)
 has_text "$test_packages" "run: pnpm turbo run build --concurrency=4 --filter='./apps/workers/*'" ||
   fail 'test-packages does not build exactly what the worker contract tests start'
-has_text "$test_packages" 'run: bash scripts/ci-test-shard.sh packages' ||
+has_text "$test_packages" 'run: bash scripts/ci-test-shard.sh packages ${{ matrix.shard }} 3' ||
   fail 'test-packages does not run the packages slice'
 has_line "$test_packages" '      PNPM_WORKSPACE_CONCURRENCY: "4"' ||
   fail 'test-packages does not run four packages at a time'
-has_line "$test_packages" '          key: turbo-test-packages-${{ github.sha }}' ||
-  fail 'test-packages does not cache its Turbo build per job and commit'
+has_text "$test_packages" 'shard: [1, 2, 3]' ||
+  fail 'test-packages is not split over three shards'
+has_line "$test_packages" '          key: turbo-test-packages-${{ matrix.shard }}-${{ github.sha }}' ||
+  fail 'test-packages does not cache its Turbo build per shard and commit'
 if has_text "$test_packages" 'upload-artifact'; then
   fail 'test-packages still uploads coverage nobody reads'
 fi

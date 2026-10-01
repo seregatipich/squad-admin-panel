@@ -126,7 +126,7 @@ DATABASE_URL=<...> pnpm --filter @squad/api exec vitest run --coverage
 CI (`ci.yml`, on `master` pushes and dispatches) runs the `test:cov` list through [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh) in three kinds of jobs:
 
 - `test-api` splits the API suite by test file over four VMs (`vitest run --shard=<i>/4`) and `test-web` splits the web suite over two. A shard sees only part of its suite, so it runs with the thresholds switched off and uploads a vitest blob report; the `gate` job merges the blobs with `vitest --merge-reports --coverage`, which enforces the thresholds below on the merged coverage of the whole suite.
-- `test-packages` runs every other package whole under its own thresholds, four at a time, starting the longest suites (`@squad/db`, `worker-log-ingest`, `worker-rcon`) first; one failing package does not stop the others.
+- `test-packages` runs every other package whole under its own thresholds, split over three shards (`bash scripts/ci-test-shard.sh packages <i> 3`): each shard takes every third package of the longest-first order, so each starts with one of `@squad/db`, `worker-log-ingest`, `worker-rcon`; inside a shard four packages run at a time, and one failing package does not stop the others. Unlike api and web, a package is never split, so there is no blob to merge.
 
 No coverage report is uploaded as an artifact. To reproduce one shard locally, run `bash scripts/ci-test-shard.sh api 1 4` with the database variables set; it writes `apps/api/.vitest-reports/blob-1-4.json` (git-ignored), and `pnpm exec vitest run --merge-reports --coverage` inside `apps/api` merges whatever blobs are there.
 

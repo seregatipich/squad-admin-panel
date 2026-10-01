@@ -32,6 +32,24 @@ assert() {
   fi
 }
 
+# Like assert, but runs `verify-done.sh --wait <seconds>` with a 1 s poll.
+assert_wait() {
+  local expected=$1 desc=$2 seconds=$3 out rc got
+  rm -rf "$GH_FLIP_DIR" && mkdir -p "$GH_FLIP_DIR"
+  out=$(cd "$REPO" && VERIFY_DONE_POLL_SECS=1 "$REPO/scripts/verify-done.sh" --wait "$seconds" 2>&1)
+  rc=$?
+  got=pass
+  [ $rc -ne 0 ] && got=fail
+  if [ "$got" = "$expected" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $desc"
+    echo "      expected=$expected got=$got (rc=$rc)"
+    printf '%s\n' "$out" | sed 's/^/      | /'
+  fi
+}
+
 assert_feature() {
   local expected=$1 desc=$2 out rc got
   out=$(cd "$REPO" && "$REPO/scripts/verify-done.sh" --feature 2>&1)
@@ -84,6 +102,14 @@ esac
 case "$mode" in
 green)   printf '[{"headSha":"%s","status":"completed","conclusion":"success","databaseId":111}]\n' "$GH_STUB_SHA" ;;
 red)     printf '[{"headSha":"%s","status":"completed","conclusion":"failure","databaseId":222}]\n' "$GH_STUB_SHA" ;;
+flip)    # in progress on the first poll of this workflow, green afterwards
+  n=$(cat "$GH_FLIP_DIR/$workflow" 2>/dev/null || echo 0)
+  echo $((n + 1)) >"$GH_FLIP_DIR/$workflow"
+  if [ "$n" -eq 0 ]; then
+    printf '[{"headSha":"%s","status":"in_progress","conclusion":null,"databaseId":666}]\n' "$GH_STUB_SHA"
+  else
+    printf '[{"headSha":"%s","status":"completed","conclusion":"success","databaseId":666}]\n' "$GH_STUB_SHA"
+  fi ;;
 running) printf '[{"headSha":"%s","status":"in_progress","conclusion":null,"databaseId":333}]\n' "$GH_STUB_SHA" ;;
 stale)   printf '[{"headSha":"0000000000000000000000000000000000000000","status":"completed","conclusion":"success","databaseId":444}]\n' ;;
 docs)    printf '[{"headSha":"%s","status":"completed","conclusion":"success","databaseId":555}]\n' "$GH_STUB_OLD_SHA" ;;
@@ -92,6 +118,7 @@ esac
 EOF
 chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
+export GH_FLIP_DIR="$TMP/flip"
 
 ORIGIN="$TMP/origin.git"
 REPO="$TMP/repo"
@@ -171,6 +198,15 @@ git push -q origin dev dev:master
 export GH_STUB_SHA=$(git rev-parse origin/dev)
 
 assert pass "back to a fully done state"
+
+# --wait polls runs that are still in progress instead of failing on them.
+GH_DEPLOY_MODE=flip GH_CI_MODE=flip assert_wait pass "--wait: deploy and ci finish while polling" 10
+GH_DEPLOY_MODE=running GH_CI_MODE=green assert_wait fail "--wait: a deploy that never finishes times out" 2
+GH_DEPLOY_MODE=green GH_CI_MODE=running assert_wait fail "--wait: a ci run that never finishes times out" 2
+GH_DEPLOY_MODE=green GH_CI_MODE=empty assert_wait fail "--wait: a ci run that never appears times out" 2
+GH_DEPLOY_MODE=green GH_CI_MODE=red assert_wait fail "--wait: a red ci run still fails" 10
+rm -rf "$GH_FLIP_DIR" && mkdir -p "$GH_FLIP_DIR"
+GH_DEPLOY_MODE=flip GH_CI_MODE=flip assert fail "without --wait a run in progress still fails"
 
 # --- --feature (parallel-wave handoff) mode --------------------------------
 # On dev, --feature must FAIL (dev is not a work branch).
