@@ -11,6 +11,7 @@ import {
   Skeleton,
   TextInput,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 /**
  * DISCORD-6 (#153): pick the Discord voice/text channel the worker renames to
@@ -49,19 +50,18 @@ export default function DiscordStatusChannelsSection() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/integrations/discord/status-channels', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
-      }
+      const res = await apiResult<{ items: StatusChannelRow[] }>(
+        '/api/v1/integrations/discord/status-channels',
+      );
       if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
         setError('Не удалось загрузить статус-каналы.');
         return;
       }
-      const body = (await res.json()) as { items: StatusChannelRow[] };
+      const body = res.data;
       setRows(body.items);
       setDrafts(Object.fromEntries(body.items.map((i) => [i.server_id, i.channel_id ?? ''])));
     } catch {
@@ -79,14 +79,9 @@ export default function DiscordStatusChannelsSection() {
     setError(null);
     setSaved(null);
     try {
-      const res = await fetch(
+      const res = await apiResult<unknown>(
         `/api/v1/integrations/discord/servers/${row.server_id}/status-channel`,
-        {
-          method: 'PUT',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ channel_id: raw === '' ? null : raw }),
-        },
+        { method: 'PUT', json: { channel_id: raw === '' ? null : raw }, discardBody: true },
       );
       if (!res.ok) {
         setError(`Не удалось сохранить статус-канал для ${row.display_name}.`);

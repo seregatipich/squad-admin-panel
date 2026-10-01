@@ -17,6 +17,7 @@ import {
   PageHeader,
   TextInput,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 
 interface GeoipSettings {
   account_id: string | null;
@@ -30,12 +31,13 @@ interface GeoipSettings {
 
 type Banner = { kind: 'ok' | 'err'; text: string } | null;
 
-async function readJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
+/** Banner text for a failed call: the HTTP status plus the API's `error` code. */
+function describeFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    const body = error.jsonBody<Record<string, unknown>>() ?? {};
+    return `HTTP ${error.status}: ${body.error ?? 'unknown'}`;
   }
-  return (await res.json()) as T;
+  return (error as Error).message;
 }
 
 export default function GeoipIntegrationPage() {
@@ -50,15 +52,13 @@ export default function GeoipIntegrationPage() {
 
   const reload = useCallback(async () => {
     try {
-      const data = await readJson<GeoipSettings>(
-        await fetch('/api/v1/integrations/geoip', { credentials: 'include', cache: 'no-store' }),
-      );
+      const data = await apiFetch<GeoipSettings>('/api/v1/integrations/geoip');
       setSettings(data);
       setAccountId(data.account_id ?? '');
       setEnabled(data.enabled);
       setErr(null);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeFailure(e));
     }
   }, []);
 
@@ -72,19 +72,12 @@ export default function GeoipIntegrationPage() {
     try {
       const payload: Record<string, unknown> = { account_id: accountId.trim() || null, enabled };
       if (licenseKey.trim().length > 0) payload.license_key = licenseKey.trim();
-      await readJson<GeoipSettings>(
-        await fetch('/api/v1/integrations/geoip', {
-          method: 'PUT',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        }),
-      );
+      await apiSend('/api/v1/integrations/geoip', { method: 'PUT', json: payload });
       setLicenseKey('');
       await reload();
       setBanner({ kind: 'ok', text: 'Сохранено.' });
     } catch (e) {
-      setBanner({ kind: 'err', text: (e as Error).message });
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setSaving(false);
     }
@@ -94,19 +87,15 @@ export default function GeoipIntegrationPage() {
     setSaving(true);
     setBanner(null);
     try {
-      await readJson<GeoipSettings>(
-        await fetch('/api/v1/integrations/geoip', {
-          method: 'PUT',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ license_key: null, enabled: false }),
-        }),
-      );
+      await apiSend('/api/v1/integrations/geoip', {
+        method: 'PUT',
+        json: { license_key: null, enabled: false },
+      });
       setLicenseKey('');
       await reload();
       setBanner({ kind: 'ok', text: 'Ключ удалён.' });
     } catch (e) {
-      setBanner({ kind: 'err', text: (e as Error).message });
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setSaving(false);
       setClearing(false);
