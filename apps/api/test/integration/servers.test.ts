@@ -99,7 +99,6 @@ beforeEach(async () => {
     .update(players)
     .set({ roleId: ownerRoleId })
     .where(eq(players.steamId64, OWNER_STEAM_ID));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/server', () => {
+  // biome-ignore lint/complexity/noStaticOnlyClass: mirrors the static-only API of NextResponse
   class MockNextResponse {
     static redirect(url: URL) {
       return { type: 'redirect', url: url.toString() };

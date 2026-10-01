@@ -72,7 +72,6 @@ describeIfDb('layers API (ROT-1)', () => {
       seedOwner: { steamId64: OWNER_STEAM_ID },
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
 
     const rows = [

@@ -80,7 +80,6 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 

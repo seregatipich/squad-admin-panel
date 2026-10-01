@@ -281,7 +281,6 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
       .update(players)
       .set({ roleId: harnessOwnerRoleId })
       .where(eq(players.steamId64, OWNER_STEAM));
-    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
     invalidatePermissionCache(h.seed.ownerPlayerId!);
   });
 
@@ -370,7 +369,6 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
   });
 
   beforeEach(() => {
-    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
     invalidatePermissionCache(h.seed.ownerPlayerId!);
   });
 

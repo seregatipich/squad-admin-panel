@@ -155,7 +155,6 @@ describe('RotationPage', () => {
     await screen.findByText('Custom_Layer_v9');
 
     const downButtons = screen.getAllByRole('button', { name: 'Переместить вниз' });
-    // biome-ignore lint/style/noNonNullAssertion: first row's down button always exists here
     downButtons[0]!.click();
 
     const saveButton = await screen.findByRole('button', { name: /Сохранить/ });

@@ -29,7 +29,7 @@ The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](../../script
 By default the checklist runs, in order:
 
 1. `git fetch origin dev` (offline, the local `origin/dev` ref is used as is). "Changed" below is measured from the merge base with `origin/dev`, like `git diff origin/dev...`, so commits that landed on `dev` after the branch forked never count as this branch's changes.
-2. `biome check` over the source tree — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail it.
+2. `biome check` over the source tree — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. Warnings fail it too (`--error-on-warnings`), so the tree must stay at zero Biome warnings.
 3. gitleaks secret scan of `origin/dev..HEAD` (only if `gitleaks` is installed).
 4. `turbo run typecheck` for the changed packages and their dependents.
 5. Tests of the changed packages only, not their dependents; in `apps/api`, only the test files the diff touches. Suites that read `DATABASE_URL` or `REDIS_URL` run against `DATABASE_URL` or a database provisioned for the worktree, and are skipped with a warning when neither is available.

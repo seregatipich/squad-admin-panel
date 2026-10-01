@@ -780,7 +780,6 @@ describeIfDb('can_manage_ban_sources is only effective with panel_access', () =>
       .from(players)
       .where(eq(players.steamId64, noPanelSteam))
       .limit(1);
-    // biome-ignore lint/style/noNonNullAssertion: player was just inserted
     const ctx = await loadUserPermissions(h.db, row!.id);
     expect(ctx.panelAccess).toBe(false);
     expect(ctx.canManageBanSources).toBe(false);

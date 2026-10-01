@@ -5,7 +5,7 @@ pre-commit:
       run: bash scripts/git-guard.sh check-commit
     biome-check:
       glob: "*.{ts,tsx,js,jsx,json,css}"
-      run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      run: pnpm exec biome check --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
     go-fmt:
       # `gofmt -l` lists unformatted files but exits 0 either way, so the list
       # itself must fail the hook. The bridge only builds for Linux, so vet

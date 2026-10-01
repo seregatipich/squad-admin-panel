@@ -57,12 +57,7 @@ async function asRole(flags: { panelAccess: boolean; canEditRoles: boolean }): P
     panelAccess: flags.panelAccess,
     canEditRoles: flags.canEditRoles,
   });
-  await h.db
-    .update(players)
-    .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded in beforeAll
-    .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }

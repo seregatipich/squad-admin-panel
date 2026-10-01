@@ -199,7 +199,6 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   }
 
   return (
-    // biome-ignore lint/correctness/useUniqueElementIds: идентификатор — цель ссылки /all-players/{id}#notes из уведомлений, сгенерированный useId() её бы сломал
     <section id="notes" className="scroll-mt-6">
       <Card padding="none">
         <CardHeader title="Заметки" count={total} />

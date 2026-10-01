@@ -132,7 +132,6 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
 
     serverId = await seedServer(h.db, 'Teamkill Alpha');

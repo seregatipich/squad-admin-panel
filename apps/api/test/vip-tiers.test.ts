@@ -89,7 +89,6 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
     tierRoleId = await seedRole(h.db);
   });

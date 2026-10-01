@@ -22,7 +22,6 @@ afterAll(async () => {
 }, 60_000);
 
 async function tokenHeader(scopes: string[]): Promise<string> {
-  // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
   const ownerId = h.seed.ownerPlayerId!;
   const minted = mintApiToken();
   await h.db.insert(playerApiTokens).values({

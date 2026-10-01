@@ -341,7 +341,6 @@ describeIfDb('issues API — filters, search, pagination (AC2)', () => {
       seedOwner: { steamId64: 76561198000089000n },
       bridge: makeFakeBridge(),
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 

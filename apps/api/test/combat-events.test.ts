@@ -118,7 +118,6 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     ownerCookie = await loginAs(h, h.seed.ownerPlayerId!);
 
     serverA = await seedServer(h.db, 'Alpha');

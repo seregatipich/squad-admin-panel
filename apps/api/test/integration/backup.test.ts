@@ -139,7 +139,6 @@ describe('GET /api/v1/host/backups', () => {
 
   it('coerces a non-Error bridge failure into the detail string', async () => {
     h.bridge.backupSnapshots = async () => {
-      // biome-ignore lint/style/useThrowOnlyError: exercises the String(err) fallback branch
       throw 'raw string failure';
     };
     const cookie = await loginAsOwner(h);
@@ -237,7 +236,6 @@ describe('POST /api/v1/host/backups', () => {
 
   it('coerces a non-Error backup failure into the detail string', async () => {
     h.bridge.backupRun = async () => {
-      // biome-ignore lint/style/useThrowOnlyError: exercises the String(err) fallback branch
       throw 'raw run failure';
     };
     const cookie = await loginAsOwner(h);
@@ -379,7 +377,6 @@ describe('POST /api/v1/host/backups/:id/restore', () => {
 
   it('coerces a non-Error restore failure into the detail string', async () => {
     h.bridge.backupRestore = async () => {
-      // biome-ignore lint/style/useThrowOnlyError: exercises the String(err) fallback branch
       throw 'raw restore failure';
     };
     const cookie = await loginAsOwner(h);

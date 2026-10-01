@@ -140,7 +140,6 @@ describeIfDb('player match summary API (MATCH-7)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 

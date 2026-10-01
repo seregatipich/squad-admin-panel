@@ -104,27 +104,33 @@ export default function ServersPage() {
   const [actingId, setActingId] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
 
-  const onStatus = useCallback((event: { data: { server_id: string; status: string } }) => {
-    setData((prev) => {
-      if (!prev) return prev;
-      const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
-      if (idx < 0) return prev;
-      const items = prev.items.map((server, index) =>
-        index === idx ? { ...server, status: event.data.status } : server,
-      );
-      return { ...prev, items };
-    });
-  }, []);
+  const onStatus = useCallback(
+    (event: { data: { server_id: string; status: string } }) => {
+      setData((prev) => {
+        if (!prev) return prev;
+        const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
+        if (idx < 0) return prev;
+        const items = prev.items.map((server, index) =>
+          index === idx ? { ...server, status: event.data.status } : server,
+        );
+        return { ...prev, items };
+      });
+    },
+    [setData],
+  );
   useLiveSubscription('server.status', onStatus);
 
-  const onDeleted = useCallback((event: { data: { server_id: string } }) => {
-    setData((prev) => {
-      if (!prev) return prev;
-      const items = prev.items.filter((s) => s.id !== event.data.server_id);
-      if (items.length === prev.items.length) return prev;
-      return { items, total: items.length };
-    });
-  }, []);
+  const onDeleted = useCallback(
+    (event: { data: { server_id: string } }) => {
+      setData((prev) => {
+        if (!prev) return prev;
+        const items = prev.items.filter((s) => s.id !== event.data.server_id);
+        if (items.length === prev.items.length) return prev;
+        return { items, total: items.length };
+      });
+    },
+    [setData],
+  );
   useLiveSubscription('server.deleted', onDeleted);
 
   const onRcon = useCallback(
@@ -146,7 +152,7 @@ export default function ServersPage() {
         return { ...prev, items };
       });
     },
-    [],
+    [setData],
   );
   useLiveSubscription('rcon.status', onRcon);
 
@@ -182,7 +188,7 @@ export default function ServersPage() {
         return { ...prev, items };
       });
     },
-    [],
+    [setData],
   );
   useLiveSubscription('server.seeding', onSeeding);
 

@@ -64,7 +64,6 @@ beforeAll(async () => {
   await h.db
     .insert(playerIpHistory)
     .values({
-      // biome-ignore lint/style/noNonNullAssertion: seeded above in this same beforeAll
       playerId: targetRow!.id,
       ip: '203.0.113.42',
       countryCode: 'FR',
@@ -340,7 +339,6 @@ describeIfDb('ALT-8 (#126): can_view_ips role flag gating player:view_ips', () =
       .from(players)
       .where(eq(players.steamId64, TARGET))
       .limit(1);
-    // biome-ignore lint/style/noNonNullAssertion: seeded in the top-level beforeAll
     targetPlayerId = target!.id;
   });
 

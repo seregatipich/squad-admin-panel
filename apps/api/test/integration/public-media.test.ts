@@ -137,7 +137,6 @@ beforeEach(async () => {
   // request shares; reset it so one test's uploads never starve the next.
   const keys = await h.redis.keys(`${PUBLIC_MEDIA_RATE_LIMIT_PREFIX}*`);
   if (keys.length > 0) await h.redis.del(...keys);
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 

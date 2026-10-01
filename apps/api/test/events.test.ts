@@ -151,7 +151,6 @@ describeIfDb('events API (EVT-2)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 
@@ -748,7 +747,6 @@ describeIfDb('events API (EVT-2)', () => {
     });
 
     it('rejects an API token whose scopes lack events:view on every events route', async () => {
-      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
       const authorization = await tokenHeader(h.seed.ownerPlayerId!, ['host:view']);
       for (const url of [
         '/api/v1/events',
@@ -796,7 +794,6 @@ describeIfDb('events API (EVT-2)', () => {
       expect(hidden.body).toContain('IpCarrier');
       expect(hidden.body).not.toContain(PLAYER_IP);
 
-      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
       const serverViewToken = await tokenHeader(h.seed.ownerPlayerId!, ['server:view']);
       const narrow = await h.app.inject({
         method: 'GET',
@@ -818,7 +815,6 @@ describeIfDb('events API (EVT-2)', () => {
     });
 
     it('lets an events:view token read the journal but redacts IPs unless it also holds player:view_ips', async () => {
-      // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
       const ownerId = h.seed.ownerPlayerId!;
       const eventsOnly = await tokenHeader(ownerId, ['events:view']);
       const narrow = await fetchEnvelope({ authorization: eventsOnly });

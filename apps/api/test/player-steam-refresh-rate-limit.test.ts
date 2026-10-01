@@ -44,7 +44,6 @@ describe('POST /api/v1/players/:playerId/steam-refresh rate limit (#242)', () =>
   it('answers 429 once one user exceeds the per-minute budget, independently per user', async () => {
     app = await buildApp();
     const refresh = (player: string) =>
-      // biome-ignore lint/style/noNonNullAssertion: built above
       app!.inject({
         method: 'POST',
         url: `/api/v1/players/${uuidv7()}/steam-refresh`,

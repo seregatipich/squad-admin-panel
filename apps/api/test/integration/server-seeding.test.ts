@@ -107,12 +107,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
       await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: key });
     }
   });
-  await h.db
-    .update(players)
-    .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded above
-    .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded above
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }

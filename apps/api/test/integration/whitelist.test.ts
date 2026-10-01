@@ -87,7 +87,6 @@ beforeAll(async () => {
     .from(roles)
     .where(eq(roles.name, 'Owner'))
     .limit(1);
-  // biome-ignore lint/style/noNonNullAssertion: seeded by migration 0009
   ownerRoleId = ownerRoleRow!.id;
 
   whitelistRoleId = await createRole({ name: 'WlWhitelisted', panelAccess: false });

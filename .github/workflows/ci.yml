@@ -86,7 +86,7 @@ jobs:
           path: .turbo/cache
           key: turbo-lint-${{ github.sha }}
           restore-keys: turbo-lint-
-      - run: pnpm exec biome check .
+      - run: pnpm exec biome check . --error-on-warnings
       - name: Check every vitest package is in test:cov
         run: bash scripts/test-cov-complete.sh
       - name: Run solve-issues runner tests

@@ -121,7 +121,6 @@ describeIfDb('player coplay API (ALT-3)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 

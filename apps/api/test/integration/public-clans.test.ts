@@ -53,7 +53,6 @@ beforeAll(async () => {
   await h.db.insert(clanMembers).values([
     {
       clanId: PUBLIC_CLAN_ID,
-      // biome-ignore lint/style/noNonNullAssertion: the harness seeds the owner above
       playerId: h.seed.ownerPlayerId!,
       memberRole: 'leader',
     },
@@ -80,7 +79,6 @@ beforeAll(async () => {
     },
     {
       matchId: MATCH_ID,
-      // biome-ignore lint/style/noNonNullAssertion: the harness seeds the owner above
       playerId: h.seed.ownerPlayerId!,
       joinedAt: new Date('2026-07-10T10:00:00Z'),
       leftAt: new Date('2026-07-10T11:00:00Z'),

@@ -46,6 +46,7 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'setup_already_completed' };
       }
 
+      // biome-ignore lint/style/noNonNullAssertion: config.permissions rejects the request before the handler when there is no user
       if (!req.user!.permissions.isOwner) {
         reply.code(403);
         return { error: 'only_owner_can_complete_setup' };

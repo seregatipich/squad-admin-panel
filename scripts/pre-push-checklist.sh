@@ -263,7 +263,7 @@ run_changed() {
 
 run_full() {
   run_step "typecheck" pnpm turbo run typecheck
-  run_step "biome" pnpm exec biome check .
+  run_step "biome" pnpm exec biome check . --error-on-warnings
   if [ "${SKIP_BUILD:-0}" = "1" ]; then
     skip_step "build" "SKIP_BUILD=1"
   else
@@ -289,7 +289,7 @@ git fetch -q origin dev || warn "could not fetch origin dev — comparing agains
 if [ "${FULL:-0}" = "1" ]; then
   run_full
 else
-  run_step "biome" pnpm exec biome check apps packages scripts docker/rnsquadjs
+  run_step "biome" pnpm exec biome check apps packages scripts docker/rnsquadjs --error-on-warnings
   scan_secrets
   run_changed
 fi

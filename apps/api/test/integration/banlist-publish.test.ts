@@ -98,7 +98,6 @@ async function seedBanTarget(steamId64: bigint | null, eosId: string | null): Pr
       canonicalNameNormalized: stub.toLowerCase(),
     })
     .returning({ id: players.id });
-  // biome-ignore lint/style/noNonNullAssertion: row was just inserted
   return inserted[0]!.id;
 }
 
@@ -298,7 +297,6 @@ describeIfDb('GET /api/v1/public/banlist payload', () => {
     for (const line of lines) {
       const match = SQUAD_BANS_CFG_LINE_PATTERN.exec(line);
       expect(match?.groups).toBeTruthy();
-      // biome-ignore lint/style/noNonNullAssertion: asserted above
       bySteamId.set(match!.groups!.steamId as string, match!.groups);
     }
 
@@ -491,7 +489,6 @@ describeIfDb('GET /api/v1/public/banlist payload', () => {
       .from(players)
       .where(eq(players.steamId64, steamId64))
       .limit(1);
-    // biome-ignore lint/style/noNonNullAssertion: seeded above
     return row!.id;
   }
 

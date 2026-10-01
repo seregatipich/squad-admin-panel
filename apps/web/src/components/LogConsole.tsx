@@ -97,6 +97,7 @@ export function LogConsole({
   // at the bottom, snap to the new bottom before the browser paints. When the
   // user has scrolled up, leave the viewport alone — new lines land below the
   // fold and the "↓ к последней" pill shows up.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `lines` is the trigger, the effect only reads refs
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = scrollerRef.current;

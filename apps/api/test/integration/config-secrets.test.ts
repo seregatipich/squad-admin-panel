@@ -195,7 +195,6 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
     const id = await createRconServer();
     setDisk(id, 'Rcon.cfg', rconCfg(RCON_SECRET));
     const minted = mintApiToken();
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     const ownerId = h.seed.ownerPlayerId!;
     await h.db.insert(playerApiTokens).values({
       id: minted.id,
@@ -223,7 +222,6 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
     expect(stored).toHaveLength(2);
     for (const content of stored) expect(content).not.toContain(RCON_SECRET);
 
-    // biome-ignore lint/style/noNonNullAssertion: a non-deduped PUT returns version_id
     for (const body of await historyReads(id, 'Rcon.cfg', first.version_id!, second.version_id!)) {
       expect(body).not.toContain(RCON_SECRET);
     }
@@ -316,7 +314,6 @@ describeIfDb('Rcon.cfg password masking (#10)', () => {
     setDisk(id, 'Rcon.cfg', legacyContent);
     const next = await putConfig(id, 'Rcon.cfg', rconCfg(MASK, 9));
 
-    // biome-ignore lint/style/noNonNullAssertion: insert().returning() yields the row
     for (const body of await historyReads(id, 'Rcon.cfg', legacy!.id, next.version_id!)) {
       expect(body).not.toContain(RCON_SECRET);
     }

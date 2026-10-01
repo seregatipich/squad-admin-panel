@@ -12,7 +12,7 @@
     "dev": "node scripts/dev-app.mjs",
     "dev:app": "node scripts/dev-app.mjs",
     "dev:all": "turbo run dev --parallel",
-    "lint": "biome check .",
+    "lint": "biome check . --error-on-warnings",
     "lint:fix": "biome check --write .",
     "mint:owner-session": "pnpm --filter @squad/api mint:owner-session",
     "format": "biome format --write .",

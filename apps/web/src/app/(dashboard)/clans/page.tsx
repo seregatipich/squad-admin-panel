@@ -115,6 +115,7 @@ export default function ClansPage() {
   }, [servers]);
 
   // Смена запроса или сортировки возвращает на первую страницу.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: q, sort and order are the triggers, not values read in the effect
   useEffect(() => {
     setPage(1);
   }, [q, sort, order]);

@@ -66,7 +66,6 @@ beforeEach(async () => {
   for (const id of createdRoleIds.splice(0)) {
     await h.db.delete(roles).where(eq(roles.id, id));
   }
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
 });
 
@@ -130,12 +129,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
       await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: key });
     }
   });
-  await h.db
-    .update(players)
-    .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded above
-    .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded above
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
@@ -150,12 +144,7 @@ async function asRoleWithoutPanelAccess(): Promise<string> {
     isSystemRole: false,
     panelAccess: false,
   });
-  await h.db
-    .update(players)
-    .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner steam id seeded above
-    .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner player seeded above
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
@@ -308,7 +297,6 @@ describe('PUT /api/v1/servers/:id/rotation', () => {
 
     const written = readRotationFile(serverId);
     expect(written).toBeDefined();
-    // biome-ignore lint/style/noNonNullAssertion: asserted defined above
     const content = written!;
     expect(content.startsWith(`${HEADER}${MANUAL_LINE}`)).toBe(true);
     const segmentStart = content.indexOf('//SQUAD-PANEL BEGIN');

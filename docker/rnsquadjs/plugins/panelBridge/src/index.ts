@@ -7,6 +7,7 @@ import { type Mode, type RconStatus, RedisPublisher } from './redisPublisher';
 export interface PanelBridgeContext {
   serverId: string;
   emitter: EventEmitter;
+  // biome-ignore lint/suspicious/noConfusingVoidType: the host's subscribe functions may return nothing, and `undefined` would reject them
   onStatus: (cb: (state: 'connected' | 'disconnected') => void) => (() => void) | void;
   /**
    * Looks up an online player in RNSquadJS's `state.players` by lower-case

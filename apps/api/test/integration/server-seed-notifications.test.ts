@@ -52,7 +52,6 @@ beforeEach(async () => {
     .update(players)
     .set({ roleId: ownerRoleId })
     .where(eq(players.steamId64, OWNER_STEAM_ID));
-  // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   serverId = uuidv7();
   await h.db.insert(servers).values({
@@ -84,12 +83,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
       await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: key });
     }
   });
-  await h.db
-    .update(players)
-    .set({ roleId })
-    // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
-    .where(eq(players.steamId64, h.seed.ownerSteamId64!));
-  // biome-ignore lint/style/noNonNullAssertion: owner is seeded in beforeAll
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }

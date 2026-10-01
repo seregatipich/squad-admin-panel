@@ -186,7 +186,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         prev ? { ...prev, server: { ...prev.server, status: event.data.status } } : prev,
       );
     },
-    [id],
+    [id, setData],
   );
   useLiveSubscription('server.status', onLiveStatus);
 

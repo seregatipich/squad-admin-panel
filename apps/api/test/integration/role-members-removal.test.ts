@@ -90,7 +90,6 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       await h.db.delete(roles).where(eq(roles.id, id));
     }
     invalidatePermissionCache(memberId);
-    // biome-ignore lint/style/noNonNullAssertion: owner player seeded in beforeAll
     invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     serverId = uuidv7();

@@ -42,7 +42,7 @@ All `recommended` rules are enabled, plus:
 | `style/useTemplate` | error | String concatenation with `+` is replaced by template literals. |
 | `style/useImportType` | error | Type-only imports use `import type`. |
 | `suspicious/noExplicitAny` | error | `any` is forbidden. Use `unknown` + type guard, or a specific type. |
-| `style/noNonNullAssertion` | warn | `!` postfix operator is a warning. Prefer a null check or type assertion with a comment. |
+| `style/noNonNullAssertion` | warn (off in test files) | `!` postfix operator. Prefer a null check; where the guarantee comes from elsewhere, add a `biome-ignore` with the reason. Warnings fail every Biome run (`--error-on-warnings`: the hook, the pre-push checklist and `ci`), so none may remain. |
 | `correctness/useExhaustiveDependencies` | warn | React hook dependency arrays must be exhaustive. |
 
 ## TypeScript

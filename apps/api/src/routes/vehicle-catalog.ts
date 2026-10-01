@@ -78,6 +78,7 @@ const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       // config.permissions above already requires req.user to be present.
+      // biome-ignore lint/style/noNonNullAssertion: guaranteed by config.permissions above
       const actorId = req.user!.playerId;
 
       const { assetId } = req.params;

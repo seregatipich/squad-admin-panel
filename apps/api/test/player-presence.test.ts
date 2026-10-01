@@ -107,7 +107,6 @@ describeIfDb('player presence API (PRES-4)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 
@@ -375,7 +374,6 @@ describeIfDb('player daily presence API (PRES-3)', () => {
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 
@@ -574,7 +572,6 @@ describeIfDb('player presence API — audit #71 input validation and permission 
       bridge: makeFakeBridge(),
       reusePublicSchema: true,
     });
-    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
     cookie = await loginAs(h, h.seed.ownerPlayerId!);
   });
 

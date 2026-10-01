@@ -132,7 +132,6 @@ describe('close before connect emits no disconnected event', () => {
     const reasons: string[] = [];
     client.on('disconnected', (r) => reasons.push(r));
     await client.connect();
-    // biome-ignore lint/complexity/useLiteralKeys: reaching into private state.
     const sock = (client as unknown as { socket?: import('node:net').Socket }).socket;
     // synthesise an "error" event before any successful ping — wasConnected is still false
     sock?.emit('error', new Error('pre-connected-error'));
@@ -337,7 +336,6 @@ describe('socket.write callback error path', () => {
     (client as unknown as { onLog: (m: string, meta?: unknown) => void }).onLog = onLog;
     const atomicWritePromise = client.fileAtomicWrite({ path: '/x', content: 'y' }).catch((e) => e);
     await new Promise((r) => setTimeout(r, 30));
-    // biome-ignore lint/complexity/useLiteralKeys: reaching into private pending map.
     const pending = (
       client as unknown as { pending: Map<string, { reject: (e: unknown) => void }> }
     ).pending;
@@ -367,7 +365,6 @@ describe('socket.write callback error path', () => {
     });
     const client = new BridgeClient({ socketPath });
     await client.connect();
-    // biome-ignore lint/complexity/useLiteralKeys: reaching into private state for branch coverage.
     const sock = (client as unknown as { socket?: Socket }).socket as Socket;
     const realWrite = sock.write.bind(sock);
     let firstWrite = true;
@@ -528,7 +525,6 @@ describe('socket "error" after a successful connect emits disconnected("socket-e
     // client's socket is the symmetric peer so it raises 'error' too via
     // 'close' — but to definitively trip the 'error' branch we emit on
     // the client's underlying socket directly.
-    // biome-ignore lint/complexity/useLiteralKeys: reaching into private state intentionally for branch coverage.
     const clientSock = (client as unknown as { socket?: Socket }).socket;
     expect(clientSock).toBeDefined();
     clientSock?.emit('error', new Error('synthetic-rst'));
