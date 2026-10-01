@@ -22,6 +22,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { formatDateTimeRu } from '@/lib/format';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
@@ -74,10 +75,9 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
   }, [applied]);
 
   useEffect(() => {
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { items?: ServerOption[] } | null) => {
-        if (body?.items) setServers(body.items);
+    apiFetch<{ items?: ServerOption[] }>('/api/v1/servers')
+      .then((body) => {
+        if (body.items) setServers(body.items);
       })
       .catch(() => {});
   }, []);
@@ -93,19 +93,17 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
       setLoading(true);
       setError(null);
       try {
-        const listRes = await fetch(`/api/v1/chat/messages${buildChatQuery(playerId, next)}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
-        const page = parseChatPage(await listRes.json());
+        const body = await apiFetch<unknown>(
+          `/api/v1/chat/messages${buildChatQuery(playerId, next)}`,
+        );
+        const page = parseChatPage(body);
         if (requestIdRef.current !== requestId) return;
         if (!page) throw new Error('Неожиданный формат ответа сервера.');
         setMessages(mergeChatPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
         if (requestIdRef.current !== requestId) return;
-        setError((e as Error).message);
+        setError(describeHttpError(e));
       } finally {
         if (requestIdRef.current === requestId) setLoading(false);
       }
@@ -124,12 +122,8 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
   // player. Live chat events keep it current after that (onLiveMessage).
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: unknown) => {
+    apiFetch<unknown>(`/api/v1/chat/messages/count${thirtyDayCountQuery(playerId)}`)
+      .then((body) => {
         const count = parseChatCount(body);
         if (!cancelled && count !== null) setMonthlyCount(count);
       })
@@ -144,19 +138,17 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
     const requestId = ++requestIdRef.current;
     setBusy(true);
     try {
-      const res = await fetch(
+      const body = await apiFetch<unknown>(
         `/api/v1/chat/messages${buildChatQuery(playerId, applied, nextCursor)}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const page = parseChatPage(await res.json());
+      const page = parseChatPage(body);
       if (requestIdRef.current !== requestId) return;
       if (!page) throw new Error('Неожиданный формат ответа сервера.');
       setMessages((prev) => mergeChatPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
       if (requestIdRef.current !== requestId) return;
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       if (requestIdRef.current === requestId) setBusy(false);
     }

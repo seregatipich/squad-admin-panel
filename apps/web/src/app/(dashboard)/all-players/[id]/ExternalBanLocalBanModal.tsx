@@ -10,6 +10,7 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 
 interface ServerSummary {
   id: string;
@@ -97,11 +98,7 @@ export function ExternalBanLocalBanModal({
     setError(null);
     setLoadingServers(true);
 
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as ServersResponse;
-      })
+    apiFetch<ServersResponse>('/api/v1/servers')
       .then((body) => {
         if (cancelled) return;
         // No server is preselected (#442): AdminBan is destructive, and the
@@ -111,7 +108,7 @@ export function ExternalBanLocalBanModal({
         setServers(body.items);
       })
       .catch((cause: unknown) => {
-        if (!cancelled) setError(`Не удалось загрузить серверы: ${(cause as Error).message}`);
+        if (!cancelled) setError(`Не удалось загрузить серверы: ${describeHttpError(cause)}`);
       })
       .finally(() => {
         if (!cancelled) setLoadingServers(false);
@@ -130,30 +127,26 @@ export function ExternalBanLocalBanModal({
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch(
+      const response = await apiResult<void>(
         `/api/v1/players/${playerId}/external-bans/${target.id}/local-ban`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+          json: {
             server_id: serverId,
             reason: reason.trim(),
             ban_length: banLength.trim() || '0',
-          }),
+          },
+          discardBody: true,
         },
       );
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-          message?: string;
-        } | null;
-        throw new Error(describeLocalBanError(response.status, body));
+        const body = response.error.jsonBody<{ error?: string; message?: string }>();
+        throw new Error(describeLocalBanError(response.error.status, body));
       }
       const serverName = servers.find((server) => server.id === serverId)?.display_name ?? serverId;
       onBanned(serverName);
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(describeHttpError(cause));
     } finally {
       setSubmitting(false);
     }

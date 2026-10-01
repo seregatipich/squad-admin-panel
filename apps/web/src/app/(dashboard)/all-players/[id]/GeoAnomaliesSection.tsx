@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, DateTime, InlineBanner, Skeleton, StatusBadge } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { CHART_FRAME, CHART_GRID, CHART_SURFACE } from '@/lib/chart-tokens';
 import { flagEmoji } from './geo';
 
@@ -132,16 +133,12 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/geo-anomalies`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: GeoAnomalies) => {
+    apiFetch<GeoAnomalies>(`/api/v1/players/${playerId}/geo-anomalies`)
+      .then((body) => {
         if (!cancelled) setData(body);
       })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

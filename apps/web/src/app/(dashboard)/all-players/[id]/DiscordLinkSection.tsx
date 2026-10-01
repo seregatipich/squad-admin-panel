@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-
 import { Button, Card, CardBody, CardHeader, InlineBanner, Skeleton } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiResult, describeHttpError } from '@/lib/api';
 import {
   buildDiscordLinkUrl,
   buildForceUnlinkUrl,
@@ -62,14 +62,14 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
     setHidden(false);
     setError(null);
     setForceForbidden(false);
-    fetch(buildDiscordLinkUrl(playerId), { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<unknown>(buildDiscordLinkUrl(playerId))
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        throw res.error;
       })
       .then((body) => {
         if (cancelled || !body) return;
@@ -78,7 +78,7 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
         setData(parsed);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -99,22 +99,24 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
     setBusy(true);
     setActionError(null);
     try {
-      const res = await fetch(attempt.url, { method: 'DELETE', credentials: 'include' });
-      if (res.status === 403) {
-        if (attempt.isForce) {
-          setForceForbidden(true);
+      const res = await apiResult<void>(attempt.url, { method: 'DELETE', discardBody: true });
+      if (!res.ok) {
+        if (res.error.status === 403) {
+          if (attempt.isForce) {
+            setForceForbidden(true);
+            return;
+          }
+          setActionError({ message: 'Недостаточно прав для отвязки.', attempt });
           return;
         }
-        setActionError({ message: 'Недостаточно прав для отвязки.', attempt });
-        return;
+        // The link was already removed elsewhere (another tab, another
+        // operator): re-sync instead of showing an error for a stale state.
+        if (res.error.status === 404) {
+          load();
+          return;
+        }
+        throw res.error;
       }
-      // The link was already removed elsewhere (another tab, another
-      // operator): re-sync instead of showing an error for a stale state.
-      if (res.status === 404) {
-        load();
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData({
         linked: false,
         discord_user_id: null,
@@ -122,7 +124,7 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
         linked_at: null,
       });
     } catch (err) {
-      setActionError({ message: (err as Error).message, attempt });
+      setActionError({ message: describeHttpError(err), attempt });
     } finally {
       setBusy(false);
     }

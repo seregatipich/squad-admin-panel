@@ -24,6 +24,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import { formatDateTimeRu } from '@/lib/format';
 import {
   type AdjustResponse,
@@ -81,12 +82,9 @@ export function BonusSection({
   const toFilterId = useId();
 
   const loadBalance = useCallback(async () => {
-    const res = await fetch(`/api/v1/players/${playerId}/bonus-balance`, {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    const res = await apiResult<unknown>(`/api/v1/players/${playerId}/bonus-balance`);
     if (!res.ok) return;
-    const parsed = parseBalance(await res.json());
+    const parsed = parseBalance(res.data);
     if (parsed !== null) setBalance(parsed);
   }, [playerId]);
 
@@ -100,19 +98,17 @@ export function BonusSection({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
+        const body = await apiFetch<unknown>(
           `/api/v1/players/${playerId}/bonus-transactions${buildBonusQuery(next)}`,
-          { credentials: 'include', cache: 'no-store' },
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const page = parseBonusPage(await res.json());
+        const page = parseBonusPage(body);
         if (requestIdRef.current !== requestId) return;
         if (!page) throw new Error('Неожиданный формат ответа сервера.');
         setTransactions(mergeBonusPage([], page.items, false));
         setNextCursor(page.next_cursor);
       } catch (e) {
         if (requestIdRef.current !== requestId) return;
-        setError((e as Error).message);
+        setError(describeHttpError(e));
       } finally {
         if (requestIdRef.current === requestId) setLoading(false);
       }
@@ -131,19 +127,17 @@ export function BonusSection({
     const requestId = ++requestIdRef.current;
     setBusy(true);
     try {
-      const res = await fetch(
+      const body = await apiFetch<unknown>(
         `/api/v1/players/${playerId}/bonus-transactions${buildBonusQuery(applied, nextCursor)}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const page = parseBonusPage(await res.json());
+      const page = parseBonusPage(body);
       if (requestIdRef.current !== requestId) return;
       if (!page) throw new Error('Неожиданный формат ответа сервера.');
       setTransactions((prev) => mergeBonusPage(prev, page.items, true));
       setNextCursor(page.next_cursor);
     } catch (e) {
       if (requestIdRef.current !== requestId) return;
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       if (requestIdRef.current === requestId) setBusy(false);
     }
@@ -391,14 +385,13 @@ function PurchaseModal({
   const tierSelectId = useId();
 
   useEffect(() => {
-    fetch('/api/v1/bonus-shop/tiers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: unknown) => {
+    apiFetch<unknown>('/api/v1/bonus-shop/tiers')
+      .then((body) => {
         const parsed = parseShopTiers(body);
         if (!parsed) throw new Error('Неожиданный формат ответа сервера.');
         setTiers(parsed);
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e: unknown) => setError(describeHttpError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -413,22 +406,20 @@ function PurchaseModal({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/bonus-purchases`, {
+      const res = await apiResult<unknown>(`/api/v1/players/${playerId}/bonus-purchases`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tier_id: selected.id }),
+        json: { tier_id: selected.id },
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(purchaseErrorText(body?.error ?? `HTTP ${res.status}`));
+        const body = res.error.jsonBody<{ error?: string }>();
+        setError(purchaseErrorText(body?.error ?? `HTTP ${res.error.status}`));
         return;
       }
-      const result = parsePurchaseResponse(await res.json());
+      const result = parsePurchaseResponse(res.data);
       if (!result) throw new Error('Неожиданный формат ответа сервера.');
       onPurchased(result);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }
@@ -536,26 +527,26 @@ function AdjustModal({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/bonus-adjustments`, {
+      const res = await apiResult<unknown>(`/api/v1/players/${playerId}/bonus-adjustments`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(parsed),
+        json: parsed,
       });
-      if (res.status === 403) {
-        setError('Недостаточно прав: требуется can_manage_economy.');
-        return;
+      if (!res.ok) {
+        if (res.error.status === 403) {
+          setError('Недостаточно прав: требуется can_manage_economy.');
+          return;
+        }
+        if (res.error.status === 409) {
+          setError('Баланс не может стать отрицательным.');
+          return;
+        }
+        throw res.error;
       }
-      if (res.status === 409) {
-        setError('Баланс не может стать отрицательным.');
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result = parseAdjustResponse(await res.json());
+      const result = parseAdjustResponse(res.data);
       if (!result) throw new Error('Неожиданный формат ответа сервера.');
       onAdjusted(result);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }

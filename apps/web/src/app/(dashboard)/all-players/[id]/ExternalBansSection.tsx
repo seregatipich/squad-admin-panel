@@ -14,6 +14,7 @@ import {
   Skeleton,
   StatusBadge,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { formatDateTimeRu } from '@/lib/format';
 import {
   ExternalBanLocalBanModal,
@@ -70,23 +71,20 @@ export function ExternalBansSection({
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/external-bans`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<PlayerExternalBansResponse>(`/api/v1/players/${playerId}/external-bans`)
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as PlayerExternalBansResponse;
+        throw res.error;
       })
       .then((body) => {
         if (!cancelled && body) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
