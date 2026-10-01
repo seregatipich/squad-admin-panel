@@ -100,7 +100,8 @@ async function asRoleWithoutPanelAccess(): Promise<string> {
     isSystemRole: false,
     panelAccess: false,
   });
-  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
+  const steamId = h.seed.ownerSteamId64!;
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, steamId));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
