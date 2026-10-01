@@ -1,5 +1,11 @@
 # Changelog — worker-scheduler
 
+## 2026-10-01 — `deps.ts` split by dependency family (B3)
+
+### Changed
+
+- The dependency wiring moved unchanged from `src/deps.ts` into `src/deps/` (shared helpers plus one module per tick). `src/deps.ts` re-exports every module, so all existing imports and the exported names are the same.
+
 ## 2026-09-30 — season finalisation recomputes the slice first
 
 ### Fixed
