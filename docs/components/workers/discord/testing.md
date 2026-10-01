@@ -106,4 +106,4 @@ reports a rejection or a network failure instead of throwing.
 The live Discord REST call. It needs a real bot token and a real guild, which
 cannot be synthesised in CI, so every test injects `fetchImpl`. The wiring in
 `index.ts` (which passes the real `fetch`) is exercised only by
-`index-import.test.ts`/`contract.test.ts`, not against Discord itself.
+`index-wiring.test.ts`/`contract.test.ts`, not against Discord itself.
