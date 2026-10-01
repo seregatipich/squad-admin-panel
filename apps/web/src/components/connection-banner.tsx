@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
+import { apiResult } from '@/lib/api';
 import { getLiveBus } from '@/lib/live-bus';
 
 // Minimal connectivity indicator. We do NOT render an alarming sticky
@@ -45,15 +46,12 @@ export function ConnectionBanner() {
 
   const probe = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/me', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
+      const res = await apiResult<unknown>('/api/v1/me', { discardBody: true });
       if (res.ok) {
         failCount.current = 0;
         setReachable(true);
         setDismissed(false);
-      } else if (res.status === 401) {
+      } else if (res.error.status === 401) {
         window.location.href = '/login';
       } else {
         failCount.current += 1;

@@ -23,6 +23,7 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import {
   type MarkTone,
@@ -76,23 +77,16 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
 
   const reload = useCallback(async () => {
     try {
-      const [typesRes, marksRes] = await Promise.all([
-        fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/players/${playerId}/marks?include_cleared=true`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
+      const [nextTypes, body] = await Promise.all([
+        apiFetch<MarkTypeOption[]>('/api/v1/mark-types'),
+        apiFetch<{ items: PlayerMark[] }>(`/api/v1/players/${playerId}/marks?include_cleared=true`),
       ]);
-      if (!typesRes.ok) throw new Error(`HTTP ${typesRes.status}`);
-      if (!marksRes.ok) throw new Error(`HTTP ${marksRes.status}`);
-      const nextTypes = (await typesRes.json()) as MarkTypeOption[];
-      const body = (await marksRes.json()) as { items: PlayerMark[] };
       if (currentPlayerId.current !== playerId) return;
       setTypes(nextTypes);
       setMarks(body.items);
       setLoadError(null);
     } catch (e) {
-      if (currentPlayerId.current === playerId) setLoadError((e as Error).message);
+      if (currentPlayerId.current === playerId) setLoadError(describeHttpError(e));
     }
   }, [playerId]);
 
@@ -139,15 +133,13 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
     };
     setMarks((prev) => [optimistic, ...prev]);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/marks`, {
+      await apiSend(`/api/v1/players/${playerId}/marks`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mark_type_id: type.id }),
+        json: { mark_type_id: type.id },
       });
-      if (!res.ok && res.status !== 409) throw new Error(`HTTP ${res.status}`);
     } catch (e) {
-      setError((e as Error).message);
+      // 409: the player already carries this mark, which is what was asked for.
+      if (!(e instanceof ApiError && e.status === 409)) setError(describeHttpError(e));
     } finally {
       await reload();
       setBusy(false);
@@ -162,13 +154,9 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
       prev.map((entry) => (entry.id === mark.id ? { ...entry, active: false } : entry)),
     );
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/marks/${mark.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/players/${playerId}/marks/${mark.id}`, { method: 'DELETE' });
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setPendingClear(null);
       await reload();

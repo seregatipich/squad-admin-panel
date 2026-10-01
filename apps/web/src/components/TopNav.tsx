@@ -8,6 +8,7 @@ import { SearchIcon } from '@/components/ui/icons';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
 import { useTranslator } from '@/i18n/LocaleProvider';
 import type { Translator } from '@/i18n/translate';
+import { apiResult } from '@/lib/api';
 import { openCommandPalette } from '@/lib/commandPalette';
 import { activeNavGroupLabel, isNavHrefActive, type NavGroup, type NavItem } from '@/lib/nav';
 import { fitNavEntries } from '@/lib/nav-overflow';
@@ -49,15 +50,12 @@ function usePendingReportsCount(): number {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
-    fetch('/api/v1/reports?status=pending&page=1&page_size=1', {
-      credentials: 'include',
-      cache: 'no-store',
+    apiResult<{ total?: number }>('/api/v1/reports?status=pending&page=1&page_size=1', {
       signal: controller.signal,
     })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { total?: number } | null) => {
+      .then((res) => {
         if (controller.signal.aborted) return;
-        setCount(data?.total ?? 0);
+        setCount(res.ok ? (res.data.total ?? 0) : 0);
       })
       .catch(() => {});
   }, []);

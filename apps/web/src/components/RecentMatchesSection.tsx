@@ -22,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { formatMatchDuration, serverLabel } from '@/lib/format';
 import {
   allMatchesHref,
@@ -50,18 +51,14 @@ export function RecentMatchesSection({ playerId }: { playerId: string }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/match-summary`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: unknown) => {
+    apiFetch<unknown>(`/api/v1/players/${playerId}/match-summary`)
+      .then((body) => {
         const parsed = parseMatchSummary(body);
         if (!parsed) throw new Error('Неверный формат ответа');
         if (!cancelled) setSummary(parsed);
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { InlineBanner } from '@/components/ui/InlineBanner';
+import { ApiError, apiSend } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface AdminsCfgStatus {
   state: 'unknown' | 'in_sync' | 'drift' | 'unreachable' | 'syncing';
@@ -63,39 +65,20 @@ export function AdminsCfgDriftBanner({
   serverId: string;
   canSync: boolean;
 }) {
-  const [status, setStatus] = useState<AdminsCfgStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [polling, setPolling] = useState(true);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/v1/admins-cfg/drift?server_id=${serverId}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) {
-        setStatus(null);
-        if (TERMINAL_STATUSES.has(r.status)) setPolling(false);
-        return;
-      }
-      const j = (await r.json()) as DriftResponse;
-      setStatus(j.status);
-    } catch {
-      // network blip; keep last known
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    if (!polling) return;
-    void load();
-    const t = setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
-      void load();
-    }, POLL_MS);
-    return () => clearInterval(t);
-  }, [load, polling]);
+  const { data, error, refresh } = useApiResource<DriftResponse>(
+    `/api/v1/admins-cfg/drift?server_id=${serverId}`,
+    {
+      intervalMs: POLL_MS,
+      pauseWhenHidden: true,
+      stopPolling: (e) => e instanceof ApiError && TERMINAL_STATUSES.has(e.status),
+    },
+  );
+  // An error answer clears the banner; a network blip keeps the last known status.
+  const status = error instanceof ApiError ? null : (data?.status ?? null);
 
   useEffect(
     () => () => {
@@ -108,19 +91,11 @@ export function AdminsCfgDriftBanner({
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/v1/admins-cfg/sync?server_id=${serverId}`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({}) as Record<string, unknown>);
-        setErr(`Ошибка: ${e.error ?? r.status}`);
-        return;
-      }
+      await apiSend(`/api/v1/admins-cfg/sync?server_id=${serverId}`, { method: 'POST' });
       // Worker will pick up; refresh shortly.
-      refreshTimer.current = setTimeout(() => void load(), SYNC_REFRESH_DELAY_MS);
-    } catch {
-      setErr('Не удалось связаться с API');
+      refreshTimer.current = setTimeout(() => void refresh(), SYNC_REFRESH_DELAY_MS);
+    } catch (e) {
+      setErr(e instanceof ApiError ? `Ошибка: ${e.codeOrStatus()}` : 'Не удалось связаться с API');
     } finally {
       setBusy(false);
     }

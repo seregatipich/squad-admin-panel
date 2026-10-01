@@ -9,6 +9,7 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { ApiError, apiFetch } from '@/lib/api';
 
 /** Mirrors the zod body schema on POST /api/v1/moderation-actions/bulk. */
 const REASON_MAX = 300;
@@ -187,28 +188,27 @@ export function BulkModerationModal({
     setError(null);
     setBatch(submitting);
     try {
-      const res = await fetch('/api/v1/moderation-actions/bulk', {
+      const response = await apiFetch<BulkResponse>('/api/v1/moderation-actions/bulk', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           server_id: serverId,
           action_type: actionType,
           player_ids: submitting.map((target) => target.playerId),
           reason: trimmedReason,
           ban_length: banLength,
           confirm_bulk: true,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      setResult((await res.json()) as BulkResponse);
+      setResult(response);
       setStep('result');
       onApplied?.();
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ApiError) {
+        const body = err.jsonBody<{ error?: string }>();
+        setError(body?.error ?? `HTTP ${err.status}`);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setBusy(false);
     }

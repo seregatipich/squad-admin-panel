@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { AlertDialog, Button, InlineBanner } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 type Phase = 'idle' | 'confirming' | 'running' | 'done' | 'error';
 
@@ -40,21 +41,17 @@ export function RestoreSnapshotButton({
     setPhase('running');
     setErrorText(null);
     try {
-      const res = await fetch(`/api/v1/host/backups/${encodeURIComponent(shortId)}/restore`, {
-        method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ confirm: shortId }),
-      });
-      if (res.status === 403) {
-        setErrorText('Нет прав на эту операцию.');
-        setPhase('error');
-        return;
-      }
+      const res = await apiResult<unknown>(
+        `/api/v1/host/backups/${encodeURIComponent(shortId)}/restore`,
+        { method: 'POST', json: { confirm: shortId }, discardBody: true },
+      );
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { detail?: string };
-        setErrorText(`Не удалось восстановить: ${j.detail ?? `HTTP ${res.status}`}`);
+        if (res.error.status === 403) {
+          setErrorText('Нет прав на эту операцию.');
+        } else {
+          const j = res.error.jsonBody<{ detail?: string }>();
+          setErrorText(`Не удалось восстановить: ${j?.detail ?? `HTTP ${res.error.status}`}`);
+        }
         setPhase('error');
         return;
       }

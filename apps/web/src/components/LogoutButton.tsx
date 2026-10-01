@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
+import { apiResult } from '@/lib/api';
 
 /**
  * Завершает сессию и уводит на страницу входа.
@@ -13,11 +14,10 @@ import { useTranslator } from '@/i18n/LocaleProvider';
 export async function logout(): Promise<void> {
   let destination = '/login';
   try {
-    const response = await fetch('/api/v1/auth/logout', {
+    const response = await apiResult<unknown>('/api/v1/auth/logout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-      credentials: 'include',
+      json: {},
+      discardBody: true,
     });
     if (!response.ok) destination = '/login?error=logout_failed';
   } catch {

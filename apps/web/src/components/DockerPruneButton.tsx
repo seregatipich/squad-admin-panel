@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { AlertDialog, Button, InlineBanner } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 type Phase = 'idle' | 'confirming' | 'running' | 'done' | 'error';
 
@@ -34,24 +35,20 @@ export function DockerPruneButton({ disabled, disabledReason, onCleaned }: Props
     setPhase('running');
     setErrorText(null);
     try {
-      const res = await fetch('/api/v1/host/docker-prune', {
+      const res = await apiResult<{ reclaimed_human: string }>('/api/v1/host/docker-prune', {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
       });
-      if (res.status === 403) {
-        setErrorText('Нет прав на эту операцию.');
-        setPhase('error');
-        return;
-      }
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { detail?: string };
-        setErrorText(`Не удалось очистить: ${j.detail ?? `HTTP ${res.status}`}`);
+        if (res.error.status === 403) {
+          setErrorText('Нет прав на эту операцию.');
+        } else {
+          const j = res.error.jsonBody<{ detail?: string }>();
+          setErrorText(`Не удалось очистить: ${j?.detail ?? `HTTP ${res.error.status}`}`);
+        }
         setPhase('error');
         return;
       }
-      const body = (await res.json()) as { reclaimed_human: string };
-      setReclaimed(body.reclaimed_human || '0B');
+      setReclaimed(res.data.reclaimed_human || '0B');
       setPhase('done');
       onCleaned?.();
     } catch (err) {
