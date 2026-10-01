@@ -17,12 +17,12 @@
     "@squad/shared-config": "workspace:*",
     "@squad/steam-api": "workspace:*",
     "@squad/worker-kit": "workspace:*",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.2",
     "vitest": "^3.2.7"
   }

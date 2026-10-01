@@ -11,12 +11,12 @@
   },
   "dependencies": {
     "ioredis": "^6.0.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
-    "undici": "^8.5.0",
+    "undici": "^8.11.2",
     "vitest": "^3.2.7"
   }
 }
