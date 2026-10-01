@@ -1,8 +1,8 @@
 'use client';
 
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
-
 import { Skeleton, TextInput } from '@/components/ui';
+import { apiFetch } from '@/lib/api';
 
 export interface PickedPlayer {
   id: string;
@@ -61,13 +61,10 @@ export function PlayerSearchSelect({
     setLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/v1/players/search?q=${encodeURIComponent(needle)}`, {
-          credentials: 'include',
-          cache: 'no-store',
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as PlayersResponse;
+        const data = await apiFetch<PlayersResponse>(
+          `/api/v1/players/search?q=${encodeURIComponent(needle)}`,
+          { signal: controller.signal },
+        );
         if (!cancelled) {
           setResults(
             data.items.map((item) => ({ id: item.id, canonical_name: item.canonical_name })),

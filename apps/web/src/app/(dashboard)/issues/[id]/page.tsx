@@ -17,8 +17,10 @@ import {
   type StatusState,
   Textarea,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import type { IssueComment, IssueLabel, IssueState, IssueView } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { appendComment, authorLabel, BODY_MAX, formatDateTime, STATE_LABELS } from '../helpers';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
 import { IssueLinksBlock } from './IssueLinksBlock';
@@ -47,7 +49,7 @@ const STATE_STATE: Record<IssueState, StatusState> = {
 export default function IssueTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [issue, setIssue] = useState<IssueDetail | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
+  const { data: me = null } = useApiResource<Me>('/api/v1/me');
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,25 +67,16 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
       return;
     }
     try {
-      const res = await fetch(`/api/v1/issues/${encodeURIComponent(id)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as IssueDetail;
+      const data = await apiFetch<IssueDetail>(`/api/v1/issues/${encodeURIComponent(id)}`);
       commentIds.current = new Set(data.comments.map((comment) => comment.id));
       setIssue(data);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     }
   }, [id]);
 
   useEffect(() => {
     void load();
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setMe(j as Me | null))
-      .catch(() => {});
   }, [load]);
 
   const onUpdated = useCallback(
@@ -114,22 +107,23 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
       setBusy(true);
       setActionError(null);
       try {
-        const res = await fetch(`/api/v1/issues/${encodeURIComponent(id)}`, {
+        const result = await apiResult<IssueView>(`/api/v1/issues/${encodeURIComponent(id)}`, {
           method: 'PATCH',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
+          json: payload,
         });
-        if (!res.ok) {
-          const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!result.ok) {
+          const errBody = result.error.jsonBody<Record<string, unknown>>() ?? {};
           const detail =
             typeof errBody.required === 'string' ? ` (нужно право ${errBody.required})` : '';
-          throw new Error(`Не удалось выполнить действие: ${errBody.error ?? res.status}${detail}`);
+          setActionError(
+            `Не удалось выполнить действие: ${errBody.error ?? result.error.status}${detail}`,
+          );
+          return;
         }
-        const updated = (await res.json()) as IssueView;
+        const updated = result.data;
         setIssue((prev) => (prev ? { ...prev, ...updated } : prev));
       } catch (e) {
-        setActionError((e as Error).message);
+        setActionError(describeHttpError(e));
       } finally {
         setBusy(false);
       }
@@ -331,17 +325,14 @@ function CommentFeed({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/comments`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onLocalAppend((await res.json()) as IssueComment);
+      const comment = await apiFetch<IssueComment>(
+        `/api/v1/issues/${encodeURIComponent(issueId)}/comments`,
+        { method: 'POST', json: { body } },
+      );
+      onLocalAppend(comment);
       setDraft('');
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }
