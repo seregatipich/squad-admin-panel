@@ -175,7 +175,9 @@ no_db_hint() {
 # read a database or Redis URL; such suites fail or skip without one.
 DB_ENV_PATTERN='(DATABASE|REDIS)_URL'
 is_db_backed() { # <package dir>
-  grep -rqsE "$DB_ENV_PATTERN" "$1/test" "$1/tests" "$1"/vitest.config.* ||
+  # A worker's contract test only imports apps/workers/_test-shared/contract, which is what reads
+  # the Redis and Postgres URLs, so the package's own files never name them.
+  grep -rqsE "$DB_ENV_PATTERN|_test-shared/contract" "$1/test" "$1/tests" "$1"/vitest.config.* ||
     grep -rqsE --include='*.test.*' "$DB_ENV_PATTERN" "$1/src"
 }
 

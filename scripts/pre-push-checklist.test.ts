@@ -248,6 +248,37 @@ describe('local pre-push checklist and git hooks', () => {
     );
   });
 
+  it('treats a worker whose tests run the shared contract as DB-backed', () => {
+    // The shared worker contract starts the worker against Redis and Postgres but the package's
+    // own test files never name the variables, so the variable scan alone would run it without
+    // a database and fail instead of skipping.
+    const fixture = checklistFixture({
+      ...FIXTURE_PACKAGES,
+      'apps/workers/contract-worker': {
+        'test/contract.test.ts':
+          "import { workerContract } from '../../_test-shared/contract.js';\nworkerContract({});\n",
+      },
+    });
+    const result = runChecklist(fixture, {
+      packages: [
+        PLAIN_PACKAGE,
+        { name: '@fixture/contract-worker', path: 'apps/workers/contract-worker' },
+      ],
+      env: { DATABASE_URL: '', TEST_DATABASE_URL: '' },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(
+      checklistCommands(fixture).some((line) => line.includes('--filter=@fixture/contract-worker')),
+      false,
+      'the contract worker must not be tested without a database',
+    );
+    assert.match(
+      result.stdout,
+      /DB-backed package tests — skipped \(no database: @fixture\/contract-worker\)/,
+    );
+  });
+
   it('skips DB-backed suites with a warning instead of failing when no database is available', () => {
     const fixture = checklistFixture(FIXTURE_PACKAGES);
     const result = runChecklist(fixture, {
