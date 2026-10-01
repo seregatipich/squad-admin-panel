@@ -4,6 +4,14 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-10-01
+
+### Проверка согласованности журнала миграций
+
+**Files:** `scripts/test-migration-lint.sh`, `docs/operations/migrations.md`
+
+- `scripts/test-migration-lint.sh` (CI) дополнительно сверяет `meta/_journal.json` с файлами `.sql`: файл без записи в журнале, запись без файла, два файла с одним номером, повтор `tag` или `idx`, а также `when`, не превосходящий `when` предыдущей записи. Последний случай молчаливый: `drizzle-orm` пропускает запись старше уже применённой. Самопроверка скрипта прогоняет эти случаи на фикстурах.
+
 ## 2026-09-30
 
 ### Пересчёт рейтингов обновляет строки на месте (#78, 1140)
