@@ -70,4 +70,3 @@ ws.addEventListener('message', (msg) => {
 - [Configuration](configuration.md) — Redis channel names, ping/timeout constants.
 - [Testing](testing.md) — the vitest suite + manual WS verification.
 - [Troubleshooting](troubleshooting.md) — banner stuck red, missed events, dropped sockets.
-- [Changelog](changelog.md)

@@ -67,9 +67,7 @@ await diag.emit({
 - [`configuration.md`](configuration.md) — env vars and constants
 - [`testing.md`](testing.md) — vitest layout
 - [`troubleshooting.md`](troubleshooting.md) — what to check when events are missing
-- [`changelog.md`](changelog.md) — meaningful changes
 
 ## Cross-references
 
 - Design spec: [`docs/superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md`](../../superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md) §3.2
-- Implementation plan: [`docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`](../../superpowers/plans/2026-04-28-diagnostic-bundle.md) Task 3

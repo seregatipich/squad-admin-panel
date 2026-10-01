@@ -71,4 +71,3 @@ The worker bind-mounts `/run/panel-host-bridge/bridge.sock` and must run with pr
 - [configuration.md](./configuration.md)
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
-- [changelog.md](./changelog.md)

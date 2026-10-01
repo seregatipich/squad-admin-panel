@@ -58,4 +58,3 @@ curl -k https://admin.localhost/health
 - [Configuration](configuration.md) — env vars, ports, plugin tunables.
 - [Flows](flows.md) — install WebSocket sequence, status reconciler loop.
 - [Testing](testing.md) — three tiers (unit, integration, e2e).
-- [Changelog](changelog.md)

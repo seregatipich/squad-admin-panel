@@ -181,7 +181,7 @@ Append-only history of every server configuration file edit. Every PUT on `/api/
 
 ## `diagnostic_events`
 
-Per-day range-partitioned table for panel-internal diagnostic events emitted by the API, workers, and host bridge through `packages/diag` (see plan `docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`). Unlike [`audit_log`](#audit_log) the table is **mutable** (no append-only trigger): `worker-event-partition` drops day-partitions older than 24h to keep the working set small. The composite primary key `(id, ts)` is required because `ts` is the partition key — Postgres mandates the partition key be part of every unique constraint.
+Per-day range-partitioned table for panel-internal diagnostic events emitted by the API, workers, and host bridge through `packages/diag` (design: `docs/superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md`). Unlike [`audit_log`](#audit_log) the table is **mutable** (no append-only trigger): `worker-event-partition` drops day-partitions older than 24h to keep the working set small. The composite primary key `(id, ts)` is required because `ts` is the partition key — Postgres mandates the partition key be part of every unique constraint.
 
 **Partitioning**
 

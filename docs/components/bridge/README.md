@@ -38,8 +38,8 @@ Runtime dependencies on the host:
 ## Components that depend on it
 
 - [`api`](../api/README.md) — every privileged action goes through `app.bridge` or `app.makeBridgeClient()`.
-- [`worker-rcon`](../workers/README.md#worker-rcon) — uses `container_inspect` to discover RCON ports.
-- [`worker-log-ingest`](../workers/README.md#worker-log-ingest) — uses `container_logs_follow`.
+- [`worker-rcon`](../workers/rcon/README.md) — uses `container_inspect` to discover RCON ports.
+- [`worker-log-ingest`](../workers/log-ingest/README.md) — uses `container_logs_follow`.
 - [`bridge-client`](../bridge-client/README.md) — TS wrapper.
 
 ## Components it depends on
@@ -74,4 +74,3 @@ for await (const chunk of stream) {
 - [Flows](flows.md) — install/run/stop sequences, `depot_update` lifecycle.
 - [Testing](testing.md) — Go unit tests, `verify-bridge.sh` smoke, e2e.
 - [Troubleshooting](troubleshooting.md) — "bridge: disconnected" banner, peer-credentials failures.
-- [Changelog](changelog.md) — recent surface changes.

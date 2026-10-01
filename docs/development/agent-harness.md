@@ -218,7 +218,7 @@ A failed `deploy` run names the step that broke:
 - **External health check** — the release started, but `/health` did not report
   `"status":"ok"` within about 90 s. Roll back with a dispatch of the last good SHA, or
   with `bash scripts/rollback-stand.sh` on the host. Neither undoes migrations (see
-  CLAUDE.md → "Dev stand and promotion").
+  [deploy.md](deploy.md)).
 
 **History.** Verification first ran hosted with a separate self-hosted deploy runner
 (#286), then moved onto the `breaking-squad` organization's `selfhost-group-1` group
