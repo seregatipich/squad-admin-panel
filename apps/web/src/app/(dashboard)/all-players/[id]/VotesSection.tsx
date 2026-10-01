@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-
 import {
   Button,
   ButtonLink,
@@ -14,6 +13,7 @@ import {
   StatTile,
   StatusBadge,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import {
   type PlayerVoteStats,
   parsePlayerVoteStats,
@@ -40,26 +40,24 @@ export function VotesSection({ playerId }: { playerId: string }) {
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(voteStatsUrl(playerId), {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
-          if (!cancelled) setHidden(true);
-          return null;
+    apiResult<unknown>(voteStatsUrl(playerId), { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) {
+          if (res.error.status === 401 || res.error.status === 403) {
+            if (!cancelled) setHidden(true);
+            return null;
+          }
+          throw res.error;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = parsePlayerVoteStats(await res.json());
+        const body = parsePlayerVoteStats(res.data);
         if (!body) throw new Error('Некорректный ответ сервера');
         return body;
       })
       .then((body) => {
         if (!cancelled && body) setData(body);
       })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

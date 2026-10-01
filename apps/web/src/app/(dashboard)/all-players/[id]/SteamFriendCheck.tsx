@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { isRecord } from '@/lib/json-guards';
 
 const STEAM_FRIEND_CHECK_REASONS = [
@@ -70,18 +71,16 @@ export function SteamFriendCheck({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(
+      const body = await apiFetch<unknown>(
         `/api/v1/players/${encodeURIComponent(playerId)}/steam-friend-check?other=${encodeURIComponent(otherPlayerId)}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const nextResult = parseSteamFriendCheck(await response.json());
+      const nextResult = parseSteamFriendCheck(body);
       if (!nextResult) throw new Error('некорректный ответ сервера');
       setResult(nextResult);
       onResult?.(nextResult);
     } catch (err) {
       setResult(null);
-      setError((err as Error).message);
+      setError(describeHttpError(err));
     } finally {
       setLoading(false);
     }

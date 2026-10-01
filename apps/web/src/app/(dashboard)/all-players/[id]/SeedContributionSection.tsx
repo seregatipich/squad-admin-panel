@@ -19,6 +19,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { serverLabel } from '@/lib/format';
 import {
   buildSeedContributionUrl,
@@ -39,14 +40,14 @@ export function SeedContributionSection({ playerId }: { playerId: string }) {
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(buildSeedContributionUrl(playerId), { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<unknown>(buildSeedContributionUrl(playerId))
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        throw res.error;
       })
       .then((body) => {
         if (cancelled || !body) return;
@@ -55,7 +56,7 @@ export function SeedContributionSection({ playerId }: { playerId: string }) {
         setData(parsed);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

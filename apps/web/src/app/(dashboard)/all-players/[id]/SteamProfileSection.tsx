@@ -11,6 +11,7 @@ import {
   InlineBanner,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiResult, describeHttpError } from '@/lib/api';
 
 /**
  * Steam Web API snapshot as `GET /api/v1/players/:playerId` returns it
@@ -82,18 +83,16 @@ export function SteamProfileSection({
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/v1/players/${playerId}/steam-refresh`, {
+      const response = await apiResult<SteamSnapshot>(`/api/v1/players/${playerId}/steam-refresh`, {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
       });
       if (!response.ok) {
-        setError(refreshErrorMessage(response.status));
+        setError(refreshErrorMessage(response.error.status));
         return;
       }
-      setCurrent((await response.json()) as SteamSnapshot);
+      setCurrent(response.data);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeHttpError(err));
     } finally {
       setLoading(false);
     }

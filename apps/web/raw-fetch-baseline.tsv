@@ -1,11 +1,4 @@
 src/app/(dashboard)/all-players/[id]/ReportPlayerSection.tsx	1
-src/app/(dashboard)/all-players/[id]/ReportsSection.tsx	1
-src/app/(dashboard)/all-players/[id]/SeedContributionSection.tsx	1
-src/app/(dashboard)/all-players/[id]/SteamFriendCheck.tsx	1
-src/app/(dashboard)/all-players/[id]/SteamProfileSection.tsx	1
-src/app/(dashboard)/all-players/[id]/SubscriptionGrantSection.tsx	4
-src/app/(dashboard)/all-players/[id]/VotesSection.tsx	1
-src/app/(dashboard)/all-players/[id]/compare/CompareOnlineView.tsx	1
 src/app/(dashboard)/appeals/AppealsBrowser.tsx	2
 src/app/(dashboard)/audit/page.tsx	2
 src/app/(dashboard)/balancer/BalancerBrowser.tsx	5
