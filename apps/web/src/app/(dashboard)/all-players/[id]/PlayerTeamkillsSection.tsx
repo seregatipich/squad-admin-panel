@@ -15,6 +15,7 @@ import {
   Skeleton,
   StatTile,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import {
   buildCombatLogTeamkillHref,
   buildPlayerTeamkillApiPath,
@@ -44,18 +45,16 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(buildPlayerTeamkillApiPath(playerId), {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
-          setHidden(true);
-          return null;
+    apiResult<unknown>(buildPlayerTeamkillApiPath(playerId), { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) {
+          if (res.error.status === 401 || res.error.status === 403) {
+            setHidden(true);
+            return null;
+          }
+          throw res.error;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = parseTeamkillPlayerResponse(await res.json());
+        const body = parseTeamkillPlayerResponse(res.data);
         if (!body) throw new Error('Некорректный ответ сервера');
         return body;
       })
@@ -63,7 +62,7 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
         if (!cancelled && body) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

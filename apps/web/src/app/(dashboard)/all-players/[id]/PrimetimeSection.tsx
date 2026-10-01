@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
 import { Badge, Button, InlineBanner, Skeleton } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { fmtDuration, MODE_HEX } from './presence';
 import {
   type PrimetimeRange,
@@ -55,19 +55,14 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(primetimeUrl(playerId), {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((json: unknown) => {
+    apiFetch<unknown>(primetimeUrl(playerId), { signal: controller.signal })
+      .then((json) => {
         const body = parsePrimetime(json);
         if (!body) throw new Error('Некорректный ответ сервера');
         if (!cancelled) setData(body);
       })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

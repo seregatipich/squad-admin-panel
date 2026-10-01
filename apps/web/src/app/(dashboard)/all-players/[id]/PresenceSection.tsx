@@ -20,6 +20,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { serverLabel } from '@/lib/format';
 import { PresenceChart } from './PresenceChart';
 import { PrimetimeSection } from './PrimetimeSection';
@@ -67,17 +68,14 @@ export function PresenceSection({ playerId }: { playerId: string }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/presence`, {
-      credentials: 'include',
-      cache: 'no-store',
+    apiFetch<PresenceResponse>(`/api/v1/players/${encodeURIComponent(playerId)}/presence`, {
       signal: controller.signal,
     })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: PresenceResponse) => {
+      .then((body) => {
         if (!cancelled) setData(body);
       })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
 import {
   Button,
   EmptyState,
@@ -11,6 +10,7 @@ import {
   StatTile,
   StatusDot,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import {
   CHART_AXIS,
   CHART_FRAME,
@@ -64,17 +64,15 @@ export function PresenceChart({ playerId }: { playerId: string }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/presence/daily?range=${range}`, {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((body: DailyPresenceResponse) => {
+    apiFetch<DailyPresenceResponse>(
+      `/api/v1/players/${encodeURIComponent(playerId)}/presence/daily?range=${range}`,
+      { signal: controller.signal },
+    )
+      .then((body) => {
         if (!cancelled) setData(body);
       })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

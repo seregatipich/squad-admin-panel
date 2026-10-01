@@ -1,9 +1,4 @@
-src/app/(dashboard)/all-players/[id]/PlayerTeamkillsSection.tsx	1
-src/app/(dashboard)/all-players/[id]/PlaysWithSection.tsx	1
-src/app/(dashboard)/all-players/[id]/PresenceChart.tsx	1
-src/app/(dashboard)/all-players/[id]/PresenceSection.tsx	1
-src/app/(dashboard)/all-players/[id]/PrimetimeSection.tsx	1
-src/app/(dashboard)/all-players/[id]/ReportPlayerSection.tsx	5
+src/app/(dashboard)/all-players/[id]/ReportPlayerSection.tsx	1
 src/app/(dashboard)/all-players/[id]/ReportsSection.tsx	1
 src/app/(dashboard)/all-players/[id]/SeedContributionSection.tsx	1
 src/app/(dashboard)/all-players/[id]/SteamFriendCheck.tsx	1

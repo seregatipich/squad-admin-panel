@@ -13,6 +13,7 @@ import {
   TextInput,
   TrashIcon,
 } from '@/components/ui';
+import { apiResult, apiSend, describeHttpError } from '@/lib/api';
 import {
   buildReportPayload,
   mapReportError,
@@ -95,16 +96,18 @@ export function ReportPlayerSection({
     setServersLoading(true);
     setServersError(null);
     try {
-      const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-      if (res.status === 401 || res.status === 403) {
-        throw new Error('Нет доступа к списку серверов');
+      const res = await apiResult<ServersResponse>('/api/v1/servers');
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          throw new Error('Нет доступа к списку серверов');
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ServersResponse;
+      const data = res.data;
       setServers(data.items);
       setServerId((current) => current || (data.items[0]?.id ?? ''));
     } catch (e) {
-      setServersError((e as Error).message);
+      setServersError(describeHttpError(e));
     } finally {
       setServersLoading(false);
     }
@@ -128,10 +131,9 @@ export function ReportPlayerSection({
    */
   function discardMedia(ids: string[]) {
     for (const id of ids) {
-      void fetch(`/api/v1/media/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      }).catch(() => undefined);
+      void apiSend(`/api/v1/media/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(
+        () => undefined,
+      );
     }
   }
 
@@ -183,21 +185,19 @@ export function ReportPlayerSection({
     setUploading(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/media/link', {
+      const res = await apiResult<MediaResponse>('/api/v1/media/link', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ external_url: evidenceUrl.trim() }),
+        json: { external_url: evidenceUrl.trim() },
       });
       if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(mapUploadError(res.status, errBody.error));
+        const errBody = res.error.jsonBody<{ error?: string }>();
+        throw new Error(mapUploadError(res.error.status, errBody?.error));
       }
-      const media = (await res.json()) as MediaResponse;
+      const media = res.data;
       setAttached((prev) => [...prev, { id: media.id, label: evidenceLabelFromMedia(media) }]);
       setEvidenceUrl('');
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setUploading(false);
     }
@@ -220,21 +220,20 @@ export function ReportPlayerSection({
         trimmedBody,
         attached.map((item) => item.id),
       );
-      const res = await fetch('/api/v1/reports', {
+      const res = await apiResult<void>('/api/v1/reports', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
+        discardBody: true,
       });
       if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(mapReportError(res.status, errBody.error));
+        const errBody = res.error.jsonBody<{ error?: string }>();
+        throw new Error(mapReportError(res.error.status, errBody?.error));
       }
       setAttached([]);
       setModalOpen(false);
       setSuccess('Жалоба отправлена');
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setSubmitting(false);
     }
