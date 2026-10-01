@@ -26,7 +26,6 @@ vi.mock('./live-players', () => ({
   LivePlayers: () => <section aria-label="Игроки онлайн" />,
 }));
 vi.mock('./map-widget', () => ({ MapWidget: () => null }));
-vi.mock('./SeedCallButton', () => ({ SeedCallButton: () => null }));
 const liveHandlers = new Map<string, (event: unknown) => void>();
 vi.mock('@/lib/use-live-bus', () => ({
   useLiveSubscription: (type: string, handler: (event: unknown) => void) => {

@@ -20,7 +20,6 @@ import { nextBackoffMs } from '@/lib/ws-backoff';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
 import { MapWidget } from './map-widget';
-import { SeedCallButton } from './SeedCallButton';
 
 interface ServerRow {
   id: string;
@@ -141,7 +140,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const { id } = use(params);
   const [data, setData] = useState<ServerResponse | null>(null);
   const [canChat, setCanChat] = useState(false);
-  const [canManageServer, setCanManageServer] = useState(false);
   const [canChangeMap, setCanChangeMap] = useState(false);
   const [canBan, setCanBan] = useState(false);
   const [canDownloadLogs, setCanDownloadLogs] = useState(false);
@@ -208,7 +206,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         const me = (await res.json()) as { squad_permissions?: string[]; permissions?: string[] };
         if (!cancelled) {
           setCanChat(me.squad_permissions?.includes('chat') ?? false);
-          setCanManageServer(me.squad_permissions?.includes('manageserver') ?? false);
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
           setCanBan(me.squad_permissions?.includes('ban') ?? false);
           setCanDownloadLogs(me.permissions?.includes('server:download_logs') ?? false);
@@ -500,8 +497,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       <ChatPanel serverId={id} canBan={canBan} />
 
       <BroadcastComposer serverId={server.id} serverName={server.display_name} canChat={canChat} />
-
-      <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 
       {/* 4. Служебное: адрес и порты читают один раз при настройке. */}
       <GroupedList
