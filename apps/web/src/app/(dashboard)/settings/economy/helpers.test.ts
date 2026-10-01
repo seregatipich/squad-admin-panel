@@ -14,6 +14,18 @@ import {
   validateVipTierForm,
 } from './helpers';
 
+const COEFFICIENT_ERROR = 'Введите число от 0 до 1000.';
+const SEED_THRESHOLD_ERROR = 'Введите целое число от 0 до 100.';
+const WINDOWS_ERROR = 'Введите от 1 до 10 целых чисел от 1 до 90 через запятую.';
+const TIER_NAME_ERROR = 'Введите название от 1 до 64 символов.';
+const TIER_ROLE_ERROR = 'Выберите роль.';
+const TIER_DESCRIPTION_ERROR = 'Описание не длиннее 1024 символов.';
+const TIER_DAYS_ERROR = 'Введите целое число от 1 до 3650 или оставьте поле пустым.';
+const TIER_PRICE_ERROR = 'Введите целое число от 0 до 2147483647 или оставьте поле пустым.';
+const TIER_PRICE_NEEDS_DAYS_ERROR =
+  'Цена требует срок по умолчанию: укажите срок или очистите цену.';
+const TIER_SORT_ORDER_ERROR = 'Введите целое число от 0 до 100000.';
+
 function makeSettings(overrides: Partial<EconomySettings> = {}): EconomySettings {
   return {
     k_online: overrides.k_online ?? 1,
@@ -112,7 +124,7 @@ describe('validateEconomyForm', () => {
     for (const raw of ['0', '91', '7, 0']) {
       const result = validateEconomyForm(makeForm({ vipExpiryWindows: raw }));
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.errors.vipExpiryWindows).toBeTruthy();
+      if (!result.ok) expect(result.errors).toEqual({ vipExpiryWindows: WINDOWS_ERROR });
     }
   });
 
@@ -120,7 +132,7 @@ describe('validateEconomyForm', () => {
     for (const raw of ['', '  ', '7,abc', '3.5']) {
       const result = validateEconomyForm(makeForm({ vipExpiryWindows: raw }));
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.errors.vipExpiryWindows).toBeTruthy();
+      if (!result.ok) expect(result.errors).toEqual({ vipExpiryWindows: WINDOWS_ERROR });
     }
   });
 
@@ -139,43 +151,43 @@ describe('validateEconomyForm', () => {
   it('rejects a negative coefficient', () => {
     const result = validateEconomyForm(makeForm({ kOnline: '-1' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.kOnline).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ kOnline: COEFFICIENT_ERROR });
   });
 
   it('rejects a coefficient above the maximum', () => {
     const result = validateEconomyForm(makeForm({ kBoost: '5000' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.kBoost).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ kBoost: COEFFICIENT_ERROR });
   });
 
   it('rejects a non-numeric coefficient', () => {
     const result = validateEconomyForm(makeForm({ kSeed: 'abc' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.kSeed).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ kSeed: COEFFICIENT_ERROR });
   });
 
   it('rejects a fractional seed threshold', () => {
     const result = validateEconomyForm(makeForm({ seedThreshold: '40.5' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.seedThreshold).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ seedThreshold: SEED_THRESHOLD_ERROR });
   });
 
   it('rejects a seed threshold above the maximum', () => {
     const result = validateEconomyForm(makeForm({ seedThreshold: '150' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.seedThreshold).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ seedThreshold: SEED_THRESHOLD_ERROR });
   });
 
   it('rejects an empty field', () => {
     const result = validateEconomyForm(makeForm({ kOnline: '  ' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.kOnline).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ kOnline: COEFFICIENT_ERROR });
   });
 
   it('rejects an empty seed threshold', () => {
     const result = validateEconomyForm(makeForm({ seedThreshold: '  ' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.seedThreshold).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ seedThreshold: SEED_THRESHOLD_ERROR });
   });
 
   it('accepts zero as the lower bound', () => {
@@ -296,55 +308,55 @@ describe('validateVipTierForm', () => {
   it('rejects empty name', () => {
     const result = validateVipTierForm(makeTierForm({ name: '   ' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.name).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ name: TIER_NAME_ERROR });
   });
 
   it('rejects a description longer than the maximum', () => {
     const result = validateVipTierForm(makeTierForm({ description: 'x'.repeat(1025) }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.description).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ description: TIER_DESCRIPTION_ERROR });
   });
 
   it('rejects a missing role', () => {
     const result = validateVipTierForm(makeTierForm({ roleId: '' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.roleId).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ roleId: TIER_ROLE_ERROR });
   });
 
   it('rejects default_days out of range', () => {
     const tooLow = validateVipTierForm(makeTierForm({ defaultDays: '0' }));
     expect(tooLow.ok).toBe(false);
-    if (!tooLow.ok) expect(tooLow.errors.defaultDays).toBeTruthy();
+    if (!tooLow.ok) expect(tooLow.errors).toEqual({ defaultDays: TIER_DAYS_ERROR });
 
     const tooHigh = validateVipTierForm(makeTierForm({ defaultDays: '3651' }));
     expect(tooHigh.ok).toBe(false);
-    if (!tooHigh.ok) expect(tooHigh.errors.defaultDays).toBeTruthy();
+    if (!tooHigh.ok) expect(tooHigh.errors).toEqual({ defaultDays: TIER_DAYS_ERROR });
 
     const fractional = validateVipTierForm(makeTierForm({ defaultDays: '1.5' }));
     expect(fractional.ok).toBe(false);
-    if (!fractional.ok) expect(fractional.errors.defaultDays).toBeTruthy();
+    if (!fractional.ok) expect(fractional.errors).toEqual({ defaultDays: TIER_DAYS_ERROR });
   });
 
   it('rejects negative sort_order', () => {
     const result = validateVipTierForm(makeTierForm({ sortOrder: '-1' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.sortOrder).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ sortOrder: TIER_SORT_ORDER_ERROR });
   });
 
   it('rejects price_bonuses out of range', () => {
     const negative = validateVipTierForm(makeTierForm({ priceBonuses: '-1' }));
     expect(negative.ok).toBe(false);
-    if (!negative.ok) expect(negative.errors.priceBonuses).toBeTruthy();
+    if (!negative.ok) expect(negative.errors).toEqual({ priceBonuses: TIER_PRICE_ERROR });
 
     const tooHigh = validateVipTierForm(makeTierForm({ priceBonuses: '2147483648' }));
     expect(tooHigh.ok).toBe(false);
-    if (!tooHigh.ok) expect(tooHigh.errors.priceBonuses).toBeTruthy();
+    if (!tooHigh.ok) expect(tooHigh.errors).toEqual({ priceBonuses: TIER_PRICE_ERROR });
   });
 
   it('requires a default duration when a price is set (mirrors the server price_requires_days rule)', () => {
     const result = validateVipTierForm(makeTierForm({ priceBonuses: '500', defaultDays: '' }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.defaultDays).toBeTruthy();
+    if (!result.ok) expect(result.errors).toEqual({ defaultDays: TIER_PRICE_NEEDS_DAYS_ERROR });
   });
 });
 
@@ -368,7 +380,9 @@ describe('formatUpdatedAt', () => {
   });
 
   it('formats a valid ISO timestamp', () => {
-    expect(formatUpdatedAt('2026-07-05T00:00:00.000Z')).not.toBe('ещё не сохранялись');
+    expect(formatUpdatedAt('2026-07-05T00:00:00.000Z')).toBe(
+      new Date('2026-07-05T00:00:00.000Z').toLocaleString('ru-RU'),
+    );
   });
 });
 
