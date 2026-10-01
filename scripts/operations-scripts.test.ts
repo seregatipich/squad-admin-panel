@@ -175,7 +175,6 @@ describe('operation script static contracts', () => {
     for (const testFile of [
       'scripts/deploy-workflow.test.ts',
       'scripts/operations-scripts.test.ts',
-      'scripts/rnsquadjs-shadow-diff.test.ts',
       'scripts/verify-audit-chain.test.ts',
     ]) {
       assert.match(testScripts, new RegExp(testFile.replaceAll('.', '\\.')));
