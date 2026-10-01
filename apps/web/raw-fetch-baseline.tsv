@@ -55,7 +55,6 @@ src/app/(dashboard)/moderation/teamkills/TeamkillsBrowser.tsx	2
 src/app/(dashboard)/notes/page.tsx	4
 src/app/(dashboard)/reports/ReportsAnalytics.tsx	2
 src/app/(dashboard)/reports/ReportsBrowser.tsx	8
-src/app/(dashboard)/servers/[id]/configs/page.tsx	15
 src/app/(dashboard)/servers/[id]/layout.tsx	1
 src/app/(dashboard)/servers/[id]/live-players.tsx	2
 src/app/(dashboard)/servers/[id]/map-vote/page.tsx	5

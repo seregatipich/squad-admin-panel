@@ -4,7 +4,7 @@ import { loader } from '@monaco-editor/react';
 import { BEGIN_MARKER } from '@squad/shared-config/admins-config';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertDialog,
   type AlertDialogTone,
@@ -27,11 +27,22 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { type DriftDiff, type DriftItem, DriftPanel } from './DriftPanel';
 import { BEHAVIOR_BADGE, type FileItem, FileList } from './FileList';
 import { managedSegmentLineRange } from './managed-segment';
 
 const POLL_MS = 8000;
+
+/**
+ * A 404 (no such route) or 409 (`external_server`: no config tree at all)
+ * answers the same way on every later poll, so polling stops instead of
+ * re-bannering every POLL_MS forever (#609).
+ */
+function isHardFailure(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 409);
+}
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
@@ -218,12 +229,13 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [segmentNotice, setSegmentNotice] = useState(false);
   const segmentNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Restart button for requires_restart files (CFG-1, #63).
-  const [canRestart, setCanRestart] = useState(false);
+  // Restart button for requires_restart files (CFG-1, #63). A failed read
+  // simply leaves the button hidden.
+  const { data: me } = useApiResource<{ permissions?: string[] }>('/api/v1/me');
+  const canRestart = me?.permissions?.includes('server:restart') ?? false;
   const [restarting, setRestarting] = useState(false);
 
   // Config drift banner + resolution (CFG-2, #64).
-  const [driftItems, setDriftItems] = useState<DriftItem[]>([]);
   const [driftDiff, setDriftDiff] = useState<DriftDiff | null>(null);
   const [driftBusy, setDriftBusy] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
@@ -236,13 +248,11 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   const refreshFiles = useCallback(async () => {
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
-      if (r.status === 404 || r.status === 409) filesStoppedRef.current = true;
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { items: FileItem[] };
+      const j = await apiFetch<{ items: FileItem[] }>(`/api/v1/servers/${id}/configs`);
       setFiles(j.items);
     } catch (e) {
-      setErr((e as Error).message);
+      if (isHardFailure(e)) filesStoppedRef.current = true;
+      setErr(describeHttpError(e));
     }
   }, [id]);
 
@@ -260,36 +270,19 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [refreshFiles]);
 
-  const driftStoppedRef = useRef(false);
-
-  const refreshDrift = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/drift`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (r.status === 404 || r.status === 409) driftStoppedRef.current = true;
-      if (!r.ok) return;
-      const j = (await r.json()) as { items: DriftItem[] };
-      setDriftItems(j.items.filter((i) => i.state === 'drift'));
-    } catch {
-      // best-effort polling; keep the last known drift state on transient errors
-    }
-  }, [id]);
-
-  useEffect(() => {
-    driftStoppedRef.current = false;
-    void refreshDrift();
-    const t = setInterval(() => {
-      if (document.visibilityState !== 'visible' || driftStoppedRef.current) return;
-      void refreshDrift();
-    }, POLL_MS);
-    return () => clearInterval(t);
-  }, [refreshDrift]);
+  // Best-effort polling: a transient error keeps the last known drift state.
+  const { data: driftData, refresh: refreshDrift } = useApiResource<{ items: DriftItem[] }>(
+    `/api/v1/servers/${id}/configs/drift`,
+    { intervalMs: POLL_MS, pauseWhenHidden: true, stopPolling: isHardFailure },
+  );
+  const driftItems = useMemo(
+    () => driftData?.items.filter((i) => i.state === 'drift') ?? [],
+    [driftData],
+  );
 
   useEffect(() => {
     if (!selected) return;
-    let cancelled = false;
+    const lifetime = new AbortController();
     let stopped = false;
     async function poll() {
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -297,44 +290,25 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       const target = selectedRef.current;
       if (!target || document.visibilityState !== 'visible') return;
       try {
-        const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (r.status === 404 || r.status === 409) stopped = true;
-        if (!r.ok) return;
-        const j = (await r.json()) as { content: string; sha256: string | null };
-        if (cancelled || selectedRef.current !== target) return;
+        const j = await apiFetch<{ content: string; sha256: string | null }>(
+          `/api/v1/servers/${id}/configs/${target}`,
+          { signal: lifetime.signal },
+        );
+        if (selectedRef.current !== target) return;
         if (j.sha256 && serverShaRef.current && j.sha256 !== serverShaRef.current) {
           setExternalChange({ sha: j.sha256, content: j.content });
         }
-      } catch {
-        // ignore transient errors during polling
+      } catch (e) {
+        if (isHardFailure(e)) stopped = true;
+        // other errors are transient during polling
       }
     }
     const t = setInterval(poll, POLL_MS);
     return () => {
-      cancelled = true;
+      lifetime.abort();
       clearInterval(t);
     };
   }, [id, selected]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!r.ok || cancelled) return;
-        const me = (await r.json()) as { permissions?: string[] };
-        if (!cancelled) setCanRestart(me.permissions?.includes('server:restart') ?? false);
-      } catch {
-        // best-effort; the restart button simply stays hidden without the permission
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const flashSegmentNotice = useCallback(() => {
     setSegmentNotice(true);
@@ -384,12 +358,9 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setEditing(false);
       setExternalChange(null);
       try {
-        const r = await fetch(`/api/v1/servers/${id}/configs/${name}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as { content: string; sha256: string | null };
+        const j = await apiFetch<{ content: string; sha256: string | null }>(
+          `/api/v1/servers/${id}/configs/${name}`,
+        );
         // The operator may have clicked another file while this request was in
         // flight; an out-of-order response must not land under the wrong
         // file's editor (#607) — same guard the drift poller already uses.
@@ -401,7 +372,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         setCommitMessage('');
       } catch (e) {
         if (selectedRef.current !== name) return;
-        setErr((e as Error).message);
+        setErr(describeHttpError(e));
       }
     },
     [id],
@@ -426,14 +397,12 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     if (!selected) return;
     setVersionsLoading(true);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/history?limit=100`, {
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { items: Version[] };
+      const j = await apiFetch<{ items: Version[] }>(
+        `/api/v1/servers/${id}/configs/${selected}/history?limit=100`,
+      );
       setVersions(j.items);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setVersionsLoading(false);
     }
@@ -442,14 +411,9 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const loadBlame = useCallback(async () => {
     if (!selected) return;
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/blame`, {
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as BlameResponse;
-      setBlame(j);
+      setBlame(await apiFetch<BlameResponse>(`/api/v1/servers/${id}/configs/${selected}/blame`));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     }
   }, [id, selected]);
 
@@ -469,32 +433,21 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        // base_sha256 lets the API refuse the write with 409 if the file
-        // changed on disk since this content was loaded (#608 — otherwise a
-        // concurrent edit, worker write, or manual SSH change is silently
-        // clobbered).
-        body: JSON.stringify({
-          content: savedContent,
-          message: commitMessage || undefined,
-          base_sha256: serverShaRef.current ?? undefined,
-        }),
-      });
-      if (r.status === 409) {
-        const j = (await r.json()) as { current_sha256?: string | null };
-        if (selectedRef.current === target) {
-          setErr(
-            'Файл изменён на диске с момента открытия. Перезагрузите его (кнопка «Повторить» или переоткройте файл) и повторите правку.',
-          );
-          if (j.current_sha256) setServerSha(j.current_sha256);
-        }
-        return;
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-      const j = (await r.json()) as { behavior: string; unchanged?: boolean; sha256?: string };
+      const j = await apiFetch<{ behavior: string; unchanged?: boolean; sha256?: string }>(
+        `/api/v1/servers/${id}/configs/${target}`,
+        {
+          method: 'PUT',
+          // base_sha256 lets the API refuse the write with 409 if the file
+          // changed on disk since this content was loaded (#608 — otherwise a
+          // concurrent edit, worker write, or manual SSH change is silently
+          // clobbered).
+          json: {
+            content: savedContent,
+            message: commitMessage || undefined,
+            base_sha256: serverShaRef.current ?? undefined,
+          },
+        },
+      );
       if (selectedRef.current !== target) return;
       setServerContent(savedContent);
       if (j.sha256) setServerSha(j.sha256);
@@ -513,8 +466,18 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       );
       void refreshFiles();
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        if (selectedRef.current === target) {
+          setErr(
+            'Файл изменён на диске с момента открытия. Перезагрузите его (кнопка «Повторить» или переоткройте файл) и повторите правку.',
+          );
+          const currentSha = e.jsonBody<{ current_sha256?: string | null }>()?.current_sha256;
+          if (currentSha) setServerSha(currentSha);
+        }
+        return;
+      }
       if (selectedRef.current !== target) return;
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setSaving(false);
     }
@@ -529,15 +492,13 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   async function openDiff(vid: string) {
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/versions/${vid}`, {
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { content: string };
+      const j = await apiFetch<{ content: string }>(
+        `/api/v1/servers/${id}/configs/${selected}/versions/${vid}`,
+      );
       setDiffFromContent(j.content);
       setDiffFrom(vid);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     }
   }
 
@@ -545,18 +506,15 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     if (!selected) return;
     setRestoring(vid);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/restore/${vid}`, {
+      await apiSend(`/api/v1/servers/${id}/configs/${selected}/restore/${vid}`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        json: {},
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       setMsg('Восстановлено как новая версия');
       await loadHistory();
       await load(selected);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setRestoring(null);
     }
@@ -568,14 +526,10 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/restart`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      await apiSend(`/api/v1/servers/${id}/restart`, { method: 'POST' });
       setMsg('Сервер перезапускается…');
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setRestarting(false);
     }
@@ -586,13 +540,10 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${name}/drift/${action}`, {
+      await apiSend(`/api/v1/servers/${id}/configs/${name}/drift/${action}`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        json: {},
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       setMsg(
         action === 'accept'
           ? `${name}: правка с диска принята как новая версия`
@@ -602,7 +553,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       await refreshDrift();
       if (selectedRef.current === name) await load(name);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setDriftBusy(null);
     }
@@ -614,22 +565,18 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       try {
         let tip = '';
         if (item.tip_version_id) {
-          const r = await fetch(
-            `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
-            { credentials: 'include' },
-          );
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          tip = ((await r.json()) as { content: string }).content;
+          tip = (
+            await apiFetch<{ content: string }>(
+              `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
+            )
+          ).content;
         }
-        const diskR = await fetch(`/api/v1/servers/${id}/configs/${item.name}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!diskR.ok) throw new Error(`HTTP ${diskR.status}`);
-        const disk = ((await diskR.json()) as { content: string }).content;
+        const disk = (
+          await apiFetch<{ content: string }>(`/api/v1/servers/${id}/configs/${item.name}`)
+        ).content;
         setDriftDiff({ name: item.name, tip, disk });
       } catch (e) {
-        setErr((e as Error).message);
+        setErr(describeHttpError(e));
       }
     },
     [id],
@@ -658,18 +605,15 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     setErr(null);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/configs/${name}/reset-default`, {
+      await apiSend(`/api/v1/servers/${id}/configs/${name}/reset-default`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        json: {},
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
       setMsg(`${name}: сброшен к депо-дефолту`);
       await refreshDrift();
       await load(name);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setResetting(false);
     }
