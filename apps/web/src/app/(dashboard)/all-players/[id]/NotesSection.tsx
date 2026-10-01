@@ -199,6 +199,7 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   }
 
   return (
+    // biome-ignore lint/correctness/useUniqueElementIds: fixed anchor target for the #notes deep link; rendered once per page
     <section id="notes" className="scroll-mt-6">
       <Card padding="none">
         <CardHeader title="Заметки" count={total} />
