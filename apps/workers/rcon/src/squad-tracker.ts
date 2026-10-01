@@ -1,6 +1,6 @@
 /**
- * Squad history from consecutive roster snapshots (spec:
- * docs/superpowers/specs/2026-09-27-squad-history-design.md §1).
+ * Squad history from consecutive roster snapshots (see
+ * docs/components/workers/rcon/flows.md).
  *
  * RCON reports only squad creation (`squad-broadcast.ts`). Leader changes and
  * disbands are inferred by diffing the `ListSquads` + `ListPlayers` rows of two

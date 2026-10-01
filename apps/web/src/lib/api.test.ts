@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { API_TIMEOUT_MS, ApiError, ApiResponseError, apiFetch } from './api';
+import {
+  API_TIMEOUT_MS,
+  ApiError,
+  ApiResponseError,
+  apiFetch,
+  apiResult,
+  apiSend,
+  describeHttpError,
+  nullOnHttpError,
+} from './api';
 
 const originalEnv = process.env.API_URL;
 
@@ -262,5 +271,199 @@ describe('apiFetch response validation (#819)', () => {
     vi.stubGlobal('fetch', mockFetch);
     await apiFetch('/api/v1/x', { parse: requireName });
     expect(mockFetch.mock.calls[0]?.[1]).not.toHaveProperty('parse');
+  });
+});
+
+describe('apiFetch request building', () => {
+  it('sends credentials include by default and lets the caller override it', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    await apiFetch('/api/v1/x');
+    await apiFetch('/api/v1/x', { credentials: 'omit' });
+    expect(mockFetch.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(mockFetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ credentials: 'omit' }));
+  });
+
+  it('serialises `json` into the body and marks it as JSON', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    await apiFetch('/api/v1/x', { method: 'POST', json: { a: 1 } });
+    const init = mockFetch.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe('{"a":1}');
+    expect((init.headers as Headers).get('content-type')).toBe('application/json');
+    expect(init).not.toHaveProperty('json');
+  });
+
+  it('serialises an empty-object `json` body the way pages sent JSON.stringify({})', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    await apiFetch('/api/v1/x', { method: 'POST', json: {} });
+    expect((mockFetch.mock.calls[0]?.[1] as RequestInit).body).toBe('{}');
+  });
+
+  it('applies a custom timeoutMs and drops the timeout with timeoutMs: null', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await apiFetch('/api/v1/x', { timeoutMs: 123 });
+    expect(timeout).toHaveBeenCalledWith(123);
+    timeout.mockClear();
+    await apiFetch('/api/v1/x', { timeoutMs: null });
+    expect(timeout).not.toHaveBeenCalled();
+    expect((mockFetch.mock.calls[1]?.[1] as RequestInit).signal).toBeUndefined();
+  });
+
+  it('leaves a mutation unbounded by default and bounds a read', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    await apiFetch('/api/v1/x', { method: 'POST', json: {} });
+    await apiFetch('/api/v1/x', { method: 'get' });
+    expect((mockFetch.mock.calls[0]?.[1] as RequestInit).signal).toBeUndefined();
+    expect((mockFetch.mock.calls[1]?.[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('combines the caller signal with an explicit timeoutMs', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => Response.json({}));
+    vi.stubGlobal('fetch', mockFetch);
+    const caller = new AbortController();
+    await apiFetch('/api/v1/x', { signal: caller.signal, timeoutMs: 5000 });
+    const sent = (mockFetch.mock.calls[0]?.[1] as RequestInit).signal as AbortSignal;
+    expect(sent).not.toBe(caller.signal);
+    expect(sent.aborted).toBe(false);
+    caller.abort();
+    expect(sent.aborted).toBe(true);
+  });
+
+  it('keeps the full response text on ApiError while the message stays truncated', async () => {
+    const long = 'x'.repeat(500);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(long, { status: 500 })));
+    const error = (await apiFetch('/api/v1/x').catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.responseText).toBe(long);
+    expect(error.message).toBe(`API /api/v1/x 500: ${'x'.repeat(200)}`);
+  });
+
+  it('still reports the status when the error body cannot be read', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502 }));
+    const error = (await apiFetch('/api/v1/x').catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(502);
+    expect(error.responseText).toBe('');
+  });
+});
+
+describe('apiSend', () => {
+  it('resolves without reading the body, so an empty or non-JSON 2xx is fine', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not json', { status: 200 })));
+    await expect(apiSend('/api/v1/x', { method: 'POST', json: {} })).resolves.toBeUndefined();
+  });
+
+  it('throws ApiError with the status and body of a non-2xx answer', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })));
+    const error = (await apiSend('/api/v1/x').catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(500);
+    expect(error.responseText).toBe('boom');
+  });
+
+  it('propagates a network failure unchanged', async () => {
+    const failure = new TypeError('Failed to fetch');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure));
+    await expect(apiSend('/api/v1/x')).rejects.toBe(failure);
+  });
+});
+
+describe('ApiError.jsonBody', () => {
+  it('decodes a JSON error body', () => {
+    const error = new ApiError('/api/v1/x', 409, '{"error":"busy","message":"Занят"}');
+    expect(error.jsonBody<{ message: string }>()?.message).toBe('Занят');
+  });
+
+  it('returns null for an empty or non-JSON body', () => {
+    expect(new ApiError('/api/v1/x', 500, '').jsonBody()).toBeNull();
+    expect(new ApiError('/api/v1/x', 502, '<html>').jsonBody()).toBeNull();
+  });
+});
+
+describe('ApiError.codeOrStatus', () => {
+  it('prefers the API error code and falls back to the status', () => {
+    expect(new ApiError('/x', 409, '{"error":"name_taken"}').codeOrStatus()).toBe('name_taken');
+    expect(new ApiError('/x', 500, '{"message":"boom"}').codeOrStatus()).toBe(500);
+    expect(new ApiError('/x', 502, '<html>').codeOrStatus()).toBe(502);
+    expect(new ApiError('/x', 503, 'null').codeOrStatus()).toBe(503);
+    expect(new ApiError('/x', 400, '{"error":{"nested":1}}').codeOrStatus()).toBe(400);
+  });
+});
+
+describe('apiResult', () => {
+  it('wraps a decoded body as ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ a: 1 })));
+    await expect(apiResult('/api/v1/x')).resolves.toEqual({ ok: true, data: { a: 1 } });
+  });
+
+  it('returns an error status as a value carrying the ApiError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{"error":"nope"}', { status: 422 })),
+    );
+    const result = await apiResult('/api/v1/x');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBeInstanceOf(ApiError);
+    expect(result.error.status).toBe(422);
+    expect(result.error.jsonBody()).toEqual({ error: 'nope' });
+  });
+
+  it('with discardBody accepts an empty or non-JSON 2xx answer and strips the option from fetch', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response('not json', { status: 200 }));
+    vi.stubGlobal('fetch', mockFetch);
+    await expect(apiResult('/api/v1/x', { method: 'DELETE', discardBody: true })).resolves.toEqual({
+      ok: true,
+      data: undefined,
+    });
+    expect(mockFetch.mock.calls[0]?.[1]).not.toHaveProperty('discardBody');
+  });
+
+  it('still throws a network failure, an abort and a malformed 2xx body', async () => {
+    const failure = new TypeError('Failed to fetch');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure));
+    await expect(apiResult('/api/v1/x')).rejects.toBe(failure);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 200 })));
+    await expect(apiResult('/api/v1/x')).rejects.toBeInstanceOf(ApiResponseError);
+  });
+});
+
+describe('nullOnHttpError', () => {
+  it('turns an API error status into null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no', { status: 403 })));
+    await expect(apiFetch('/api/v1/x').catch(nullOnHttpError)).resolves.toBeNull();
+  });
+
+  it('rethrows a network failure and a malformed body', async () => {
+    const failure = new TypeError('Failed to fetch');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure));
+    await expect(apiFetch('/api/v1/x').catch(nullOnHttpError)).rejects.toBe(failure);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 200 })));
+    await expect(apiFetch('/api/v1/x').catch(nullOnHttpError)).rejects.toBeInstanceOf(
+      ApiResponseError,
+    );
+  });
+});
+
+describe('describeHttpError', () => {
+  it('renders an API answer as HTTP <status>, with the body on request', () => {
+    const error = new ApiError('/api/v1/x', 409, 'conflict');
+    expect(describeHttpError(error)).toBe('HTTP 409');
+    expect(describeHttpError(error, true)).toBe('HTTP 409: conflict');
+  });
+
+  it('falls back to the error message for anything else', () => {
+    expect(describeHttpError(new TypeError('Failed to fetch'))).toBe('Failed to fetch');
+    expect(describeHttpError('plain')).toBe('plain');
   });
 });

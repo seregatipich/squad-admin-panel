@@ -26,6 +26,7 @@ import {
   TextInput,
   Toolbar,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import type {
   ReportEvidenceItem,
   ReportListItem,
@@ -33,6 +34,7 @@ import type {
   ReportStatus,
 } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   ACTION_LABELS,
   actionTypeBadge,
@@ -122,6 +124,12 @@ const PAGINATION_LABELS = {
   page: (page: number, of: number) => `Страница ${page} из ${of}`,
 };
 
+/** Caption for a failed report action: `HTTP <status>: <API error code>`. */
+function describeReportError(error: unknown): string {
+  if (!(error instanceof ApiError)) return describeHttpError(error);
+  return `HTTP ${error.status}: ${error.jsonBody<{ error?: unknown }>()?.error ?? 'unknown'}`;
+}
+
 function upsertReport(list: ReportListItem[], incoming: ReportListItem): ReportListItem[] {
   const index = list.findIndex((report) => report.id === incoming.id);
   if (index === -1) return list;
@@ -140,7 +148,8 @@ export function ReportsBrowser() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [canHandle, setCanHandle] = useState(false);
+  const { data: me } = useApiResource<{ can_handle_reports?: boolean }>('/api/v1/me');
+  const canHandle = me?.can_handle_reports ?? false;
   const [view, setView] = useState<'queue' | 'analytics'>('queue');
 
   const navigate = useCallback(
@@ -152,34 +161,18 @@ export function ReportsBrowser() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((me: { can_handle_reports?: boolean } | null) => {
-        if (!cancelled) setCanHandle(me?.can_handle_reports ?? false);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const { status: filterStatus, page: filterPage } = filters;
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
+      const data = await apiFetch<ReportListResponse>(
         `/api/v1/reports?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ReportListResponse;
       setReports(data.items);
       setTotal(data.total);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setLoading(false);
     }
@@ -377,25 +370,19 @@ function ReportGroupBlock({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/reports/bulk-resolve', {
+      await apiSend('/api/v1/reports/bulk-resolve', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           target_player_id: group.target_player_id,
           status: 'resolved',
           resolution_note: trimmed,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
-      }
       setAskNote(false);
       setNote('');
       onSaved();
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeReportError(e));
     } finally {
       setBusy(false);
     }
@@ -520,20 +507,11 @@ function ReportCard({
         setEditing(false);
         return;
       }
-      const res = await fetch(`/api/v1/reports/${report.id}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${errBody.error ?? 'unknown'}`);
-      }
+      await apiSend(`/api/v1/reports/${report.id}`, { method: 'PATCH', json: body });
       setEditing(false);
       onSaved();
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeReportError(e));
     } finally {
       setSaving(false);
     }
@@ -556,15 +534,13 @@ function ReportCard({
     setBanAltWarningLoading(true);
     setBanAltWarningError(null);
     try {
-      const response = await fetch(`/api/v1/players/${targetPlayerId}/ban-alt-warning`, {
-        credentials: 'include',
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setBanAltWarning((await response.json()) as BanAltWarning);
+      setBanAltWarning(
+        await apiFetch<BanAltWarning>(`/api/v1/players/${targetPlayerId}/ban-alt-warning`, {
+          signal: controller.signal,
+        }),
+      );
     } catch (error) {
-      if (!controller.signal.aborted) setBanAltWarningError((error as Error).message);
+      if (!controller.signal.aborted) setBanAltWarningError(describeHttpError(error));
     } finally {
       window.clearTimeout(timeout);
       setBanAltWarningLoading(false);
@@ -574,12 +550,9 @@ function ReportCard({
   const loadActions = useCallback(async () => {
     setActionsLoading(true);
     try {
-      const res = await fetch(`/api/v1/reports/${report.id}/actions`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { actions: LinkedModerationAction[] };
+      const body = await apiFetch<{ actions: LinkedModerationAction[] }>(
+        `/api/v1/reports/${report.id}/actions`,
+      );
       setActions(body.actions);
     } catch {
       setActions([]);
@@ -613,20 +586,11 @@ function ReportCard({
         body.ban_length = banLength.trim() || '0';
         if (selectedAltIds.length > 0) body.also_player_ids = selectedAltIds;
       }
-      const res = await fetch(`/api/v1/reports/${report.id}/actions`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${errBody.error ?? 'unknown'}`);
-      }
+      await apiSend(`/api/v1/reports/${report.id}/actions`, { method: 'POST', json: body });
       setActionModal(null);
       if (actionsOpen) void loadActions();
     } catch (e) {
-      setActionError((e as Error).message);
+      setActionError(describeReportError(e));
     } finally {
       setActionBusy(false);
     }
@@ -636,23 +600,17 @@ function ReportCard({
     setNotifyBusy(true);
     setNotifyMsg(null);
     try {
-      const res = await fetch(`/api/v1/reports/${report.id}/notify-reporter`, {
+      await apiSend(`/api/v1/reports/${report.id}/notify-reporter`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ template: notifyTemplate }),
+        json: { template: notifyTemplate },
       });
-      if (res.status === 409) {
+      setNotifyMsg({ kind: 'ok', text: 'Уведомление отправлено.' });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
         setNotifyMsg({ kind: 'err', text: 'Репортёр не в сети' });
         return;
       }
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${errBody.error ?? 'unknown'}`);
-      }
-      setNotifyMsg({ kind: 'ok', text: 'Уведомление отправлено.' });
-    } catch (e) {
-      setNotifyMsg({ kind: 'err', text: (e as Error).message });
+      setNotifyMsg({ kind: 'err', text: describeReportError(e) });
     } finally {
       setNotifyBusy(false);
     }

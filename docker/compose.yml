@@ -1,7 +1,13 @@
 # Run from the repository root: .env there sets COMPOSE_FILE to this file, so a
 # plain `docker compose ...` finds it and reads that .env. Paths below resolve
 # from this directory, and the project name stays the one installs have run
-# under (their containers, network and volumes).
+# under (their containers, network and volumes). Compose lets COMPOSE_PROJECT_NAME
+# (shell or .env) take precedence over `name:`, so a second checkout on the same
+# machine sets it together with the *_PORT variables below and its containers,
+# volumes and published ports no longer collide with the first one's. Do not
+# interpolate `name:` itself: Compose 2.15 mangles `${COMPOSE_PROJECT_NAME:-x}`
+# into `compose_project_name-x`, which would rename every volume of an existing
+# install. See docs/development/local-development.md.
 name: squad-admin-panel
 
 x-logging: &default-logging
@@ -43,8 +49,8 @@ services:
     <<: *hardening
     mem_limit: 256m
     ports:
-      - '80:80'
-      - '443:443'
+      - '${CADDY_HTTP_PORT:-80}:80'
+      - '${CADDY_HTTPS_PORT:-443}:443'
     environment:
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
       APP_IP: ${APP_IP:-127.0.0.1}
@@ -104,7 +110,7 @@ services:
       # Redis the per-server sidecar container reaches. It runs with
       # --network host, so the compose service name does not resolve there,
       # and it authenticates as the restricted `rnsquadjs` ACL user (see redis).
-      SIDECAR_REDIS_URL: redis://rnsquadjs:${REDIS_SIDECAR_PASSWORD}@127.0.0.1:6379
+      SIDECAR_REDIS_URL: redis://rnsquadjs:${REDIS_SIDECAR_PASSWORD}@127.0.0.1:${REDIS_HOST_PORT:-6379}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY_is_required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET_is_required}
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
@@ -275,8 +281,8 @@ services:
     <<: [*hardening, *worker-limits]
     network_mode: host
     environment:
-      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@127.0.0.1:5432/admin
-      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:6379
+      DATABASE_URL: postgres://${PANEL_DB_USER:-admin}:${PANEL_DB_PASSWORD:-${POSTGRES_PASSWORD}}@127.0.0.1:${POSTGRES_HOST_PORT:-5432}/admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${REDIS_HOST_PORT:-6379}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       # On --network host, Squad's RCON listener is on the local loopback.
       # Credentials with rcon_host=NULL fall back to this value.
@@ -620,7 +626,7 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_is_required}
     ports:
-      - '127.0.0.1:5432:5432'
+      - '127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -676,7 +682,7 @@ services:
       # redis-cli (healthcheck, `compose exec redis redis-cli`) authenticates with it.
       REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
-      - '127.0.0.1:6379:6379'
+      - '127.0.0.1:${REDIS_HOST_PORT:-6379}:6379'
     volumes:
       - redis_data:/data
     healthcheck:

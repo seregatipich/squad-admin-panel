@@ -16,6 +16,19 @@ export default {
   // the sharp/libheif decoding behind it) would only be reachable attack
   // surface. With `unoptimized` Next serves no optimizer endpoint at all (#22).
   images: { unoptimized: true },
+  // `next dev` resolves the workspace packages to their TypeScript source (the
+  // `development` export condition), whose relative imports are spelled `./x.js`.
+  // Without this alias webpack looks for a literal .js file and `pnpm dev:app`
+  // would need `pnpm build` first. Production builds keep resolving `dist`.
+  webpack(config, { dev }) {
+    if (dev) {
+      config.resolve.extensionAlias = {
+        ...config.resolve.extensionAlias,
+        '.js': ['.ts', '.tsx', '.js'],
+      };
+    }
+    return config;
+  },
   // Content-Security-Policy is not set here: it carries a per-request script
   // nonce, so `src/middleware.ts` builds it (`src/lib/csp.ts`) for every page.
   async headers() {

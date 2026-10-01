@@ -181,6 +181,18 @@ echo two >>file && git add file && git commit -q -m "unpushed"
 assert fail "dev ahead of origin/dev (unpushed commit)"
 git reset -q --hard origin/dev
 
+# `dev` is normally checked out in another worktree, which leaves this one on a
+# detached HEAD. At the origin/dev tip that is the integration state; anywhere
+# else it is not.
+git switch -q --detach origin/dev
+assert pass "detached HEAD at the origin/dev tip"
+git switch -q --detach origin/dev~1
+assert fail "detached HEAD behind the origin/dev tip"
+echo detached >detached.txt && git add detached.txt && git commit -q -m "detached work"
+assert fail "detached HEAD with a commit that is not on origin/dev"
+git switch -q dev
+git reset -q --hard origin/dev
+
 git branch -q main
 assert fail "doctor warning: a main branch exists"
 git branch -qD main

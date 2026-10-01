@@ -1,13 +1,31 @@
 import { MARK_TYPE_ICONS } from '@squad/shared-config/mark-types';
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/lib/api';
 import {
   isSameOrder,
   isValidSlug,
   type MarkType,
   moveItem,
+  RequestFailure,
+  requestFailureText,
   severityLabel,
   sortByOrder,
 } from './helpers';
+
+describe('requestFailureText', () => {
+  it('shows the status of a RequestFailure and of an ApiError alike', () => {
+    expect(requestFailureText(new RequestFailure(500))).toBe('Запрос не выполнен (HTTP 500).');
+    expect(requestFailureText(new ApiError('/api/v1/mark-types', 500, 'boom'))).toBe(
+      'Запрос не выполнен (HTTP 500).',
+    );
+  });
+
+  it('shows the network text for anything else', () => {
+    expect(requestFailureText(new TypeError('Failed to fetch'))).toBe(
+      'Сетевая ошибка. Проверьте соединение и повторите.',
+    );
+  });
+});
 
 function makeType(id: number, sortOrder: number): MarkType {
   return {

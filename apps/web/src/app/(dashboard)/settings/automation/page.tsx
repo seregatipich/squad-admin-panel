@@ -29,6 +29,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { apiFetch, apiResult, apiSend, describeHttpError } from '@/lib/api';
 import { sampleFor as sampleForCondition } from './helpers';
 
 interface AutomationRule {
@@ -194,13 +195,13 @@ export default function AutomationPage() {
   const refresh = useCallback(async () => {
     try {
       const [rulesRes, runsRes, meRes] = await Promise.all([
-        fetch('/api/v1/automation-rules', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/automation-runs', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<AutomationRule[]>('/api/v1/automation-rules'),
+        apiResult<AutomationRun[]>('/api/v1/automation-runs'),
+        apiResult<Me>('/api/v1/me'),
       ]);
-      if (rulesRes.ok) setRules((await rulesRes.json()) as AutomationRule[]);
-      if (runsRes.ok) setRuns((await runsRes.json()) as AutomationRun[]);
-      if (meRes.ok) setMe((await meRes.json()) as Me);
+      if (rulesRes.ok) setRules(rulesRes.data);
+      if (runsRes.ok) setRuns(runsRes.data);
+      if (meRes.ok) setMe(meRes.data);
       setLoadFailed(!rulesRes.ok || !runsRes.ok || !meRes.ok);
     } catch {
       setLoadFailed(true);
@@ -222,22 +223,21 @@ export default function AutomationPage() {
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/automation-rules', {
+      const res = await apiResult<unknown>('/api/v1/automation-rules', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           name: form.name.trim(),
           condition_type: form.conditionType,
           condition: buildCondition(form),
           action_type: form.actionType,
           action: buildAction(form),
           enabled: true,
-        }),
+        },
+        discardBody: true,
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.message ?? body.error ?? res.status));
+        const body = res.error.jsonBody<Record<string, unknown>>() ?? {};
+        throw new Error(String(body.message ?? body.error ?? res.error.status));
       }
       setForm({ ...EMPTY_FORM });
       await refresh();
@@ -253,16 +253,13 @@ export default function AutomationPage() {
     setBusyId(rule.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/automation-rules/${rule.id}`, {
+      await apiSend(`/api/v1/automation-rules/${rule.id}`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !rule.enabled }),
+        json: { enabled: !rule.enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refresh();
     } catch (err) {
-      setError(`Не удалось изменить статус: ${(err as Error).message}`);
+      setError(`Не удалось изменить статус: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }
@@ -274,14 +271,10 @@ export default function AutomationPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/v1/automation-rules/${rule.id}/dry-run`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sample: sampleFor(rule) }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const outcome = (await res.json()) as { matched: boolean };
+      const outcome = await apiFetch<{ matched: boolean }>(
+        `/api/v1/automation-rules/${rule.id}/dry-run`,
+        { method: 'POST', json: { sample: sampleFor(rule) } },
+      );
       setNotice(
         outcome.matched
           ? `Тест правила «${rule.name}»: условие сработало (действие НЕ выполнено).`
@@ -289,7 +282,7 @@ export default function AutomationPage() {
       );
       await refresh();
     } catch (err) {
-      setError(`Не удалось протестировать: ${(err as Error).message}`);
+      setError(`Не удалось протестировать: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }
@@ -300,14 +293,10 @@ export default function AutomationPage() {
     setBusyId(rule.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/automation-rules/${rule.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/automation-rules/${rule.id}`, { method: 'DELETE' });
       await refresh();
     } catch (err) {
-      setError(`Не удалось удалить: ${(err as Error).message}`);
+      setError(`Не удалось удалить: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
       setPendingDelete(null);

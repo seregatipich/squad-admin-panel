@@ -54,7 +54,7 @@ When `decodeFrames` throws (stream out of sync, malformed frame), `attachHandler
 3. Destroys the socket and sets `this.socket = undefined`.
 4. Does **NOT** set `this.closed = true`.
 
-Result: the next RPC call transparently reconnects. If `closed` were set to `true` here, every subsequent caller would receive `BridgeError('transport', 'client is closed')` permanently — that was the original bug; the current code deliberately avoids it. This pattern is documented in [`CLAUDE.md`](../../../CLAUDE.md#key-gotchas-worth-knowing-upfront).
+Result: the next RPC call transparently reconnects. If `closed` were set to `true` here, every subsequent caller would receive `BridgeError('transport', 'client is closed')` permanently — that was the original bug; the current code deliberately avoids it.
 
 ## Socket close / error
 

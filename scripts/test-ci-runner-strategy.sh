@@ -140,12 +140,53 @@ has_text "$branch_guard" "if: github.event_name == 'push' && github.ref == 'refs
   fail 'branch-guard no longer audits master pushes'
 has_text "$branch_guard" 'git merge-base --is-ancestor "$GITHUB_SHA" origin/dev' ||
   fail 'branch-guard no longer proves the master tip came from dev'
+has_line "$branch_guard" '        run: bash scripts/test-repo-contracts.sh' ||
+  fail 'branch-guard does not run the contract suites through scripts/test-repo-contracts.sh'
+[ "$(printf '%s\n' "$branch_guard" | grep -c 'run: bash scripts/test-')" -eq 1 ] ||
+  fail 'branch-guard runs contract suites outside scripts/test-repo-contracts.sh'
+# The pre-push-checklist suite needs gitleaks, so the runner follows the install.
+[ "$(printf '%s\n' "$branch_guard" | grep -n 'name: Install gitleaks' | cut -d: -f1)" -lt \
+  "$(printf '%s\n' "$branch_guard" | grep -n 'run: bash scripts/test-repo-contracts.sh' | cut -d: -f1)" ] ||
+  fail 'branch-guard runs the contract suites before it installs gitleaks'
+
+contracts_runner="$repo_root/scripts/test-repo-contracts.sh"
 for suite in test-git-guard test-verify-done test-pre-push-checklist test-workflow-pins \
-  test-gitignore-patterns test-workflow-security test-codeql-default-setup \
-  test-ci-runner-strategy test-ci-test-shard; do
-  has_text "$branch_guard" "run: bash scripts/${suite}.sh" ||
-    fail "branch-guard does not run scripts/${suite}.sh"
+  test-dependency-pins test-migration-lint test-gitignore-patterns test-workflow-security \
+  test-codeql-default-setup test-ci-runner-strategy test-ci-test-shard \
+  test-image-preserve-labels test-rnsquadjs-runtime-copy test-bridge-package-scripts \
+  test-compose-env-passthrough test-postgres-max-connections test-local-dev-isolation; do
+  has_line "$(sed -n '/^SUITES=($/,/^)$/p' "$contracts_runner")" "  ${suite}" ||
+    fail "scripts/test-repo-contracts.sh does not run ${suite}"
+  [ -f "$repo_root/scripts/${suite}.sh" ] || fail "scripts/${suite}.sh does not exist"
 done
+
+# The runner runs every suite even after one failed, and lists the failures.
+runner_fixture=$(mktemp -d)
+mkdir -p "$runner_fixture/scripts"
+cp "$contracts_runner" "$runner_fixture/scripts/"
+printf '%s\n' 'echo ran ok-one >>"$RUNNER_LOG"' >"$runner_fixture/scripts/test-ok-one.sh"
+printf '%s\n' 'echo ran bad-one >>"$RUNNER_LOG"; exit 3' >"$runner_fixture/scripts/test-bad-one.sh"
+printf '%s\n' 'echo ran ok-two >>"$RUNNER_LOG"' >"$runner_fixture/scripts/test-ok-two.sh"
+printf '%s\n' 'echo ran bad-two >>"$RUNNER_LOG"; exit 1' >"$runner_fixture/scripts/test-bad-two.sh"
+runner_run() {
+  : >"$runner_fixture/log"
+  RUNNER_LOG="$runner_fixture/log" REPO_CONTRACTS_SUITES="$1" \
+    bash "$runner_fixture/scripts/test-repo-contracts.sh" >"$runner_fixture/out" 2>&1
+}
+runner_run 'test-ok-one test-bad-one test-ok-two test-bad-two' &&
+  fail 'the contracts runner exits 0 although suites failed'
+[ "$(tr '\n' ',' <"$runner_fixture/log")" = 'ran ok-one,ran bad-one,ran ok-two,ran bad-two,' ] ||
+  fail "the contracts runner did not run every suite in order: $(tr '\n' ',' <"$runner_fixture/log")"
+grep -Fxq '  - test-bad-one' "$runner_fixture/out" && grep -Fxq '  - test-bad-two' "$runner_fixture/out" ||
+  fail 'the contracts runner does not list every failed suite'
+grep -Fq 'test-ok-' <(grep '^  - ' "$runner_fixture/out") &&
+  fail 'the contracts runner lists a passing suite as failed'
+runner_run 'test-ok-one test-missing test-ok-two' && fail 'the contracts runner passes with a missing suite'
+grep -Fxq '  - test-missing (missing)' "$runner_fixture/out" || fail 'the contracts runner does not name the missing suite'
+[ "$(tr '\n' ',' <"$runner_fixture/log")" = 'ran ok-one,ran ok-two,' ] ||
+  fail 'a missing suite stopped the contracts runner'
+runner_run 'test-ok-one test-ok-two' || fail "the contracts runner fails when every suite passes: $(cat "$runner_fixture/out")"
+rm -rf "$runner_fixture"
 
 lint=$(job_block "$ci_workflow" lint)
 for command in 'pnpm exec biome check .' 'bash scripts/test-cov-complete.sh' \

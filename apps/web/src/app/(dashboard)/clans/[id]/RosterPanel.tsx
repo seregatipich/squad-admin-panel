@@ -28,6 +28,7 @@ import {
   type ToolbarProps,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, ApiResponseError, apiFetch, apiSend } from '@/lib/api';
 
 export interface RosterMember {
   player_id: string;
@@ -257,9 +258,7 @@ export default function RosterPanel({
 
   const loadMe = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      if (!res.ok) return;
-      setMe((await res.json()) as MeResponse);
+      setMe(await apiFetch<MeResponse>('/api/v1/me'));
     } catch {
       /* ignore */
     }
@@ -275,12 +274,9 @@ export default function RosterPanel({
         limit: String(PAGE_LIMIT),
       });
       if (q.trim().length > 0) query.set('q', q.trim());
-      const res = await fetch(`/api/v1/clans/${clanId}/members?${query.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`Не удалось загрузить ростер (${res.status})`);
-      const body = (await res.json()) as RosterResponse;
+      const body = await apiFetch<RosterResponse>(
+        `/api/v1/clans/${clanId}/members?${query.toString()}`,
+      );
       // Ответ на устаревший запрос (другой поиск, сортировка, страница) не применяем.
       if (requestId !== latestRosterRequestRef.current) return;
       const lastPage = Math.max(1, Math.ceil(body.total / PAGE_LIMIT));
@@ -293,7 +289,9 @@ export default function RosterPanel({
       setErr(null);
     } catch (e) {
       if (requestId !== latestRosterRequestRef.current) return;
-      setErr((e as Error).message);
+      setErr(
+        e instanceof ApiError ? `Не удалось загрузить ростер (${e.status})` : (e as Error).message,
+      );
     }
   }, [clanId, q, sort, order, page]);
 
@@ -314,7 +312,7 @@ export default function RosterPanel({
   const mutate = useCallback(
     async (
       playerId: string,
-      run: () => Promise<Response>,
+      run: () => Promise<unknown>,
       mapError: (body: PriorityErrorBody) => string = (body) =>
         `Действие не выполнено: ${body.error ?? 'unknown'}`,
       onSuccess?: (body: unknown) => void,
@@ -322,14 +320,16 @@ export default function RosterPanel({
       setBusyPlayerIds((prev) => new Set(prev).add(playerId));
       setInfo(null);
       try {
-        const res = await run();
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setErr(mapError(body as PriorityErrorBody));
+        let body: unknown;
+        try {
+          body = await run();
+        } catch (e) {
+          if (!(e instanceof ApiError)) throw e;
+          setErr(mapError((e.jsonBody() ?? {}) as PriorityErrorBody));
           return false;
         }
         setErr(null);
-        onSuccess?.(body);
+        onSuccess?.(body ?? {});
         await loadRoster();
         return true;
       } catch (e) {
@@ -349,11 +349,9 @@ export default function RosterPanel({
   const changeRole = useCallback(
     (playerId: string, role: string) =>
       mutate(playerId, () =>
-        fetch(`/api/v1/clans/${clanId}/members/${playerId}`, {
+        apiSend(`/api/v1/clans/${clanId}/members/${playerId}`, {
           method: 'PATCH',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ member_role: role }),
+          json: { member_role: role },
         }),
       ),
     [clanId, mutate],
@@ -363,10 +361,7 @@ export default function RosterPanel({
     const member = pendingRemove;
     if (!member) return;
     await mutate(member.player_id, () =>
-      fetch(`/api/v1/clans/${clanId}/members/${member.player_id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      }),
+      apiSend(`/api/v1/clans/${clanId}/members/${member.player_id}`, { method: 'DELETE' }),
     );
     setPendingRemove(null);
   }, [clanId, mutate, pendingRemove]);
@@ -375,11 +370,9 @@ export default function RosterPanel({
     const member = pendingTransfer;
     if (!member) return;
     await mutate(member.player_id, () =>
-      fetch(`/api/v1/clans/${clanId}/transfer-leadership`, {
+      apiSend(`/api/v1/clans/${clanId}/transfer-leadership`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ player_id: member.player_id }),
+        json: { player_id: member.player_id },
       }),
     );
     setPendingTransfer(null);
@@ -390,11 +383,9 @@ export default function RosterPanel({
       const ok = await mutate(
         member.player_id,
         () =>
-          fetch(`/api/v1/clans/${clanId}/members/${member.player_id}/priority`, {
+          apiSend(`/api/v1/clans/${clanId}/members/${member.player_id}/priority`, {
             method: 'PUT',
-            credentials: 'include',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ enabled }),
+            json: { enabled },
           }),
         priorityErrorMessage,
       );
@@ -410,11 +401,13 @@ export default function RosterPanel({
       const ok = await mutate(
         playerId,
         () =>
-          fetch(`/api/v1/clans/${clanId}/members`, {
+          apiFetch<unknown>(`/api/v1/clans/${clanId}/members`, {
             method: 'POST',
-            credentials: 'include',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ player_id: playerId, member_role: role }),
+            json: { player_id: playerId, member_role: role },
+          }).catch((e: unknown) => {
+            // A 2xx without a JSON body still counts as success.
+            if (e instanceof ApiResponseError) return {};
+            throw e;
           }),
         undefined,
         (body) => {
@@ -814,14 +807,10 @@ function AddMemberModal({
     setSearching(true);
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/players/search?q=${encodeURIComponent(trimmed)}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (res.ok && !cancelled) {
-          const body = (await res.json()) as { items: SearchCandidate[] };
-          setResults(body.items);
-        }
+        const body = await apiFetch<{ items: SearchCandidate[] }>(
+          `/api/v1/players/search?q=${encodeURIComponent(trimmed)}`,
+        );
+        if (!cancelled) setResults(body.items);
       } catch {
         /* ignore */
       } finally {

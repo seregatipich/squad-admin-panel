@@ -35,4 +35,3 @@ apps/workers/backup/
 - [configuration.md](./configuration.md)
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
-- [changelog.md](./changelog.md)

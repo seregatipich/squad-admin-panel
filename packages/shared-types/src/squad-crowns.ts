@@ -1,6 +1,6 @@
 /**
  * Contract of the `rcon:squad-crowns:{serverId}` Redis hash (squad history,
- * docs/superpowers/specs/2026-09-27-squad-history-design.md §2).
+ * docs/components/workers/rcon/data-model.md).
  *
  * worker-rcon writes one field per squad creator (EOS id) whose leadership
  * earned a crown in the current match, and deletes the hash on a match reset.

@@ -1,3 +1,5 @@
+import { ApiError } from './api';
+
 /**
  * Russian text for a non-2xx answer, so a raw `HTTP 500` never reaches the operator.
  *
@@ -12,12 +14,14 @@ export function describeHttpStatus(status: number): string {
  * Maps a failed request to Russian text, so a raw `HTTP 500` or `Failed to fetch`
  * never reaches the operator.
  *
- * @param error Value caught from a request; an `Error` whose message is `HTTP <status>`
- *   (thrown after a non-2xx response) is reported with its status code.
+ * @param error Value caught from a request; an `ApiError`, or an `Error` whose message is
+ *   `HTTP <status>` (thrown after a non-2xx response), is reported with its status code.
  * @returns Message for an error banner.
  */
 export function describeLoadError(error: unknown): string {
-  const status = error instanceof Error ? /^HTTP (\d+)$/.exec(error.message)?.[1] : undefined;
+  let status: string | undefined;
+  if (error instanceof ApiError) status = String(error.status);
+  else if (error instanceof Error) status = /^HTTP (\d+)$/.exec(error.message)?.[1];
   return status
     ? describeHttpStatus(Number(status))
     : 'Не удалось связаться с сервером. Проверьте подключение.';

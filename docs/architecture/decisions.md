@@ -167,7 +167,7 @@ The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parall
 ### Alternatives considered
 
 - **Inline write from API request handler.** Rejected — would couple request latency to bridge round-trips on every mutation; under bridge stalls, role edits would block. Stream + worker decouples cleanly.
-- **Vendoring RNSquadJS.** Already-rejected per CLAUDE.md "RNSquadJS stance"; not revisited.
+- **Vendoring RNSquadJS.** Already rejected earlier; not revisited.
 - **Bidirectional sync (parse `Admins.cfg` back into DB).** Out of P0 scope — the spec calls it a P0-deferred item; force-sync is the deliberate escape hatch instead.
 - **Splitting roles into "panel role" + "squad group" entities.** Rejected — that's exactly the model the spec set out to dissolve.
 

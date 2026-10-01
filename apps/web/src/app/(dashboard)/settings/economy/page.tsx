@@ -37,6 +37,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 import {
   COEFFICIENT_FIELDS,
   type EconomyFormState,
@@ -107,11 +108,11 @@ export default function EconomySettingsPage() {
   const refresh = useCallback(async () => {
     try {
       const [settingsRes, meRes] = await Promise.all([
-        fetch('/api/v1/settings/economy', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<unknown>('/api/v1/settings/economy'),
+        apiResult<unknown>('/api/v1/me'),
       ]);
       if (settingsRes.ok) {
-        const parsed = economySettingsResponse.safeParse(await settingsRes.json());
+        const parsed = economySettingsResponse.safeParse(settingsRes.data);
         if (parsed.success) {
           setSettings(parsed.data);
           setForm(settingsToForm(parsed.data));
@@ -120,14 +121,14 @@ export default function EconomySettingsPage() {
           setGlobalErr('Сервер вернул настройки экономики в неожиданном формате.');
         }
       } else {
-        setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
+        setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.error.status}`);
       }
       if (meRes.ok) {
-        const parsed = economyMeResponse.safeParse(await meRes.json());
+        const parsed = economyMeResponse.safeParse(meRes.data);
         if (parsed.success) setMe(parsed.data);
         else setGlobalErr('Сервер вернул данные пользователя в неожиданном формате.');
       } else {
-        setGlobalErr(`Не удалось загрузить данные пользователя: ${meRes.status}`);
+        setGlobalErr(`Не удалось загрузить данные пользователя: ${meRes.error.status}`);
       }
     } catch (err) {
       setGlobalErr(`Ошибка сети: ${(err as Error).message}`);
@@ -142,18 +143,18 @@ export default function EconomySettingsPage() {
   const refreshTiers = useCallback(async () => {
     try {
       const [tiersRes, rolesRes] = await Promise.all([
-        fetch('/api/v1/vip-tiers', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        apiResult<unknown>('/api/v1/vip-tiers'),
+        apiResult<unknown>('/api/v1/roles'),
       ]);
       // Both endpoints 403 without can_edit_roles — the section is hidden then,
       // so a failed load is not an error worth surfacing.
       if (tiersRes.ok) {
-        const parsed = vipTierListResponse.safeParse(await tiersRes.json());
+        const parsed = vipTierListResponse.safeParse(tiersRes.data);
         if (parsed.success) setTiers(parsed.data.rows);
         else setGlobalErr('Сервер вернул список VIP-тиров в неожиданном формате.');
       }
       if (rolesRes.ok) {
-        const parsed = roleOptionListResponse.safeParse(await rolesRes.json());
+        const parsed = roleOptionListResponse.safeParse(rolesRes.data);
         if (parsed.success) setRoleOptions(parsed.data);
         else setGlobalErr('Сервер вернул список ролей в неожиданном формате.');
       }
@@ -187,18 +188,15 @@ export default function EconomySettingsPage() {
     setGlobalErr(null);
     setSaving(true);
     try {
-      const res = await fetch('/api/v1/settings/economy', {
+      const res = await apiResult<unknown>('/api/v1/settings/economy', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(validation.value),
+        json: validation.value,
       });
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setGlobalErr(`Ошибка сохранения: ${err.error ?? res.status}`);
+        setGlobalErr(`Ошибка сохранения: ${res.error.codeOrStatus()}`);
         return;
       }
-      const fresh = economySettingsResponse.safeParse(await res.json());
+      const fresh = economySettingsResponse.safeParse(res.data);
       if (!fresh.success) {
         setGlobalErr('Сервер вернул настройки экономики в неожиданном формате.');
         return;
@@ -250,18 +248,13 @@ export default function EconomySettingsPage() {
     setTierErr(null);
     setTierSaving(true);
     try {
-      const res = await fetch(
+      const res = await apiResult<unknown>(
         editingTierId ? `/api/v1/vip-tiers/${editingTierId}` : '/api/v1/vip-tiers',
-        {
-          method: editingTierId ? 'PUT' : 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(validation.value),
-        },
+        { method: editingTierId ? 'PUT' : 'POST', json: validation.value, discardBody: true },
       );
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setTierErr(`Ошибка сохранения тира: ${tierErrorText(err.error, res.status)}`);
+        const err = res.error.jsonBody<Record<string, unknown>>() ?? {};
+        setTierErr(`Ошибка сохранения тира: ${tierErrorText(err.error, res.error.status)}`);
         return;
       }
       cancelTierForm();
@@ -278,13 +271,13 @@ export default function EconomySettingsPage() {
     setTierErr(null);
     setTierDeleting(true);
     try {
-      const res = await fetch(`/api/v1/vip-tiers/${tier.id}`, {
+      const res = await apiResult<unknown>(`/api/v1/vip-tiers/${tier.id}`, {
         method: 'DELETE',
-        credentials: 'include',
+        discardBody: true,
       });
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.status)}`);
+        const err = res.error.jsonBody<Record<string, unknown>>() ?? {};
+        setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.error.status)}`);
         return;
       }
       await refreshTiers();

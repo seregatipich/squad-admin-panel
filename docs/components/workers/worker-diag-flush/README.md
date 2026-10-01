@@ -49,7 +49,7 @@ apps/workers/diag-flush/
 
 ## Components that depend on it
 
-- [`diagnostic-bundle`](../../diagnostic-bundle/README.md) (Phase A2 onward) — selects from `diagnostic_events` via the API. If this worker is dead, the bundle endpoint reports degraded freshness.
+- Diagnostic bundle (designed in the [spec](../../../superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md), endpoint not implemented yet) — would select from `diagnostic_events`, so it depends on this worker staying alive.
 - The API health surface — `/api/v1/health/workers` aggregates the heartbeat key `worker:heartbeat:diag-flush`.
 
 ## Components it depends on
@@ -85,4 +85,3 @@ redis-cli xinfo groups diag:queue
 - [configuration.md](./configuration.md)
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
-- [changelog.md](./changelog.md)
