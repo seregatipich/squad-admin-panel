@@ -1,178 +1,42 @@
 'use client';
-import type { OnMount } from '@monaco-editor/react';
-import { loader } from '@monaco-editor/react';
 import { BEGIN_MARKER } from '@squad/shared-config/admins-config';
-import dynamic from 'next/dynamic';
-import Link from 'next/link';
-import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertDialog,
-  type AlertDialogTone,
   Badge,
   Button,
   Card,
-  CardHeader,
-  DateTime,
   EmptyState,
   InlineBanner,
   PageContainer,
   SegmentedControl,
-  SkeletonTable,
-  Table,
-  TableBody,
-  TableHead,
-  TableRow,
-  Td,
-  TextInput,
-  Th,
 } from '@/components/ui';
-import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import { useApiResource } from '@/lib/use-polled-resource';
-import { type DriftDiff, type DriftItem, DriftPanel } from './DriftPanel';
-import { BEHAVIOR_BADGE, type FileItem, FileList } from './FileList';
+import { BlameView } from './ConfigBlameView';
+import { EditorView } from './ConfigEditorView';
+import { HistoryView } from './ConfigHistoryView';
+import {
+  type Confirmation,
+  confirmationText,
+  PANEL_MANAGED_FILE,
+  RESET_EXCLUDED_FILES,
+  TABS,
+  type Tab,
+  UNSAVED_EDITS_WARNING,
+} from './config-model';
+import { DriftPanel } from './DriftPanel';
+import { BEHAVIOR_BADGE, FileList } from './FileList';
+import { ManagedFileBanners } from './ManagedFileBanners';
 import { managedSegmentLineRange } from './managed-segment';
-
-const POLL_MS = 8000;
-
-/**
- * A 404 (no such route) or 409 (`external_server`: no config tree at all)
- * answers the same way on every later poll, so polling stops instead of
- * re-bannering every POLL_MS forever (#609).
- */
-function isHardFailure(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 404 || error.status === 409);
-}
-
-type EditorInstance = Parameters<OnMount>[0];
-type MonacoInstance = Parameters<OnMount>[1];
-
-// Serve the AMD loader from our own origin rather than a public CDN. The
-// pinned `monaco-editor` dependency is vendored into `public/monaco/vs` by
-// `scripts/sync-monaco.mjs` at build time, so the browser still gets the
-// exact build this repo's dependency pins were audited against (#242) — but
-// a client that cannot reach cdn.jsdelivr.net no longer hangs the editor on
-// "Loading..." forever, and the page needs no CDN in its CSP.
-loader.config({ paths: { vs: '/monaco/vs' } });
-
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
-const MonacoDiff = dynamic(
-  () => import('@monaco-editor/react').then((m) => ({ default: m.DiffEditor })),
-  { ssr: false },
-);
-
-interface Version {
-  id: string;
-  sha256: string;
-  author_user_id: string | null;
-  author_email: string | null;
-  message: string | null;
-  size: number;
-  created_at: string;
-}
-
-interface BlameLine {
-  text: string;
-  version_id: string;
-  author_user_id: string | null;
-  created_at: string;
-}
-
-interface BlameResponse {
-  lines: BlameLine[];
-  authors: Record<string, string>;
-  /** Older history was cut off; its lines are attributed to the oldest version shown. */
-  truncated?: boolean;
-}
-
-/** Files whose drift/reset story is owned by dedicated machinery — no
- *  reset-to-depot-default button for them. */
-const RESET_EXCLUDED_FILES = ['License.cfg', 'Admins.cfg', 'LayerRotation.cfg'];
-
-type Tab = 'editor' | 'history' | 'blame';
-
-const TABS = [
-  { value: 'editor', label: 'Редактор' },
-  { value: 'history', label: 'История' },
-  { value: 'blame', label: 'Blame' },
-];
-
-/**
- * Вопрос, на который оператор ещё не ответил.
- *
- * Раньше это был `window.confirm`, и вся ветка была синхронной. Диалог
- * подтверждения асинхронный, поэтому намерение приходится хранить: пока окно
- * открыто, страница помнит, что именно она собиралась сделать.
- */
-type Confirmation =
-  | { kind: 'switch-file'; name: string }
-  | { kind: 'restore'; versionId: string }
-  | { kind: 'restart' }
-  | { kind: 'drift'; name: string; action: 'accept' | 'revert' }
-  | { kind: 'reset'; name: string };
-
-/** Файл, который панель читает замаскированным и не принимает обратно: PUT и restore отвечают 400. */
-const PANEL_MANAGED_FILE = 'License.cfg';
-
-/** Предупреждение для действий, которые перечитывают открытый файл поверх правок в редакторе. */
-const UNSAVED_EDITS_WARNING = ' Несохранённые правки в редакторе будут потеряны.';
-
-/** Текст диалога подтверждения: что произойдёт и как называется само действие. */
-function confirmationText(c: Confirmation): {
-  title: string;
-  body: string;
-  confirmLabel: string;
-  tone: AlertDialogTone;
-} {
-  switch (c.kind) {
-    case 'switch-file':
-      return {
-        title: 'Открыть другой файл?',
-        body: 'В открытом файле есть несохранённые правки. Если открыть другой файл, они пропадут — на диске и в истории останется прежнее содержимое.',
-        confirmLabel: 'Открыть без сохранения',
-        tone: 'default',
-      };
-    case 'restore':
-      return {
-        title: 'Восстановить эту версию?',
-        body: 'Содержимое версии станет новой версией файла. История сохранится целиком, ничего не удаляется.',
-        confirmLabel: 'Восстановить как новую версию',
-        tone: 'default',
-      };
-    case 'restart':
-      return {
-        title: 'Перезапустить сервер?',
-        body: 'Игроки будут отключены на время рестарта.',
-        confirmLabel: 'Перезапустить сервер',
-        tone: 'default',
-      };
-    case 'drift':
-      return c.action === 'accept'
-        ? {
-            title: `Принять правку ${c.name} с диска?`,
-            body: 'Содержимое файла с диска станет новой версией в панели.',
-            confirmLabel: 'Принять правку с диска',
-            tone: 'default',
-          }
-        : {
-            title: `Откатить ${c.name} к версии панели?`,
-            body: 'Ручные изменения на диске будут перезаписаны. Панель их не сохраняла, восстановить будет нечем.',
-            confirmLabel: 'Откатить к версии панели',
-            tone: 'destructive',
-          };
-    case 'reset':
-      return {
-        title: `Сбросить ${c.name} к депо-дефолту?`,
-        body: 'Текущее содержимое файла будет заменено шаблоном из поставки. Прежнее содержимое останется в истории версий.',
-        confirmLabel: 'Сбросить к дефолту',
-        tone: 'default',
-      };
-  }
-}
+import { useConfigDrift } from './useConfigDrift';
+import { useConfigFiles } from './useConfigFiles';
+import { useConfigHistory } from './useConfigHistory';
+import { useExternalChangeWatch } from './useExternalChangeWatch';
+import { useManagedSegmentGuard } from './useManagedSegmentGuard';
 
 export default function ConfigsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [files, setFiles] = useState<FileItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('editor');
   const [content, setContent] = useState<string>('');
@@ -187,14 +51,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-
-  const [versions, setVersions] = useState<Version[]>([]);
-  const [versionsLoading, setVersionsLoading] = useState(false);
-  const [diffFrom, setDiffFrom] = useState<string | null>(null);
-  const [diffFromContent, setDiffFromContent] = useState<string>('');
   const [restoring, setRestoring] = useState<string | null>(null);
-
-  const [blame, setBlame] = useState<BlameResponse | null>(null);
 
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [serverSha, setServerSha] = useState<string | null>(null);
@@ -214,132 +71,17 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     serverShaRef.current = serverSha;
   }, [serverSha]);
 
-  // Admins.cfg managed-segment read-only enforcement (CFG-1, #63). monaco
-  // 0.56.0 has no read-only-range API, so the segment is guarded by a
-  // decorations overlay plus an undo of any edit that touches it — the rest
-  // of the file stays editable.
-  const editorRef = useRef<EditorInstance | null>(null);
-  const monacoRef = useRef<MonacoInstance | null>(null);
-  const decorationsRef = useRef<ReturnType<EditorInstance['createDecorationsCollection']> | null>(
-    null,
-  );
-  const protectedRangeRef = useRef<{ startLine: number; endLine: number } | null>(null);
-  const undoingRef = useRef(false);
-  const [editorReady, setEditorReady] = useState(false);
-  const [segmentNotice, setSegmentNotice] = useState(false);
-  const segmentNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Restart button for requires_restart files (CFG-1, #63). A failed read
   // simply leaves the button hidden.
   const { data: me } = useApiResource<{ permissions?: string[] }>('/api/v1/me');
   const canRestart = me?.permissions?.includes('server:restart') ?? false;
   const [restarting, setRestarting] = useState(false);
-
-  // Config drift banner + resolution (CFG-2, #64).
-  const [driftDiff, setDriftDiff] = useState<DriftDiff | null>(null);
-  const [driftBusy, setDriftBusy] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
 
-  // A hard failure (the list route 404s, or containerOnlyPreHandler answers
-  // 409 external_server for a server with no config tree at all) means every
-  // future poll will fail the same way — stop instead of re-banner-ing every
-  // POLL_MS forever (#609).
-  const filesStoppedRef = useRef(false);
-
-  const refreshFiles = useCallback(async () => {
-    try {
-      const j = await apiFetch<{ items: FileItem[] }>(`/api/v1/servers/${id}/configs`);
-      setFiles(j.items);
-    } catch (e) {
-      if (isHardFailure(e)) filesStoppedRef.current = true;
-      setErr(describeHttpError(e));
-    }
-  }, [id]);
-
-  // #1335: the list reads every allowlisted file through the bridge, so it is
-  // refreshed on mount, after writes and when the tab comes back — not on the
-  // poll. Drift and the open file poll only while the tab is visible.
-  useEffect(() => {
-    filesStoppedRef.current = false;
-    void refreshFiles();
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible' || filesStoppedRef.current) return;
-      void refreshFiles();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshFiles]);
-
-  // Best-effort polling: a transient error keeps the last known drift state.
-  const { data: driftData, refresh: refreshDrift } = useApiResource<{ items: DriftItem[] }>(
-    `/api/v1/servers/${id}/configs/drift`,
-    { intervalMs: POLL_MS, pauseWhenHidden: true, stopPolling: isHardFailure },
-  );
-  const driftItems = useMemo(
-    () => driftData?.items.filter((i) => i.state === 'drift') ?? [],
-    [driftData],
-  );
-
-  useEffect(() => {
-    if (!selected) return;
-    const lifetime = new AbortController();
-    let stopped = false;
-    async function poll() {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      if (stopped) return;
-      const target = selectedRef.current;
-      if (!target || document.visibilityState !== 'visible') return;
-      try {
-        const j = await apiFetch<{ content: string; sha256: string | null }>(
-          `/api/v1/servers/${id}/configs/${target}`,
-          { signal: lifetime.signal },
-        );
-        if (selectedRef.current !== target) return;
-        if (j.sha256 && serverShaRef.current && j.sha256 !== serverShaRef.current) {
-          setExternalChange({ sha: j.sha256, content: j.content });
-        }
-      } catch (e) {
-        if (isHardFailure(e)) stopped = true;
-        // other errors are transient during polling
-      }
-    }
-    const t = setInterval(poll, POLL_MS);
-    return () => {
-      lifetime.abort();
-      clearInterval(t);
-    };
-  }, [id, selected]);
-
-  const flashSegmentNotice = useCallback(() => {
-    setSegmentNotice(true);
-    if (segmentNoticeTimer.current) clearTimeout(segmentNoticeTimer.current);
-    segmentNoticeTimer.current = setTimeout(() => setSegmentNotice(false), 2500);
-  }, []);
-
-  const handleEditorMount = useCallback<OnMount>(
-    (editor, monaco) => {
-      editorRef.current = editor;
-      monacoRef.current = monaco;
-      editor.onDidChangeModelContent((ev) => {
-        // Ignore the model change our own undo produces, otherwise the guard
-        // would fight the undo it just issued and loop forever.
-        if (undoingRef.current) return;
-        const range = protectedRangeRef.current;
-        if (!range) return;
-        const touchesSegment = ev.changes.some(
-          (c) =>
-            c.range.startLineNumber <= range.endLine && c.range.endLineNumber >= range.startLine,
-        );
-        if (!touchesSegment) return;
-        undoingRef.current = true;
-        editor.trigger('managed-segment', 'undo', null);
-        undoingRef.current = false;
-        flashSegmentNotice();
-      });
-      setEditorReady(true);
-    },
-    [flashSegmentNotice],
-  );
+  const { files, refreshFiles } = useConfigFiles(id, setErr);
+  const history = useConfigHistory(id, selected, tab, setErr);
+  const { reset: resetHistory } = history;
+  useExternalChangeWatch(id, selected, selectedRef, serverShaRef, setExternalChange);
 
   const load = useCallback(
     async (name: string) => {
@@ -347,12 +89,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setMsg(null);
       // История, blame и diff принадлежат прежнему файлу; повторная загрузка
       // того же файла (после восстановления версии) их не трогает.
-      if (selectedRef.current !== name) {
-        setVersions([]);
-        setBlame(null);
-        setDiffFrom(null);
-        setDiffFromContent('');
-      }
+      if (selectedRef.current !== name) resetHistory();
       setSelected(name);
       setTab('editor');
       setEditing(false);
@@ -375,8 +112,11 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         setErr(describeHttpError(e));
       }
     },
-    [id],
+    [id, resetHistory],
   );
+
+  const drift = useConfigDrift(id, selectedRef, setErr, setMsg, load);
+  const { refreshDrift } = drift;
 
   const acceptExternalChange = useCallback(() => {
     if (!externalChange) return;
@@ -392,35 +132,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const dismissExternalChange = useCallback(() => {
     setExternalChange(null);
   }, []);
-
-  const loadHistory = useCallback(async () => {
-    if (!selected) return;
-    setVersionsLoading(true);
-    try {
-      const j = await apiFetch<{ items: Version[] }>(
-        `/api/v1/servers/${id}/configs/${selected}/history?limit=100`,
-      );
-      setVersions(j.items);
-    } catch (e) {
-      setErr(describeHttpError(e));
-    } finally {
-      setVersionsLoading(false);
-    }
-  }, [id, selected]);
-
-  const loadBlame = useCallback(async () => {
-    if (!selected) return;
-    try {
-      setBlame(await apiFetch<BlameResponse>(`/api/v1/servers/${id}/configs/${selected}/blame`));
-    } catch (e) {
-      setErr(describeHttpError(e));
-    }
-  }, [id, selected]);
-
-  useEffect(() => {
-    if (tab === 'history') void loadHistory();
-    if (tab === 'blame') void loadBlame();
-  }, [tab, loadBlame, loadHistory]);
 
   async function save() {
     if (!selected) return;
@@ -490,18 +201,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     setMsg(null);
   }
 
-  async function openDiff(vid: string) {
-    try {
-      const j = await apiFetch<{ content: string }>(
-        `/api/v1/servers/${id}/configs/${selected}/versions/${vid}`,
-      );
-      setDiffFromContent(j.content);
-      setDiffFrom(vid);
-    } catch (e) {
-      setErr(describeHttpError(e));
-    }
-  }
-
   async function restore(vid: string) {
     if (!selected) return;
     setRestoring(vid);
@@ -511,7 +210,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         json: {},
       });
       setMsg('Восстановлено как новая версия');
-      await loadHistory();
+      await history.loadHistory();
       await load(selected);
     } catch (e) {
       setErr(describeHttpError(e, true));
@@ -535,53 +234,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }
 
-  async function resolveDrift(name: string, action: 'accept' | 'revert') {
-    setDriftBusy(name);
-    setErr(null);
-    setMsg(null);
-    try {
-      await apiSend(`/api/v1/servers/${id}/configs/${name}/drift/${action}`, {
-        method: 'POST',
-        json: {},
-      });
-      setMsg(
-        action === 'accept'
-          ? `${name}: правка с диска принята как новая версия`
-          : `${name}: файл восстановлен из версии панели`,
-      );
-      setDriftDiff(null);
-      await refreshDrift();
-      if (selectedRef.current === name) await load(name);
-    } catch (e) {
-      setErr(describeHttpError(e, true));
-    } finally {
-      setDriftBusy(null);
-    }
-  }
-
-  const openDriftDiff = useCallback(
-    async (item: DriftItem) => {
-      setErr(null);
-      try {
-        let tip = '';
-        if (item.tip_version_id) {
-          tip = (
-            await apiFetch<{ content: string }>(
-              `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
-            )
-          ).content;
-        }
-        const disk = (
-          await apiFetch<{ content: string }>(`/api/v1/servers/${id}/configs/${item.name}`)
-        ).content;
-        setDriftDiff({ name: item.name, tip, disk });
-      } catch (e) {
-        setErr(describeHttpError(e));
-      }
-    },
-    [id],
-  );
-
   const selectFile = useCallback(
     (name: string) => {
       if (dirty) {
@@ -593,7 +245,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     [dirty, load],
   );
 
-  const closeDriftDiff = useCallback(() => setDriftDiff(null), []);
   const requestDriftResolution = useCallback(
     (name: string, action: 'accept' | 'revert') => setConfirmation({ kind: 'drift', name, action }),
     [],
@@ -635,7 +286,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         await restartServer();
         break;
       case 'drift':
-        await resolveDrift(pending.name, pending.action);
+        await drift.resolveDrift(pending.name, pending.action);
         break;
       case 'reset':
         await resetToDefault(pending.name);
@@ -654,7 +305,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       case 'restart':
         return restarting;
       case 'drift':
-        return driftBusy !== null;
+        return drift.driftBusy !== null;
       case 'reset':
         return resetting;
     }
@@ -665,44 +316,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const isManagedAdmins = selected === 'Admins.cfg' && managedSegmentLineRange(content) !== null;
   const showRestart = selectedFile?.behavior === 'requires_restart' && canRestart;
   const showReset = selected !== null && !RESET_EXCLUDED_FILES.includes(selected);
-
-  useEffect(() => {
-    if (!editorReady) return;
-    const editor = editorRef.current;
-    const monaco = monacoRef.current;
-    if (!editor || !monaco) return;
-    const model = editor.getModel();
-    if (!model) return;
-    // Squad ships CRLF configs; keep the model's EOL aligned so getValue()
-    // (and therefore the PUT payload) round-trips byte-identically.
-    if (content.includes('\r\n')) {
-      model.setEOL(monaco.editor.EndOfLineSequence.CRLF);
-    }
-    const range = isManagedAdmins ? managedSegmentLineRange(content) : null;
-    protectedRangeRef.current = range;
-    decorationsRef.current?.clear();
-    decorationsRef.current = null;
-    if (range) {
-      decorationsRef.current = editor.createDecorationsCollection([
-        {
-          range: new monaco.Range(range.startLine, 1, range.endLine, 1),
-          options: {
-            isWholeLine: true,
-            className: 'squad-managed-segment',
-            linesDecorationsClassName: 'squad-managed-segment-gutter',
-            hoverMessage: { value: 'управляется панелью' },
-          },
-        },
-      ]);
-    }
-  }, [editorReady, content, isManagedAdmins]);
-
-  useEffect(
-    () => () => {
-      if (segmentNoticeTimer.current) clearTimeout(segmentNoticeTimer.current);
-    },
-    [],
-  );
+  const { handleEditorMount, segmentNotice } = useManagedSegmentGuard(content, isManagedAdmins);
 
   const dialog = confirmation ? confirmationText(confirmation) : null;
   const confirmationDiscardsEdits =
@@ -774,16 +388,21 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       ) : null}
 
       <DriftPanel
-        items={driftItems}
-        diff={driftDiff}
-        busy={driftBusy !== null}
-        onOpenDiff={openDriftDiff}
-        onCloseDiff={closeDriftDiff}
+        items={drift.driftItems}
+        diff={drift.driftDiff}
+        busy={drift.driftBusy !== null}
+        onOpenDiff={drift.openDriftDiff}
+        onCloseDiff={drift.closeDriftDiff}
         onResolve={requestDriftResolution}
       />
 
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-        <FileList files={files} selected={selected} driftItems={driftItems} onSelect={selectFile} />
+        <FileList
+          files={files}
+          selected={selected}
+          driftItems={drift.driftItems}
+          onSelect={selectFile}
+        />
 
         <Card padding="none" as="section">
           {!selected ? (
@@ -840,69 +459,13 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
               {tab === 'editor' ? (
                 <>
-                  {isManagedRotation ? (
-                    <div className="border-b border-line p-3">
-                      <InlineBanner
-                        tone="info"
-                        title="Managed-сегмент управляется панелью"
-                        description={
-                          <>
-                            Файл открыт только для чтения — состав слоёв редактируется на странице{' '}
-                            <Link href={`/servers/${id}/rotation`} className="text-accent">
-                              «Ротация»
-                            </Link>
-                            .
-                          </>
-                        }
-                      />
-                    </div>
-                  ) : null}
-                  {selected === PANEL_MANAGED_FILE ? (
-                    <div className="border-b border-line p-3">
-                      <InlineBanner
-                        tone="info"
-                        title="Файл управляется панелью"
-                        description={
-                          <>
-                            Содержимое показано замаскированным и только для чтения — лицензия
-                            меняется на странице{' '}
-                            <Link href={`/servers/${id}/settings`} className="text-accent">
-                              «Настройки»
-                            </Link>
-                            .
-                          </>
-                        }
-                      />
-                    </div>
-                  ) : null}
-                  {isManagedAdmins ? (
-                    <div data-testid="managed-admins-banner" className="border-b border-line p-3">
-                      <InlineBanner
-                        tone="warn"
-                        title="Блок //SQUAD-PANEL управляется панелью"
-                        description={
-                          <>
-                            Строки между маркерами{' '}
-                            <code className="rounded-ctl bg-raised px-1">{'//SQUAD-PANEL'}</code>{' '}
-                            доступны только для чтения — состав меняется через{' '}
-                            <Link href="/settings/groups" className="text-accent">
-                              «Группы»
-                            </Link>
-                            . Остальной файл редактируется как обычно.
-                          </>
-                        }
-                      />
-                    </div>
-                  ) : null}
-                  {segmentNotice ? (
-                    <div data-testid="managed-segment-notice" className="border-b border-line p-3">
-                      <InlineBanner
-                        tone="warn"
-                        title="Правка managed-сегмента отменена"
-                        description="Этот блок доступен только для чтения."
-                      />
-                    </div>
-                  ) : null}
+                  <ManagedFileBanners
+                    serverId={id}
+                    selected={selected}
+                    isManagedRotation={isManagedRotation}
+                    isManagedAdmins={isManagedAdmins}
+                    segmentNotice={segmentNotice}
+                  />
                   <EditorView
                     content={content}
                     onChange={(v) => {
@@ -925,20 +488,20 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
               {tab === 'history' ? (
                 <HistoryView
-                  versions={versions}
-                  loading={versionsLoading}
-                  diffFrom={diffFrom}
-                  diffFromContent={diffFromContent}
+                  versions={history.versions}
+                  loading={history.versionsLoading}
+                  diffFrom={history.diffFrom}
+                  diffFromContent={history.diffFromContent}
                   currentContent={serverContent}
-                  onOpenDiff={openDiff}
-                  onCloseDiff={() => setDiffFrom(null)}
+                  onOpenDiff={history.openDiff}
+                  onCloseDiff={history.closeDiff}
                   onRestore={(vid) => setConfirmation({ kind: 'restore', versionId: vid })}
                   restoring={restoring}
                   canRestore={selected !== PANEL_MANAGED_FILE}
                 />
               ) : null}
 
-              {tab === 'blame' ? <BlameView blame={blame} /> : null}
+              {tab === 'blame' ? <BlameView blame={history.blame} /> : null}
             </>
           )}
         </Card>
@@ -958,259 +521,5 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         />
       ) : null}
     </PageContainer>
-  );
-}
-
-/**
- * Просмотр и правка одного файла конфигурации.
- *
- * Файл открывается только для чтения; правка включается кнопкой «Изменить» в
- * правом нижнем углу редактора. Панель сохранения показывается лишь в режиме
- * правки — в режиме просмотра сохранять нечего, и пустая строка полей только
- * отвлекала бы.
- *
- * @param editing Правка разрешена оператором для текущего файла.
- * @param onStartEditing Снять режим только для чтения.
- * @param locked Файл неизменяем в принципе (managed-сегмент): кнопки
- *   «Изменить» нет вообще, потому что нажимать её было бы не на что.
- */
-function EditorView(props: {
-  content: string;
-  onChange: (v: string) => void;
-  commitMessage: string;
-  setCommitMessage: (v: string) => void;
-  dirty: boolean;
-  saving: boolean;
-  onSave: () => void;
-  onDiscard: () => void;
-  editing: boolean;
-  onStartEditing: () => void;
-  locked?: boolean;
-  onMount?: OnMount;
-}) {
-  const readOnly = props.locked || !props.editing;
-
-  return (
-    <>
-      {props.editing && !props.locked ? (
-        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <TextInput
-            value={props.commitMessage}
-            onChange={(e) => props.setCommitMessage(e.target.value)}
-            placeholder="Комментарий к изменению (необязательно)"
-            aria-label="Комментарий к изменению"
-            maxLength={500}
-            className="flex-1"
-          />
-          <Button onClick={props.onDiscard} disabled={props.saving}>
-            Отмена
-          </Button>
-          <Button
-            variant="primary"
-            onClick={props.onSave}
-            loading={props.saving}
-            disabled={!props.dirty}
-          >
-            Сохранить
-          </Button>
-        </div>
-      ) : null}
-      <div className="relative">
-        <MonacoEditor
-          height="65vh"
-          defaultLanguage="ini"
-          theme="vs-dark"
-          value={props.content}
-          onChange={(v) => props.onChange(v ?? '')}
-          onMount={props.onMount}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            wordWrap: 'on',
-            renderWhitespace: 'boundary',
-            scrollBeyondLastLine: false,
-            readOnly,
-          }}
-        />
-        {readOnly && !props.locked ? (
-          <div className="absolute right-4 bottom-4 z-10">
-            <Button variant="success" size="sm" onClick={props.onStartEditing}>
-              Изменить
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    </>
-  );
-}
-
-function HistoryView(props: {
-  versions: Version[];
-  loading: boolean;
-  diffFrom: string | null;
-  diffFromContent: string;
-  currentContent: string;
-  onOpenDiff: (vid: string) => void;
-  onCloseDiff: () => void;
-  onRestore: (vid: string) => void;
-  restoring: string | null;
-  /** `false` прячет «Восстановить»: API отвечает 400 на restore этого файла. */
-  canRestore: boolean;
-}) {
-  const locale = useIntlLocale();
-  if (props.diffFrom) {
-    return (
-      <div>
-        <CardHeader
-          title={`Сравнение: v${props.diffFrom.slice(0, 8)} → текущая`}
-          actions={
-            <Button size="sm" variant="ghost" onClick={props.onCloseDiff}>
-              Закрыть сравнение
-            </Button>
-          }
-        />
-        <MonacoDiff
-          height="65vh"
-          language="ini"
-          theme="vs-dark"
-          original={props.diffFromContent}
-          modified={props.currentContent}
-          options={{
-            readOnly: true,
-            minimap: { enabled: false },
-            fontSize: 13,
-            renderSideBySide: true,
-            scrollBeyondLastLine: false,
-          }}
-        />
-      </div>
-    );
-  }
-
-  if (props.loading && props.versions.length === 0) {
-    return (
-      <div className="p-4">
-        <SkeletonTable rows={6} cols={5} label="Загружаем историю версий" />
-      </div>
-    );
-  }
-
-  if (props.versions.length === 0) {
-    return (
-      <EmptyState
-        title="История пуста"
-        description="Файл ещё ни разу не сохранялся через панель — первая версия появится после первого сохранения."
-      />
-    );
-  }
-
-  return (
-    <Table dense maxHeight="68vh" ariaLabel="История версий файла">
-      <TableHead>
-        <TableRow>
-          <Th>Когда</Th>
-          <Th>Автор</Th>
-          <Th>Сообщение</Th>
-          <Th>SHA-256</Th>
-          <Th align="right">Действия</Th>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {props.versions.map((v) => (
-          <TableRow key={v.id}>
-            <Td className="whitespace-nowrap tabular-nums">
-              <DateTime value={v.created_at} locale={locale} />
-            </Td>
-            <Td>{v.author_email ?? <span className="text-ink-3">—</span>}</Td>
-            <Td>{v.message ?? <span className="text-ink-3">без сообщения</span>}</Td>
-            <Td className="font-mono text-ink-3">{v.sha256?.slice(0, 12)}</Td>
-            <Td align="right">
-              <span className="flex items-center justify-end gap-1">
-                <Button size="sm" variant="plain" onClick={() => props.onOpenDiff(v.id)}>
-                  Сравнить
-                </Button>
-                {props.canRestore ? (
-                  <Button
-                    size="sm"
-                    loading={props.restoring === v.id}
-                    disabled={props.restoring !== null}
-                    onClick={() => props.onRestore(v.id)}
-                  >
-                    Восстановить
-                  </Button>
-                ) : null}
-              </span>
-            </Td>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function BlameView({ blame }: { blame: BlameResponse | null }) {
-  const locale = useIntlLocale();
-  if (!blame) {
-    return (
-      <div className="p-4">
-        <SkeletonTable rows={8} cols={5} label="Загружаем авторство строк" />
-      </div>
-    );
-  }
-  if (blame.lines.length === 0) {
-    return (
-      <EmptyState
-        title="Авторства нет"
-        description="У файла нет ни одной версии в панели, поэтому и приписать строки некому."
-      />
-    );
-  }
-  return (
-    <>
-      {blame.truncated ? (
-        <InlineBanner
-          tone="info"
-          title="Показаны только последние версии файла"
-          description="Строки из более ранних правок приписаны самой старой из показанных версий."
-        />
-      ) : null}
-      <Table dense layout="fixed" maxHeight="68vh" ariaLabel="Авторство строк файла">
-        <TableHead>
-          <TableRow>
-            <Th width="7rem">Версия</Th>
-            <Th width="10rem">Автор</Th>
-            <Th width="9rem">Когда</Th>
-            <Th width="4rem" align="right">
-              Строка
-            </Th>
-            <Th>Текст</Th>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {blame.lines.map((l, i) => {
-            const email = l.author_user_id ? (blame.authors[l.author_user_id] ?? '?') : '—';
-            return (
-              <TableRow key={`${l.version_id}-${i}`}>
-                <Td truncate className="font-mono text-ink-3">
-                  {l.version_id.slice(0, 8)}
-                </Td>
-                <Td truncate className="text-ink-2">
-                  {email}
-                </Td>
-                <Td className="whitespace-nowrap tabular-nums text-ink-3">
-                  <time dateTime={l.created_at} suppressHydrationWarning>
-                    {new Date(l.created_at).toLocaleDateString(locale)}
-                  </time>
-                </Td>
-                <Td numeric className="text-ink-3">
-                  {i + 1}
-                </Td>
-                <Td className="whitespace-pre font-mono">{l.text || ' '}</Td>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </>
   );
 }
