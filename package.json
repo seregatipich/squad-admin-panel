@@ -9,7 +9,9 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev --parallel",
+    "dev": "node scripts/dev-app.mjs",
+    "dev:app": "node scripts/dev-app.mjs",
+    "dev:all": "turbo run dev --parallel",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "mint:owner-session": "pnpm --filter @squad/api mint:owner-session",
@@ -30,7 +32,7 @@
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
     "solve:issues": "tsx scripts/solve-issues-parallel.ts",
     "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
-    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/deploy-workflow.test.ts scripts/operations-scripts.test.ts scripts/rnsquadjs-shadow-diff.test.ts scripts/verify-audit-chain.test.ts",
+    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/deploy-workflow.test.ts scripts/operations-scripts.test.ts scripts/dev-app.test.ts scripts/rnsquadjs-shadow-diff.test.ts scripts/verify-audit-chain.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

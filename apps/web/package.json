@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/sync-monaco.mjs && next dev --port 3000",
+    "dev": "node scripts/sync-monaco.mjs && next dev --port ${PORT:-3000}",
     "start": "next start --port 3000",
     "build": "node scripts/sync-monaco.mjs && next build",
     "typecheck": "next typegen && tsc --noEmit",
