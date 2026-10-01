@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { bonusTransactions, playerDailyPresence, players, roles, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -22,8 +23,6 @@ let seededPlayerId: string;
 let emptyPlayerId: string;
 let serverAId: string;
 let serverBId: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 function todayUtc(offsetDays = 0): string {
   const ms = Date.now() + offsetDays * 86_400_000;

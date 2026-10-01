@@ -1,8 +1,9 @@
 import { is } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import * as schema from '../src/schema/index.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 /**
  * Issue #78 (finding 1123): the TypeScript schema must describe the indexes and
@@ -11,7 +12,6 @@ import * as schema from '../src/schema/index.js';
  * true index from the schema file.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let sql: postgres.Sql;
 

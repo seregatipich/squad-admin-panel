@@ -7,7 +7,8 @@ import { configVersions, serverCredentials } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { rconCommandStream } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { encrypt, serialize } from '../../src/lib/crypto.js';
 import { syncLicenseCfg } from '../../src/lib/license-cfg.js';
 import {
@@ -21,8 +22,6 @@ import {
 const OWNER_STEAM_ID = 76561198000045045n;
 const LICENSE_ID = 'LIC-45-ID';
 const LICENSE_KEY = 'SUPER-SECRET-LICENSE-KEY-45';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let cookie: string;

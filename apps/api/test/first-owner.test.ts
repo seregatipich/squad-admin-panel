@@ -3,7 +3,8 @@ import { panelMeta, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { claimFirstOwner } from '../src/lib/first-owner.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import { createIsolatedSchema } from './integration/isolated-db.js';
@@ -39,7 +40,6 @@ function playerId(steamId64: bigint): string {
 }
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 // Each test runs against its own fresh, isolated database — a real "who is
 // the sole Owner" invariant (migration 0107) makes the old approach of

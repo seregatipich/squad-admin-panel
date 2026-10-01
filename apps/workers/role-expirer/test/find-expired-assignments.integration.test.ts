@@ -12,7 +12,8 @@ import {
   vipTiers,
 } from '@squad/db';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   clearExpiredAssignments,
   createRoleExpiryDeps,
@@ -21,7 +22,6 @@ import {
 } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 

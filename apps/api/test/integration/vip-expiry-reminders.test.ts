@@ -1,7 +1,8 @@
 import { alertEvents, players, ROLE_EXPIRY_ALERT_RULE_ID, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   createRoleExpiryReminderDeps,
   runRoleExpiryReminderTick,
@@ -23,8 +24,6 @@ let ownerCookie: string;
 let assignerCookie: string;
 let viewerCookie: string;
 let vipRoleId: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint, userAgent: string): Promise<string> {
   const [row] = await h.db

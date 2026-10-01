@@ -2,6 +2,7 @@ import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
 import type { LiveEvent } from '../src/plugins/live-bus.js';
@@ -18,8 +19,6 @@ const PLAYER_A = testSteamId(730001);
 const PLAYER_B = testSteamId(730002);
 const PLAYER_C = testSteamId(730003);
 const UNKNOWN_STEAM = testSteamId(730099); // valid 17-digit id, never inserted
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('role-members bulk toolkit', () => {
   let h: IntegrationHarness;

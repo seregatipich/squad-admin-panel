@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { pruneProcessedEvents } from '../src/index.js';
 
 // regression (#62): processed_events was never pruned and grew by one row per
 // persisted event. Rows past the events retention window are now deleted.
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let sql: ReturnType<typeof postgres>;
 

@@ -1,12 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   buildIntegrationApp,
   type IntegrationHarness,
   makeFakeBridge,
 } from '../integration/harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 

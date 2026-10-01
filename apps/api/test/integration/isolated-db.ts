@@ -265,11 +265,9 @@ export async function createIsolatedSchema(): Promise<CreatedSchema> {
   };
 }
 
-// `process.env.DATABASE_URL ? describe : describe.skip` only asks whether a
-// database is configured at all, so on its own it does not make a file a user
-// of the worker database.
-const DATABASE_URL_PRESENCE_GATE =
-  /process\.env\.DATABASE_URL\s*\?\s*describe\s*:\s*describe\.skip/g;
+// The `describeIfDb` gate reads DATABASE_URL inside packages/db/test/helpers,
+// outside the test file's own source, so gating a suite on a database being
+// configured does not by itself make a file a user of the worker database.
 const WORKER_DATABASE_REFERENCE = /DATABASE_URL|hostDbUrl|reusePublicSchema/;
 
 /**
@@ -286,7 +284,7 @@ const WORKER_DATABASE_REFERENCE = /DATABASE_URL|hostDbUrl|reusePublicSchema/;
  * @returns Whether the worker database must be cloned before the file loads.
  */
 export function sourceUsesWorkerDatabase(source: string): boolean {
-  return WORKER_DATABASE_REFERENCE.test(source.replace(DATABASE_URL_PRESENCE_GATE, ''));
+  return WORKER_DATABASE_REFERENCE.test(source);
 }
 
 /**

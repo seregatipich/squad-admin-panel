@@ -12,6 +12,7 @@ import { and, eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   createRunMatchDeps,
   loadEnabledAutomationRules,
@@ -367,8 +368,6 @@ describe('processAutomationEnvelope — player_count is edge-triggered (real Red
     await redis.del(`automation:pc:${rule.id}:${serverId}`);
   });
 });
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('processAutomationEnvelope — real DB + Redis firing', () => {
   let db: DatabaseClient;

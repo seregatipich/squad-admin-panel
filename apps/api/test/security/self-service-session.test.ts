@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { players, rolePermissions, roles, sessions } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -14,8 +15,6 @@ import {
 const OWNER_STEAM = testSteamId(985900);
 const VIP_STEAM = testSteamId(985901);
 const PANEL_STEAM = testSteamId(985902);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let selfServiceCookie: string;

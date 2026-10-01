@@ -2,11 +2,11 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { createDatabaseClient, players, sessions } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { revokeAllSessionsForPlayer } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const PLAYER_ID = randomUUID();
 const PLAYER_STEAM_ID = 76561198915100000n + BigInt(randomInt(1, 1_000_000));

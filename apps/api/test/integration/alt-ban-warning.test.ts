@@ -14,7 +14,8 @@ import {
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { loadBanAltWarning } from '../../src/lib/ban-alt-warning.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import {
@@ -35,7 +36,6 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 const OWNER_STEAM = testSteamId(965001);
 const LIMITED_STEAM = testSteamId(965004);
 // Each case seeds its own target/alt pair above this base (see beforeEach).

@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 
 /**
  * Migration 0138 (issue #50, finding 1073): historical combat_events rows get
@@ -11,7 +12,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * idempotent.
  */
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKFILL_SQL = readFileSync(

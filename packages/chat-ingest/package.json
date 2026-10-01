@@ -14,7 +14,7 @@
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.test.json",
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist .turbo"
   },

@@ -2,7 +2,7 @@ import { discordWebhooks, playerReports, players, servers } from '@squad/db/sche
 import { STREAM_NAME } from '@squad/shared-types';
 import pino from 'pino';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import {
   ensureConsumerGroup,
   NOTIFY_CONSUMER_GROUP,
@@ -23,9 +23,9 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 const TEST_KEY = Buffer.alloc(32, 0x42);
 const OWNER_STEAM = testSteamId(956000);
 const REPORTER_STEAM = testSteamId(956001);

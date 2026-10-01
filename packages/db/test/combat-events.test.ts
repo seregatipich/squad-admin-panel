@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { combatEvents } from '../src/schema/combat-events.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const perfDescribe = DATABASE_URL && process.env.COMBAT_EVENTS_PERF ? describe : describe.skip;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

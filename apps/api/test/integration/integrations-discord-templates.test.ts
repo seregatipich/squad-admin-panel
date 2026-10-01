@@ -6,7 +6,8 @@ import {
   renderDiscordTemplate,
 } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -22,8 +23,6 @@ const OWNER_STEAM = testSteamId(920001);
 const MODERATOR_STEAM = testSteamId(920002);
 
 let h: IntegrationHarness;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db

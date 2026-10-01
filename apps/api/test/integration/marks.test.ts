@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { auditLog, playerMarks, players, roles } from '@squad/db/schema';
 import { and, desc, eq, gte } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import type { LiveEvent } from '../../src/plugins/live-bus.js';
@@ -22,8 +23,6 @@ let h: IntegrationHarness;
 let ownerCookie: string;
 let targetPlayerId: string;
 let eosPlayerId: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db

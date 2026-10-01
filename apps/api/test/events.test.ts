@@ -3,6 +3,7 @@ import { events, playerApiTokens, players, roles, servers } from '@squad/db/sche
 import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { mintApiToken } from '../src/lib/api-tokens.js';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
@@ -11,8 +12,6 @@ import {
   type IntegrationHarness,
   makeFakeBridge,
 } from './integration/harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const STEAM_RUN_BASE = 76561198100000000n + BigInt(Date.now() % 1_000_000_000);
 const OWNER_STEAM_ID = STEAM_RUN_BASE + 1_000_000n;

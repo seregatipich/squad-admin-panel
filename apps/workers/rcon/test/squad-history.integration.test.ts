@@ -22,7 +22,8 @@ import { and, asc, eq, like } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   encodePacket,
   RconPacketStream,
@@ -36,7 +37,6 @@ import { RconSupervisor, type Target } from '../src/supervisor.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const REDIS_URL = process.env.REDIS_URL;
-const describeIfInfra = DATABASE_URL && REDIS_URL ? describe : describe.skip;
 
 interface GamePlayer {
   eos: string;
@@ -246,7 +246,7 @@ afterAll(async () => {
   await sql.end();
 });
 
-describeIfInfra('squad history through the RCON supervisor', () => {
+describeIfDbAndRedis('squad history through the RCON supervisor', () => {
   it('records the first roster as a baseline without events', async () => {
     game.players = [anna, boris];
     game.squads = [{ team: 1, id: 1, name: 'Alpha', creator: anna }];

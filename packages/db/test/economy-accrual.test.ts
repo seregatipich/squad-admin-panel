@@ -1,10 +1,10 @@
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { accrueDailyBonuses } from '../src/economy/accrual.js';
 import { recomputeDailyPresence } from '../src/presence/daily.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const PLAYER_STEAM = '000000a1-0000-4000-8000-000000000000';
 const PLAYER_EOS = '000000e0-0000-4000-8000-000000000000';

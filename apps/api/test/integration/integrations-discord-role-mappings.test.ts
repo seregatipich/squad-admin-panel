@@ -6,8 +6,8 @@ import {
 } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -25,8 +25,6 @@ const TARGET_STEAM = testSteamId(990003);
 
 const DISCORD_ROLE_VIP = '700000000000000001';
 const DISCORD_ROLE_MOD = '700000000000000002';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let vipRoleId: string;

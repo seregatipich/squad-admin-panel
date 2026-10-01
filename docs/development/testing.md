@@ -38,8 +38,28 @@ Locations:
 Run:
 
 ```bash
-pnpm turbo run test
+pnpm turbo run test        # every package; DB- and Redis-backed suites need the services (see below)
+pnpm turbo run test:unit   # only the packages whose suites need no services
 ```
+
+`test:unit` exists only in packages whose suites run without Postgres or Redis: `@squad/shared-config`, `@squad/shared-types`, `@squad/diag`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/steam-api`, and `@squad/db`, whose script unsets `DATABASE_URL`/`TEST_DATABASE_URL` so its database suites skip (with a warning each) even when the variables are exported. `@squad/api` and the workers have no `test:unit`: their global setup, or tests outside the gates below, connect to Postgres and Redis. The Go bridge's `test:unit` needs a Linux host with `go` on `PATH`.
+
+#### Suites that need Postgres or Redis
+
+A suite that needs a service declares itself with `describeIfDb`, `describeIfRedis` or `describeIfDbAndRedis` from [`packages/db/test/helpers/describe-if.ts`](../../packages/db/test/helpers/describe-if.ts); never write a local `DATABASE_URL ? describe : describe.skip`. With `DATABASE_URL` (and `REDIS_URL` for the Redis gates) set, the suite runs like any `describe`. Without it:
+
+- locally, the suite is skipped and a `[skipped] Suite "<name>": DATABASE_URL is not set.` line is printed;
+- when `CI` is set, the test file fails at collection with an error naming the suite and the variable, so a job whose service failed to start cannot go green by skipping.
+
+```ts
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
+
+describeIfDb('players repository', () => {
+  /* … */
+});
+```
+
+Import it by relative path; workers and the API do so already for the other helpers in that directory. `packages/db/test/describe-if.test.ts` covers the helper.
 
 ### Tier 2 — integration
 
@@ -245,3 +265,10 @@ pnpm exec biome check .                                 # lint + format
 pnpm turbo run typecheck                                # TS strict + `go build` on the bridge
 cd apps/bridge && GOOS=linux GOARCH=amd64 go vet ./...  # also enforced by pre-commit
 ```
+
+Where a package has a `tsconfig.test.json` (`@squad/api`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/diag`, `@squad/shared-types`, `@squad/steam-api`), `typecheck` is one incremental `tsc -p tsconfig.test.json` over `src` and `test`, not a pass over `src` followed by one over everything. It keeps `declaration: true`, so declaration-emit errors in `src` still fail it; the `rootDir`/composite checks of `tsconfig.json` still run in `build`. The build info is written to `.cache/typecheck.tsbuildinfo` (git-ignored) and is a Turbo output of the task.
+
+### Turbo caching of builds and tests
+
+- `build` hashes everything in the package except test files and test-only configs (`**/*.test.*`, `test/`, `tests/`, `e2e/`, `vitest*.config.*`, `tsconfig.test.json`, …). `@squad/db` also leaves out `drizzle/`, `sql/` and `drizzle.config.ts`, and `@squad/web` its test setup, because the build never reads them. A test-only edit does not rebuild the package or anything downstream; a new migration does not rebuild `@squad/db` and its dependents.
+- `test`, `test:unit` and `test:integration` hash the package plus `packages/db/test/helpers`, `packages/db/drizzle` and `packages/db/sql`, which other packages' suites read, and depend on `^build` (Turbo sees a dependency's sources only through that edge). Only the worker packages also depend on their own `build`, because their contract tests start `dist/index.js` under plain Node; the other packages' suites resolve `@squad/*` to source through the `development` export condition. A new package inherits the safe default (`build` and `^build`); list it in its own `turbo.json` to drop the own build once its tests are known not to execute `dist/`.

@@ -6,7 +6,8 @@
 import { players, roleSquadPermissions, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -18,8 +19,6 @@ const ASSIGNER_STEAM = testSteamId(830003);
 const EDITOR_STEAM = testSteamId(830004);
 const TARGET_STEAM = testSteamId(830005);
 const ALL_STEAMS = [OWNER_STEAM, SECOND_OWNER_STEAM, ASSIGNER_STEAM, EDITOR_STEAM, TARGET_STEAM];
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerRoleId: string;

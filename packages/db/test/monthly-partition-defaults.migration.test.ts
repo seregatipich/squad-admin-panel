@@ -1,7 +1,8 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
   MIGRATIONS_FOLDER,
@@ -18,7 +19,6 @@ import {
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const PLAYER_STEAM_ID = '76561190000060602';
 const TABLES = ['chat_messages', 'bonus_transactions', 'combat_events'] as const;

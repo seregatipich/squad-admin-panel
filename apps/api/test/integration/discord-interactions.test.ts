@@ -2,8 +2,8 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { auditLog, playerDiscordLinks, players, roles, servers } from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { rawEd25519PublicKeyHex } from '../../src/lib/discord-interactions.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -14,7 +14,6 @@ import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './
  * HTTP transport, so the whole path — Ed25519 signature, link + panel_access
  * gate, ephemeral answers, audit — is exercised here against the real route.
  */
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const EPHEMERAL = 64;
 const PONG = 1;

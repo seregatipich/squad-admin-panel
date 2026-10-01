@@ -9,7 +9,7 @@ import {
 } from '@squad/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -26,10 +26,9 @@ vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
   sendRconCommandViaWorker: vi.fn(),
 }));
 
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM = testSteamId(986000);
 const KICKER_STEAM = testSteamId(986001);

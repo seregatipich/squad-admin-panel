@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { recomputeCoplayForAllSessions, recomputeCoplayWindow } from '../src/coplay/aggregate.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_SQL = readFileSync(path.resolve(__dirname, '../sql/player-sessions.sql'), 'utf-8');

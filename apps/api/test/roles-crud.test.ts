@@ -4,7 +4,8 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache, invalidatePermissionCacheForRole } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -63,8 +64,6 @@ async function createRole(name: string, color = 'blue', perms: string[] = []) {
   createdRoleIds.push(id);
   return id;
 }
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('roles — Owner-guard invariants', () => {
   it('Owner role is_system_role=true with name=Owner', async () => {

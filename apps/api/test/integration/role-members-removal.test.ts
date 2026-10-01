@@ -1,7 +1,8 @@
 import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache, loadUserPermissions } from '../../src/lib/rbac.js';
 import { createSession, resolveSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -14,8 +15,6 @@ import {
 
 const OWNER_STEAM = testSteamId(735000);
 const MEMBER_STEAM = testSteamId(735001);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', () => {
   let h: IntegrationHarness;

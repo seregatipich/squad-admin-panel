@@ -1,6 +1,7 @@
 import { servers } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -8,8 +9,6 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const ORPHAN_UUID = 'bbbbbbbb-2222-4222-8222-222222222222';
 

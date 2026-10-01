@@ -4,6 +4,7 @@ import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -23,8 +24,6 @@ const OWNER_STEAM = testSteamId(911001);
 const MEMBER_STEAM = testSteamId(911002);
 const INJECTED_EOS = '0002ffffffffffffffffffffffffffff';
 const MEMBER_EOS = '0002a10186d9414e8e15c66eb3dbf711';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let cookie: string;

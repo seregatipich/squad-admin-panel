@@ -2,11 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { createDatabaseClient, type DatabaseClient } from '@squad/db';
 import { externalBanSources, externalBans } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { ParsedBan } from '../src/adapters/index.js';
 import { applyMergePlan, type ExistingBanRow, planMerge } from '../src/merge.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 function ban(steamId64: string, overrides: Partial<ParsedBan> = {}): ParsedBan {
   return {

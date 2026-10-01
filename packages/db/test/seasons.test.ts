@@ -18,9 +18,9 @@ import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadActiveSeasonTarget, loadSeasonTarget } from '../src/leaderboard/season.js';
 import { seasons } from '../src/schema/seasons.js';
+import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 // Every row this file writes carries this prefix so a shared test database
 // stays usable for sibling suites.

@@ -2,16 +2,15 @@
  * Dynamic proof for TZ §17.5 DLQ + XAUTOCLAIM behaviour.
  * Exercises the redis primitives the workers rely on.
  *
- * Runs only when REDIS_URL is set (skipped on the unit CI matrix).
+ * Needs REDIS_URL: skipped with a warning locally, a collection error under CI.
  */
 import Redis from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfRedis } from '../../../packages/db/test/helpers/describe-if.js';
 
-const redisUrl = process.env.REDIS_URL ?? process.env.REDIS_TEST_URL;
+const redisUrl = process.env.REDIS_URL;
 
-const describeIf = redisUrl ? describe : describe.skip;
-
-describeIf('events stream DLQ + XAUTOCLAIM', () => {
+describeIfRedis('events stream DLQ + XAUTOCLAIM', () => {
   const r = new Redis(redisUrl ?? 'redis://127.0.0.1:6379', { maxRetriesPerRequest: 2 });
   const stream = 'events:test:dlq-autoclaim';
   const dlq = 'events:dlq';

@@ -1,7 +1,8 @@
 import { alertEvents, alertRules, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -21,8 +22,6 @@ let h: IntegrationHarness;
 let ownerCookie: string;
 let editorCookie: string;
 let viewerCookie: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint, userAgent: string): Promise<string> {
   const [row] = await h.db

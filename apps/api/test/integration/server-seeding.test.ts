@@ -1,7 +1,8 @@
 import { players, roleSquadPermissions, roles, serverSettings } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -11,8 +12,6 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const OWNER_STEAM_ID = testSteamId(188000);
 

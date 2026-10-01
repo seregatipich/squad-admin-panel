@@ -1,5 +1,6 @@
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from './helpers/describe-if.js';
 
 /**
  * Issue #52: nickname search is `LIKE '%…%'`, which a plain B-tree cannot
@@ -8,7 +9,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 let sql: ReturnType<typeof postgres>;
 

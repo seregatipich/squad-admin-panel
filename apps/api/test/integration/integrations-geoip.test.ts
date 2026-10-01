@@ -1,6 +1,7 @@
 import { auditLog, GEOIP_SETTINGS_SINGLETON_ID, geoipSettings } from '@squad/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -15,7 +16,6 @@ const OWNER_STEAM = testSteamId(920001);
 const LICENSE_KEY = 'maxmind-fake-license-key-0011223344';
 
 let h: IntegrationHarness;
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 beforeAll(async () => {
   h = await buildIntegrationApp({

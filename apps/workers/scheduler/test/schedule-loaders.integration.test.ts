@@ -1,11 +1,11 @@
 import { createDatabaseClient, rotationSchedule, seedSchedule, servers } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { loadEnabledRotationScheduleEntries, loadEnabledSeedScheduleEntries } from '../src/deps.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('schedule loaders read only entries the tick can still execute', () => {
   const db = createDatabaseClient(DATABASE_URL ?? '');

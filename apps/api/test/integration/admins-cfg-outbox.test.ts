@@ -2,7 +2,8 @@ import { type OutboxRelayRedis, relayAdminsCfgSyncOutbox } from '@squad/db';
 import { adminsCfgSyncOutbox, roles, servers } from '@squad/db/schema';
 import { eq, isNotNull, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
@@ -10,8 +11,6 @@ import {
   publishAdminsCfgSyncForAllServers,
 } from '../../src/lib/admins-cfg-sync.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 

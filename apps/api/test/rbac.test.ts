@@ -3,7 +3,8 @@ import { players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
 import {
   invalidatePermissionCache,
   invalidatePermissionCacheForRole,
@@ -86,8 +87,6 @@ afterAll(async () => {
   }
   if (sql) await sql.end({ timeout: 5 });
 });
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('loadUserPermissions', () => {
   it('returns empty set + roleId=null for a player with no role', async () => {

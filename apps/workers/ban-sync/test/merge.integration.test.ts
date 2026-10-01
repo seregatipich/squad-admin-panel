@@ -5,11 +5,11 @@
 import { createDatabaseClient, type DatabaseClient } from '@squad/db';
 import { externalBanSources, externalBans } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createSyncSourceDeps, type SyncSourceDeps, syncSource } from '../src/sync-source.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 // Keys deliberately NOT in jsonb order (length, then bytes), nested too.
 const BAN_LIST = JSON.stringify([

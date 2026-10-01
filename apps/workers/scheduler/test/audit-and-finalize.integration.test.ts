@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { auditLog, createDatabaseClient, seasons } from '@squad/db';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { finalizeSeason, recomputeSeasonSlice, writeSystemAuditEntry } from '../src/deps.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 
 const seasonId = randomUUID();

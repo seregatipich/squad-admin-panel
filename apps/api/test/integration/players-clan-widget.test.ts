@@ -1,13 +1,12 @@
 import { clanMembers, clans, players } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const OWNER_STEAM = testSteamId(896001);
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerCookie: string;

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { bonusTransactions, players, roles } from '@squad/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -31,8 +32,6 @@ let reconPlayerId: string;
 let pagePlayerId: string;
 let datePlayerId: string;
 let eosPlayerId: string;
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db

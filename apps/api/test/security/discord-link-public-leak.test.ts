@@ -19,7 +19,7 @@ import {
   players,
 } from '@squad/db/schema';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -33,8 +33,6 @@ const LINKED_STEAM = testSteamId(979102);
 const DISCORD_USER_ID = '424242424242424242';
 const DISCORD_USERNAME = 'leaky-discord-name';
 const PUBLIC_CLAN_ID = '019f9700-0000-7000-8000-000000000101';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const PUBLIC_ROUTE_FILES = ['public-stats.ts', 'public-clans.ts', 'public-banlist.ts'];
 

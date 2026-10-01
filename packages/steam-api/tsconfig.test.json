@@ -3,8 +3,10 @@
   "compilerOptions": {
     "noEmit": true,
     "composite": false,
-    "incremental": false,
-    "rootDir": "."
+    "incremental": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": "./.cache/typecheck.tsbuildinfo",
+    "declaration": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

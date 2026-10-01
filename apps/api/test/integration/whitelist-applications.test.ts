@@ -8,7 +8,8 @@ import {
 } from '@squad/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 // WL-3 auto-expiry reuses the existing worker-role-expirer machinery (VIPSUB-1);
 // the chain is driven here from the real production tick to prove the acceptance
 // criterion "an expired term automatically clears the role and syncs Admins.cfg".
@@ -42,8 +43,6 @@ const FALLBACK_STEAM = testSteamId(167017);
 const VICTIM_STEAM = testSteamId(167018);
 const SIGNED_IN_STEAM = testSteamId(167019);
 const BAD_STEAM = '123'; // not 17 digits
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let ownerCookie: string;

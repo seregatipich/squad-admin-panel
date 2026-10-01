@@ -13,11 +13,11 @@ import {
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createSeedRewardDeps, runSeedRewardTick } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const NOW = new Date(Date.parse('2026-07-14T00:00:00.000Z') + randomInt(0, 24 * 60 * 60 * 1000));
 const OUTBOX_REQUEST_ID = `seed-reward:${NOW.toISOString()}`;
 const PLAYER_ID = uuidv7();

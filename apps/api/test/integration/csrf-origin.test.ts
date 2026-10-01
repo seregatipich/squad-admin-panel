@@ -1,10 +1,9 @@
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
-
-const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 // The harness serves PANEL_PUBLIC_URL=https://panel.test.
 const PANEL_ORIGIN = 'https://panel.test';
