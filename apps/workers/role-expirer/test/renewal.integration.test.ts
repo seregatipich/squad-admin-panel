@@ -13,7 +13,8 @@ import {
 } from '@squad/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   chargeRenewal,
   createSubscriptionRenewalDeps,
@@ -21,7 +22,6 @@ import {
 } from '../src/renewal.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const DAY_MS = 86_400_000;
 const TIER_PRICE = 100;

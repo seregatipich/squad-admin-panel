@@ -1,8 +1,8 @@
 import postgres from 'postgres';
 import { describe, expect, inject, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('rcon package resource isolation', () => {
   it("runs against its worker slot's clone of the run's crash-recoverable template", async () => {

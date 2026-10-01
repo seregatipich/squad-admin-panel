@@ -1,11 +1,11 @@
 import { createDatabaseClient, externalBanSources, externalBans } from '@squad/db';
 import { and, count, eq, isNotNull } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { ParsedBan } from '../src/adapters/index.js';
 import { applyMergePlan, planMerge } from '../src/merge.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 let sourceId = '';
 

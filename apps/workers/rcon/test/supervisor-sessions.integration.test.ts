@@ -7,7 +7,8 @@ import { playerSessions, players, servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   encodePacket,
   RconPacketStream,
@@ -19,7 +20,6 @@ import {
 import { RconSupervisor, type Target } from '../src/supervisor.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 const EOS_A = randomBytes(16).toString('hex');
 const EOS_B = randomBytes(16).toString('hex');

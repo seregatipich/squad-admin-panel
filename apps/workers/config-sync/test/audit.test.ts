@@ -2,12 +2,12 @@ import { createDatabaseClient } from '@squad/db';
 import { auditLog } from '@squad/db/schema';
 import { and, asc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createIsolatedPackageTestDatabase } from '../../../../packages/db/test/helpers/isolated-database.js';
 import { appendWorkerAudit } from '../src/audit.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('appendWorkerAudit', () => {
   let isolated: Awaited<ReturnType<typeof createIsolatedPackageTestDatabase>>;

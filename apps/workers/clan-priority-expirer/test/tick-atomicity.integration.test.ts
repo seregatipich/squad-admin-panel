@@ -1,11 +1,11 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { auditLog, clanMembers, clans, createDatabaseClient, players } from '@squad/db';
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createClanPriorityExpiryDeps, runClanPriorityExpiryTick } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 const diag = { emit: async () => undefined };
 const NOW = new Date('2026-07-14T10:00:00.000Z');

@@ -5,12 +5,12 @@ import { playerSessions, players, servers } from '@squad/db/schema';
 import { and, eq, isNull } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { RconPlayer } from '../src/parse-list-players.js';
 import { closeServerSessions, reconcilePlayerSessions, upsertPlayers } from '../src/persist.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 
 function makePlayer(overrides: Partial<RconPlayer> = {}): RconPlayer {
   return {

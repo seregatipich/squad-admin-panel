@@ -17,7 +17,8 @@ import { rconCommandResultKey } from '@squad/shared-types';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createIsolatedPackageTestDatabase } from '../../../../packages/db/test/helpers/isolated-database.js';
 import {
   ADMINS_CFG_SYNC_GROUP,
@@ -28,7 +29,6 @@ import { confirmAdminsCfgReload } from '../src/rcon-reload.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const REDIS_URL = process.env.REDIS_URL;
-const describeIfInfra = DATABASE_URL && REDIS_URL ? describe : describe.skip;
 const STREAM_PREFIX = 'events:admins-cfg-sync:';
 
 let isolated: Awaited<ReturnType<typeof createIsolatedPackageTestDatabase>>;
@@ -135,7 +135,7 @@ async function respondToNextReload(outboxId: string, overrides: Record<string, u
   return requestId;
 }
 
-describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => {
+describeIfDbAndRedis('config-sync durable delivery with PostgreSQL and Redis', () => {
   beforeAll(async () => {
     if (!DATABASE_URL || !REDIS_URL) throw new Error('integration infrastructure is required');
     isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'config_sync_delivery');

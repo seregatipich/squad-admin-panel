@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { flushBatch } from '../src/index.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const sql = DATABASE_URL ? postgres(DATABASE_URL, { max: 1 }) : null;
 
 afterAll(async () => {

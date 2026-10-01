@@ -8,7 +8,8 @@ import { auditLog, playerNameHistory, players } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { RconPlayer } from '../src/parse-list-players.js';
 import { upsertPlayers } from '../src/persist.js';
 
@@ -16,7 +17,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../../packages/db/drizzle');
 
 const HOST_DB_URL = process.env.DATABASE_URL;
-const describeIfDb = HOST_DB_URL ? describe : describe.skip;
 
 function baseDbUrl(url: string): string {
   return url.replace(/\?.*$/, '');
