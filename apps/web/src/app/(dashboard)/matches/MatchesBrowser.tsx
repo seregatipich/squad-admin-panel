@@ -28,8 +28,8 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { announcesMatchBoundary } from '@/lib/live-bus';
-import { errorMessage } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendMatchPage,
@@ -155,21 +155,15 @@ export function MatchesBrowser() {
     // resolve: their stale cursor or off-filter rows must never reach the
     // list this new first page is about to replace (MATCHES-582).
     setNextCursor(null);
-    fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return parseMatchListResponse(await res.json());
-      })
+    apiFetch<unknown>(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`)
+      .then(parseMatchListResponse)
       .then((data) => {
         if (!current()) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (current()) setError(errorMessage(err));
+        if (current()) setError(describeHttpError(err));
       })
       .finally(() => {
         if (current()) setLoading(false);
@@ -186,17 +180,14 @@ export function MatchesBrowser() {
   useEffect(() => {
     let cancelled = false;
     setTotal(null);
-    fetch(`/api/v1/matches/count?${buildCountApiQuery(filters)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => (res.ok ? parseMatchCount(await res.json()) : null))
+    apiFetch<unknown>(`/api/v1/matches/count?${buildCountApiQuery(filters)}`)
+      .then(parseMatchCount)
       .then((data) => {
         // A failed count request leaves `total` at `null` ("…") rather than
         // folding into 0 — a real 0 and "unknown" are different facts, and
         // showing "всего: 0" for a request that never actually counted
         // anything is misleading.
-        if (!cancelled && data !== null) setTotal(data);
+        if (!cancelled) setTotal(data);
       })
       .catch(() => {});
     return () => {
@@ -206,8 +197,8 @@ export function MatchesBrowser() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? parseServerOptions(await res.json()) : []))
+    apiFetch<unknown>('/api/v1/servers')
+      .then(parseServerOptions)
       .then((data) => {
         if (cancelled) return;
         setFetchedServers(data);
@@ -230,12 +221,11 @@ export function MatchesBrowser() {
     const requestId = listRequestRef.current;
     setLoadingMore(true);
     try {
-      const res = await fetch(
-        `/api/v1/matches?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT })}`,
-        { credentials: 'include', cache: 'no-store' },
+      const data = parseMatchListResponse(
+        await apiFetch<unknown>(
+          `/api/v1/matches?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT })}`,
+        ),
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = parseMatchListResponse(await res.json());
       // filters/sort changed (a new first page started) while this request
       // was in flight: its cursor and rows belong to the superseded query
       // and must not be spliced onto the list loadFirstPage already replaced
@@ -245,7 +235,7 @@ export function MatchesBrowser() {
       setNextCursor(data.next_cursor);
     } catch (err) {
       if (listRequestRef.current !== requestId) return;
-      setError(errorMessage(err));
+      setError(describeHttpError(err));
     } finally {
       if (listRequestRef.current === requestId) setLoadingMore(false);
     }
@@ -303,13 +293,9 @@ export function MatchesBrowser() {
   const refreshHead = useCallback(() => {
     if (filters.sort !== 'started_at' || filters.order !== 'desc') return;
     const requestId = listRequestRef.current;
-    fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => (res.ok ? parseMatchListResponse(await res.json()) : null))
+    apiFetch<unknown>(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`)
+      .then(parseMatchListResponse)
       .then((data) => {
-        if (!data) return;
         // filters/sort changed while this refresh was in flight: it must not
         // add rows from the superseded query onto the list loadFirstPage
         // already replaced (MATCHES-582).

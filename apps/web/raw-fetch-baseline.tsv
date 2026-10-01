@@ -45,8 +45,6 @@ src/app/(dashboard)/issues/[id]/IssueLinksBlock.tsx	3
 src/app/(dashboard)/issues/[id]/page.tsx	4
 src/app/(dashboard)/leaderboards/LeaderboardsBrowser.tsx	3
 src/app/(dashboard)/leaderboards/bonuses/page.tsx	1
-src/app/(dashboard)/matches/MatchesBrowser.tsx	5
-src/app/(dashboard)/matches/[id]/MatchCard.tsx	1
 src/app/(dashboard)/moderation/teamkills/TeamkillsBrowser.tsx	2
 src/app/(dashboard)/notes/page.tsx	4
 src/app/(dashboard)/reports/ReportsAnalytics.tsx	2
