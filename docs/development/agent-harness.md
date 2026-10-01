@@ -146,11 +146,11 @@ the newest SHA matters and nothing deploys from it.
 
 | Job | What it runs |
 |---|---|
-| `branch-guard` | the master ancestry audit (on `master` pushes) and the harness's own contract suites |
+| `branch-guard` | the master ancestry audit (on `master` pushes), then every repository-contract suite through `scripts/test-repo-contracts.sh` (see below) |
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
 | `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
 | `test-web` (2 shards) | half of the web suite each — no services, no build |
-| `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; each shard takes every third package of that order, so each starts with one of the three longest suites; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
+| `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; the packages are spread over the shards by measured weight (longest-processing-time-first onto the least-loaded shard), so each starts with one of the three longest suites and the shards finish together; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
@@ -164,8 +164,21 @@ its template database from the SQL migrations itself. One shard cannot meet its
 package's thresholds, so [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh)
 switches them off per shard and writes a blob report, and `gate` applies them to the
 merged coverage. [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
-fails CI if the slices stop adding up to the `test:cov` list exactly or the shard
-arguments drift.
+fails CI if the slices stop adding up to the `test:cov` list exactly, the shard
+arguments drift, or the weighted package assignment stops balancing the shards
+(its `WEIGHTS` table must also name only packages that `test:cov` still lists).
+
+`branch-guard` runs its contract suites through one script,
+[`scripts/test-repo-contracts.sh`](../../scripts/test-repo-contracts.sh), rather than
+one workflow step per suite. The script runs every suite in its `SUITES` list in order,
+keeps going after a failure, and ends by listing the failed (or missing) suites and
+exiting 1, so one run reports every broken contract. It follows the gitleaks install
+step because the pre-push-checklist suite needs `gitleaks` on `PATH`; locally,
+`bash scripts/test-repo-contracts.sh` runs them all. To add a suite, append it to
+`SUITES` and to the list in
+[`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh), which
+also fails CI if `ci.yml` runs a contract suite as a separate step or the runner stops
+running to the end after a failure.
 
 The PostgreSQL and Redis service containers keep their data on bounded `tmpfs` mounts
 (1 GiB and 128 MiB), so an interrupted job never leaves anonymous volumes behind, and
@@ -205,7 +218,7 @@ A failed `deploy` run names the step that broke:
 - **External health check** — the release started, but `/health` did not report
   `"status":"ok"` within about 90 s. Roll back with a dispatch of the last good SHA, or
   with `bash scripts/rollback-stand.sh` on the host. Neither undoes migrations (see
-  CLAUDE.md → "Dev stand and promotion").
+  [deploy.md](deploy.md)).
 
 **History.** Verification first ran hosted with a separate self-hosted deploy runner
 (#286), then moved onto the `breaking-squad` organization's `selfhost-group-1` group
@@ -228,7 +241,9 @@ bash scripts/verify-done.sh --wait   # exit 0 required before reporting done
 
 `--wait [seconds]` (default 900) polls every `VERIFY_DONE_POLL_SECS` (default 10) until the `deploy` and `ci` runs for the tip have finished, instead of failing on a run that is still in progress. That lets the promotion follow the `dev` push immediately: the stand deploy and `ci` run side by side and one command waits for both. Without `--wait` a run in progress fails the check.
 
-It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+It proves the working tree is clean, `HEAD` is the `origin/dev` tip, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+
+Every comparison is against `origin/dev`, never the local `dev` ref, so the check also passes from a **detached `HEAD` at the `origin/dev` tip** — the normal state of a worktree when `dev` is checked out in another one. Any other work branch, and a detached `HEAD` that differs from `origin/dev`, fail.
 
 For the **parallel-wave flow** (many work branches integrated serially by an orchestrator), a task agent's terminal state is a pushed feature branch, not a dev merge — use `bash scripts/verify-done.sh --feature`, which checks the branch is a work branch, the tree is clean, it is pushed (`HEAD == origin/<branch>`), and it was branched off `dev`. The orchestrator runs the default mode after merging. Test suite: [`scripts/test-verify-done.sh`](../../scripts/test-verify-done.sh) (runs in CI's `branch-guard` job with a stubbed `gh`) covers both modes.
 

@@ -2,7 +2,14 @@
 
 Open-source, self-hosted web admin panel for Squad dedicated servers. Install with one command; manage servers, players, and audit trail from a browser.
 
-## Quick start (Ubuntu 22.04 / 24.04 LTS, Debian 12+)
+## Two ways to run it
+
+| You want to | Where | Go to |
+|---|---|---|
+| Run the whole panel, game-server management included | Linux: Ubuntu 22.04 / 24.04 LTS, Debian 12+ (the host bridge uses Linux-only APIs) | [Quick start — full stack](#quick-start--full-stack-linux) |
+| Change code and run tests | macOS or Linux | [Development](#development) |
+
+## Quick start — full stack (Linux)
 
 **Prerequisites**: Docker Engine + Compose v2 ([docs.docker.com/engine/install](https://docs.docker.com/engine/install/)).
 
@@ -16,7 +23,7 @@ The script is idempotent — safe to re-run. What it does:
 
 1. Installs the privileged Go host-bridge (systemd unit + socket + `panel` group).
 2. Creates the `data/` tree for PostgreSQL, Redis, Caddy, depot, and per-server files.
-3. Generates `.env` with fresh secrets (`POSTGRES_PASSWORD`, `APP_ENCRYPTION_KEY`, `SESSION_SECRET`). **Copy the printed `APP_ENCRYPTION_KEY` offline** — losing it means RCON passwords in the DB can no longer be decrypted.
+3. Generates `.env` with fresh secrets (the Postgres, Redis and backup passwords, `APP_ENCRYPTION_KEY`, `SESSION_SECRET`). **Copy the printed `APP_ENCRYPTION_KEY` offline** — losing it means RCON passwords in the DB can no longer be decrypted.
 4. Adds `127.0.0.1 <APP_DOMAIN>` to `/etc/hosts` for dev domains (`*.lan`, `*.localhost`, `*.test`, `*.local`).
 5. Runs `docker compose build` and `docker compose up -d`, then waits for health checks.
 
@@ -28,7 +35,7 @@ TLS_ISSUER=acme
 ACME_EMAIL=you@example.com
 ```
 
-Open `https://<APP_DOMAIN>/` — the first Steam login claims the Owner role automatically.
+Open `https://<APP_DOMAIN>/` — the first Steam login claims the Owner role automatically. To install by hand instead of `bootstrap.sh`, follow [`docs/operations/setup.md`](docs/operations/setup.md).
 
 ## Rebuild from scratch
 
@@ -47,14 +54,14 @@ sudo ./scripts/rebuild.sh
                     ┌─────────┼─────────┐
                     │         │         │
                ┌────▼───┐ ┌──▼──┐ ┌────▼────┐
-               │  API   │ │ Web │ │ Workers  │  (7 active + 5 stubs)
+               │  API   │ │ Web │ │ Workers  │  (21 packages)
                │Fastify │ │Next │ │  Node.js │
                └──┬──┬──┘ └─────┘ └────┬────┘
                   │  │                  │
            ┌──────┘  └──────┐           │
       ┌────▼────┐     ┌────▼────┐  ┌───▼────┐
       │Postgres │     │  Redis  │  │ Bridge │  Go daemon (root)
-      │  16     │     │   7     │  │  Unix  │  25 RPC methods
+      │  16     │     │   7     │  │  Unix  │  27 RPC methods
       └─────────┘     └─────────┘  │ socket │
                                    └───┬────┘
                                        │
@@ -79,7 +86,8 @@ sudo ./scripts/rebuild.sh
 | **worker-diag-flush** | Diagnostic event batching to database |
 | **worker-audit-archiver** | Cold-archives audit log rows >90 days |
 | **worker-event-partition** | Monthly partition rotation |
-| **worker-config-sync** | Config sync (stub) |
+| **worker-config-sync** | Config sync and drift detection |
+| **worker-\*** (the rest) | The other 12 workers in `docker/compose.yml` (scheduler, discord, role-expirer, automation, ban-sync and more). Of the 21 packages under `apps/workers/`, `backup` and `stats` have no `worker-*` service in the file |
 | **postgres** | PostgreSQL 16 |
 | **redis** | Redis 7 (pub/sub, streams, cache) |
 
@@ -117,13 +125,24 @@ docs/               Architecture, component docs, operations, development
 
 ## Development
 
-**Requirements**: Node.js 22+, pnpm 9+, Go 1.25.13+ (for bridge), Docker.
+**Requirements**: Node.js 22+, pnpm 9+, Docker with Compose v2. Go 1.25.13+ only to build the bridge, which runs on Linux. macOS and Linux both work for everything below; no host bridge is needed.
 
 ```bash
 pnpm install
-pnpm build
-pnpm dev                         # all apps in dev mode (turbo)
-pnpm test                        # run all tests
+cp .env.example .env             # fill POSTGRES_PASSWORD, REDIS_PASSWORD, REDIS_SIDECAR_PASSWORD,
+                                 # RESTIC_PASSWORD, SESSION_SECRET, APP_ENCRYPTION_KEY
+docker compose up -d postgres redis
+eval "$(bash scripts/new-test-db.sh mydev)"   # migrated database + DATABASE_URL, TEST_DATABASE_URL, TEST_REDIS_URL
+pnpm --filter @squad/api exec vitest run test/<file>.test.ts
+pnpm dev:app                     # api on :3001 + web on http://localhost:3000, no build needed
+```
+
+How to fill `.env`, what `dev:app` reads, and how to run several checkouts side by side are in
+[`docs/development/local-development.md`](docs/development/local-development.md).
+
+```bash
+pnpm build                       # all packages (not needed for dev:app or the api and web suites)
+pnpm test:cov                    # the full JS suite with coverage
 pnpm typecheck                   # TypeScript checks
 pnpm lint                        # biome check
 ```
@@ -131,10 +150,12 @@ pnpm lint                        # biome check
 ### Database
 
 ```bash
-pnpm db:generate                 # regenerate Drizzle schema
-pnpm db:migrate                  # run pending migrations
+pnpm db:migrate                  # run pending migrations (needs DATABASE_URL)
 pnpm db:studio                   # open Drizzle Studio GUI
 ```
+
+Migrations are hand-written; `pnpm db:generate` refuses to run (see
+[`docs/operations/migrations.md`](docs/operations/migrations.md)).
 
 ### Bridge
 
@@ -176,6 +197,7 @@ See [`.env.example`](.env.example) for all variables. Key ones:
 |----------|----------|-------------|
 | `APP_DOMAIN` | yes | FQDN for the panel |
 | `POSTGRES_PASSWORD` | yes | PostgreSQL password (auto-generated) |
+| `REDIS_PASSWORD`, `REDIS_SIDECAR_PASSWORD`, `RESTIC_PASSWORD` | yes | Redis, the Redis sidecar login and the backup repository (auto-generated; Compose refuses to start while they are blank) |
 | `APP_ENCRYPTION_KEY` | yes | 32-byte key for RCON password encryption |
 | `SESSION_SECRET` | yes | 32-byte key for session signing |
 | `TLS_ISSUER` | no | `internal` (default) or `acme` for Let's Encrypt |

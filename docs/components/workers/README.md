@@ -15,6 +15,39 @@ initial pass has completed, call `markReady()` before scheduling intervals or
 entering the main loop. The controller buffers a signal received during
 startup and runs cleanup once; a repeated signal joins the same cleanup.
 
+Workers built on [`@squad/worker-kit`](#worker-kit) get this from `runWorker`.
+
+## Worker kit
+
+[`packages/worker-kit`](../../../packages/worker-kit/) (`@squad/worker-kit`) holds the lifecycle the
+periodic workers share. A worker's `src/index.ts` creates its logger with
+`createWorkerLog(name)` (kept at module level for the worker's exported
+functions) and ends with one `runWorker({ name, log, entrypoint: import.meta.url, ... })` call:
+
+- `postgres` / `redis` declare what the worker opens. A missing `DATABASE_URL` or `REDIS_URL` is
+  logged as `fatal` and exits with code `1`; `optional: true` lets the worker run without it
+  (without Redis there is no heartbeat and the diag emitter is a no-op). `postgres.drizzle`
+  also builds the Drizzle client as `ctx.db`; `postgres.options` overrides the default
+  `{ max: 4, prepare: false }`.
+- The heartbeat `worker:heartbeat:<name>` is published with `heartbeatStatus` (default `running`),
+  and `<name_with_underscores>.started` / `.stopped` diag events are emitted unless
+  `lifecycleDiag: false`.
+- `setup(ctx)` runs synchronously and returns `ticks`: each has an `intervalMs`, a `run`, a
+  `failureMessage`, an `overlap` policy (`'skip'`, `{ warn }`, or `'allow'`) and a `firstRunFailure`
+  policy (`'fatal'`, the default, or `'log'`). It may also return `startedPayload` and a
+  `beforeFirstTick` hook for one-shot startup work.
+- On `SIGINT`/`SIGTERM` the kit clears the intervals, emits `stopped`, stops the heartbeat,
+  closes Postgres and quits Redis. Importing a worker's entry file from a test does not start it.
+
+`positiveIntEnv(name, fallback)` and `guardAgainstOverlap(tick, onSkip?)` are exported for workers
+that run their own loops. Worker `tsconfig.json` files extend
+[`apps/workers/tsconfig.base.json`](../../../apps/workers/tsconfig.base.json), and the plain
+worker `vitest.config.ts` files spread
+[`_test-shared/vitest.base.ts`](../../../apps/workers/_test-shared/vitest.base.ts).
+
+Workers with a different lifecycle (a supervisor, a stream consumer, several loops with an ordered
+teardown) keep their own `main()`.
+
 Every worker contract test uses
 [`apps/workers/_test-shared/contract.ts`](../../../apps/workers/_test-shared/contract.ts).
 The shared test clears the heartbeat key, waits for a newly published
@@ -49,9 +82,9 @@ heartbeat, sends `SIGTERM` twice and requires a clean exit with code `0`.
 
 ## Adding a worker
 
-1. Create `apps/workers/<name>/` with `package.json`, `tsconfig.json`, `src/index.ts`.
-2. Use [`shared-config`](../shared-config/README.md)'s `startHeartbeat` util.
-3. Register `createGracefulShutdownController()` before asynchronous startup and call `markReady()` before the worker reports readiness.
+1. Create `apps/workers/<name>/` with `package.json`, `tsconfig.json` (`{ "extends": "../tsconfig.base.json" }`), `src/index.ts`.
+2. Build `src/index.ts` on [`@squad/worker-kit`](#worker-kit): `createWorkerLog` and `runWorker`. A worker that cannot use `runWorker` must call `startHeartbeat` from [`shared-config`](../shared-config/README.md) and register `createGracefulShutdownController()` before asynchronous startup, calling `markReady()` before it reports readiness.
+3. Add `@squad/worker-kit` to the worker's `package.json` dependencies.
 4. Cover heartbeat and repeated `SIGTERM` through the shared worker contract test.
 5. Add it to `compose.yml`. If the worker needs the bridge socket, set `user: "0:${PANEL_GID:-987}"` (primary GID `panel`) — the bridge's `SO_PEERCRED` check looks at the peer's primary GID; supplementary groups added via `group_add` are not visible to the bridge across the user-namespace boundary.
 6. Create a `docs/components/workers/<name>/` directory with the standard 8-file set and add a row to the table above.

@@ -1,5 +1,3 @@
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   backfillMonths,
   loadActiveSeasonTarget,
@@ -8,16 +6,12 @@ import {
   recomputeBonusAccruals,
   recomputeLeaderboardPeriods,
 } from '@squad/db';
-import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
-import Redis from 'ioredis';
-import pino from 'pino';
-import postgres from 'postgres';
+import type { Diag } from '@squad/diag';
+import { createWorkerLog, runWorker } from '@squad/worker-kit';
+import type Redis from 'ioredis';
+import type postgres from 'postgres';
 
-const log = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { service: 'worker-leaderboard-aggregator' },
-});
+const log = createWorkerLog('leaderboard-aggregator');
 
 const COMPONENT = 'worker-leaderboard-aggregator';
 const DEFAULT_TICK_INTERVAL_MS = 15 * 60 * 1000;
@@ -209,95 +203,35 @@ export async function runStartupBackfill(
   }
 }
 
-async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    log.fatal('DATABASE_URL is required');
-    process.exit(1);
-  }
-  const sql = postgres(url, { max: 1 });
-  const redisUrl = process.env.REDIS_URL;
-  const redis = redisUrl
-    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
-    : null;
-  const stopHeartbeat = redis
-    ? startHeartbeat({
-        redis,
-        name: 'leaderboard-aggregator',
-        statusFn: () => 'idle',
-        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
-      })
-    : () => {};
-
-  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
-  const invalidateCache = redis ? () => invalidateLeaderboardCache(redis) : undefined;
-
-  let interval: NodeJS.Timeout | null = null;
-  const shutdown = createGracefulShutdownController({
-    cleanup: async (sig) => {
-      log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
-      await diag.emit({
-        component: COMPONENT,
-        kind: 'leaderboard_aggregator.stopped',
-        severity: 'info',
-        message: `leaderboard-aggregator received ${sig}`,
-        payload: { sig },
-      });
-      stopHeartbeat();
-      await sql.end({ timeout: 5 });
-      await redis?.quit().catch(() => undefined);
-    },
-    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
-  });
-
-  await diag.emit({
-    component: COMPONENT,
-    kind: 'leaderboard_aggregator.started',
-    severity: 'info',
-    message: 'leaderboard-aggregator started',
-    payload: { pid: process.pid },
-  });
-
-  await runStartupBackfill({ sql, diag }, resolveBackfillMonths());
-
-  await runLeaderboardAggregatorTick({
-    sql,
-    diag,
-    invalidateCache,
-    alltimeState: processAlltimeState,
-  });
-  await shutdown.markReady();
-  if (shutdown.isShutdownRequested()) return;
-  // A tick can outlast the interval on a large database; skipping the overlap
-  // stops recomputes from queueing on the single pooled connection.
-  let tickInProgress = false;
-  interval = setInterval(() => {
-    if (tickInProgress) {
-      log.warn('previous leaderboard tick still running, skipping this interval');
-      return;
-    }
-    tickInProgress = true;
-    runLeaderboardAggregatorTick({ sql, diag, invalidateCache, alltimeState: processAlltimeState })
-      .catch((err) => log.error({ err: (err as Error).message }, 'leaderboard tick failed'))
-      .finally(() => {
-        tickInProgress = false;
-      });
-  }, resolveTickIntervalMs());
-}
-
-function isMainEntrypoint(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainEntrypoint()) {
-  main().catch((err) => {
-    log.fatal({ err: (err as Error).message }, 'fatal');
-    process.exit(1);
-  });
-}
+runWorker({
+  name: 'leaderboard-aggregator',
+  log,
+  entrypoint: import.meta.url,
+  postgres: { options: { max: 1 } },
+  redis: { optional: true },
+  heartbeatStatus: 'idle',
+  setup: ({ sql, redis, diag }) => {
+    const invalidateCache = redis ? () => invalidateLeaderboardCache(redis) : undefined;
+    return {
+      beforeFirstTick: async () => {
+        await runStartupBackfill({ sql, diag }, resolveBackfillMonths());
+      },
+      ticks: [
+        {
+          intervalMs: resolveTickIntervalMs(),
+          // A tick can outlast the interval on a large database; skipping the overlap
+          // stops recomputes from queueing on the single pooled connection.
+          overlap: { warn: 'previous leaderboard tick still running, skipping this interval' },
+          failureMessage: 'leaderboard tick failed',
+          run: () =>
+            runLeaderboardAggregatorTick({
+              sql,
+              diag,
+              invalidateCache,
+              alltimeState: processAlltimeState,
+            }),
+        },
+      ],
+    };
+  },
+});

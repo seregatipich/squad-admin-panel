@@ -39,10 +39,6 @@ jobs:
             echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see CLAUDE.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
             exit 1
           fi
-      - name: Run git-guard test suite
-        run: bash scripts/test-git-guard.sh
-      - name: Run verify-done test suite
-        run: bash scripts/test-verify-done.sh
       - name: Install gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1
@@ -54,34 +50,12 @@ jobs:
           tar -xzf "$asset" gitleaks
           rm -f "$asset"
           echo "$PWD" >> "$GITHUB_PATH"
-      - name: Run pre-push-checklist test suite
-        run: bash scripts/test-pre-push-checklist.sh
-      - name: Run workflow-pin test suite
-        run: bash scripts/test-workflow-pins.sh
-      - name: Run dependency-pin test suite
-        run: bash scripts/test-dependency-pins.sh
-      - name: Run migration lint
-        run: bash scripts/test-migration-lint.sh
-      - name: Run gitignore-pattern test suite
-        run: bash scripts/test-gitignore-patterns.sh
-      - name: Run workflow security test suite
-        run: bash scripts/test-workflow-security.sh
-      - name: Run codeql-default-setup test suite
-        run: bash scripts/test-codeql-default-setup.sh
-      - name: Run CI runner-strategy test suite
-        run: bash scripts/test-ci-runner-strategy.sh
-      - name: Run CI test-slice suite
-        run: bash scripts/test-ci-test-shard.sh
-      - name: Run image-preserve-labels test suite
-        run: bash scripts/test-image-preserve-labels.sh
-      - name: Run rnsquadjs-runtime-copy test suite
-        run: bash scripts/test-rnsquadjs-runtime-copy.sh
-      - name: Run bridge-package-scripts test suite
-        run: bash scripts/test-bridge-package-scripts.sh
-      - name: Run compose-env-passthrough test suite
-        run: bash scripts/test-compose-env-passthrough.sh
-      - name: Run postgres-max-connections test suite
-        run: bash scripts/test-postgres-max-connections.sh
+      # One step runs every contract suite (scripts/test-repo-contracts.sh): all of
+      # them run even after one fails, and the failures are listed at the end.
+      # It follows the gitleaks install because the pre-push-checklist suite
+      # needs gitleaks on PATH.
+      - name: Run repository contract suites
+        run: bash scripts/test-repo-contracts.sh
 
   lint:
     runs-on: ubuntu-24.04

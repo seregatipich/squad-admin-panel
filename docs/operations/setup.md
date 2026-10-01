@@ -2,7 +2,7 @@
 
 ## Host requirements
 
-- Ubuntu 22.04 / 24.04 LTS or Debian 12. (Yes, even for dev — the bridge uses Linux-only APIs.)
+- Ubuntu 22.04 / 24.04 LTS or Debian 12. (The bridge uses Linux-only APIs. To only develop and run tests, macOS works too: see [local development](../development/local-development.md).)
 - Docker Engine 24+ and Compose v2.
 - Public IPv4 if you want the Squad server to appear in the community browser; LAN-only is fine for dev.
 - ~50 GB free disk for the depot volume.

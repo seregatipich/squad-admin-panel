@@ -41,6 +41,7 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { ApiError, apiFetch, apiSend, nullOnHttpError } from '@/lib/api';
 import {
   buildRoleAssignPayload,
   DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
@@ -48,6 +49,7 @@ import {
   isRoleExpirySoon,
   toRoleExpiryDateValue,
 } from '@/lib/role-expiry';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { isUuid } from '@/lib/uuid';
 import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
@@ -142,9 +144,18 @@ const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку и�
 export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
   const locale = useIntlLocale();
   const { id: playerId } = use(params);
-  const [data, setData] = useState<PlayerResponse | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // The route segment arrives URL-decoded and every section builds API paths
+  // from it; anything but a UUID is refused before a single request (#472).
+  const validPlayerId = isUuid(playerId);
+  const {
+    data,
+    errorMessage: err,
+    refresh: refreshPlayer,
+  } = useApiResource<PlayerResponse>(validPlayerId ? `/api/v1/players/${playerId}` : null);
+  const { data: meData, refresh: refreshMe } = useApiResource<Me>(
+    validPlayerId ? '/api/v1/me' : null,
+  );
+  const me = meData ?? null;
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [nickBanRefreshKey, setNickBanRefreshKey] = useState(0);
   // WhitelistQuickAction and PanelAccessSection each show the same player role
@@ -154,9 +165,6 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const [roleRefreshKey, setRoleRefreshKey] = useState(0);
   const onRoleChanged = useCallback(() => setRoleRefreshKey((key) => key + 1), []);
   const [evidenceRefreshKey, setEvidenceRefreshKey] = useState(0);
-  // The route segment arrives URL-decoded and every section builds API paths
-  // from it; anything but a UUID is refused before a single request (#472).
-  const validPlayerId = isUuid(playerId);
   const [eosCopied, setEosCopied] = useState(false);
 
   useEffect(() => {
@@ -165,27 +173,11 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
     return () => clearTimeout(timer);
   }, [eosCopied]);
 
-  /**
-   * Загрузка карточки. Та же функция служит и эффектом монтирования, и
-   * обработчиком «Повторить», поэтому повторная попытка повторяет ровно те же
-   * два запроса.
-   */
-  const load = useCallback(() => {
-    if (!validPlayerId) return;
-    setErr(null);
-    fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(setData)
-      .catch((e) => setErr((e as Error).message));
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setMe(j as Me | null))
-      .catch(() => {});
-  }, [playerId, validPlayerId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  /** «Повторить» повторяет ровно те же два запроса, что и загрузка при открытии. */
+  const load = () => {
+    void refreshPlayer();
+    void refreshMe();
+  };
 
   if (!validPlayerId) {
     return (
@@ -509,15 +501,14 @@ function WhitelistQuickAction({
 
   const reload = useCallback(async () => {
     try {
-      const [settingsRes, roleRes] = await Promise.all([
-        fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
+      const [loadedSettings, loadedRole] = await Promise.all([
+        apiFetch<WhitelistSettings>('/api/v1/whitelist/settings').catch(nullOnHttpError),
+        apiFetch<{ role: SingleRole | null }>(`/api/v1/players/${playerId}/role`).catch(
+          nullOnHttpError,
+        ),
       ]);
-      if (settingsRes.ok) setSettings((await settingsRes.json()) as WhitelistSettings);
-      if (roleRes.ok) {
-        const body = (await roleRes.json()) as { role: SingleRole | null };
-        setCurrent(body.role);
-      }
+      if (loadedSettings) setSettings(loadedSettings);
+      if (loadedRole) setCurrent(loadedRole.role);
       setLoadErr(false);
     } catch {
       setLoadErr(true);
@@ -566,21 +557,20 @@ function WhitelistQuickAction({
     setBusy(true);
     setMsg(null);
     try {
-      const r = isWhitelisted
-        ? await fetch(`/api/v1/whitelist/members/${playerId}`, {
-            method: 'DELETE',
-            credentials: 'include',
-          })
-        : await fetch('/api/v1/whitelist/members', {
+      try {
+        if (isWhitelisted) {
+          await apiSend(`/api/v1/whitelist/members/${playerId}`, { method: 'DELETE' });
+        } else {
+          await apiSend('/api/v1/whitelist/members', {
             method: 'POST',
-            credentials: 'include',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ player_id: playerId }),
+            json: { player_id: playerId },
           });
-      if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        }
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        const body = e.jsonBody<{ error?: string }>() ?? {};
         throw new Error(
-          (body.error && WHITELIST_ERROR_TEXT[body.error]) ?? body.error ?? `HTTP ${r.status}`,
+          (body.error && WHITELIST_ERROR_TEXT[body.error]) ?? body.error ?? `HTTP ${e.status}`,
         );
       }
       await reload();
@@ -680,18 +670,17 @@ function PanelAccessSection({
 
   const reload = useCallback(async () => {
     try {
-      const [rRes, listRes] = await Promise.all([
-        fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
+      const [loadedRole, loadedRoles] = await Promise.all([
+        apiFetch<{ role: SingleRole | null }>(`/api/v1/players/${playerId}/role`).catch(
+          nullOnHttpError,
+        ),
         // Only managers need the full role list; viewers don't query it.
         canManage
-          ? fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
+          ? apiFetch<SingleRole[]>('/api/v1/roles').catch(nullOnHttpError)
           : Promise.resolve(null),
       ]);
-      if (rRes.ok) {
-        const body = (await rRes.json()) as { role: SingleRole | null };
-        setCurrent(body.role);
-      }
-      if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
+      if (loadedRole) setCurrent(loadedRole.role);
+      if (loadedRoles) setAllRoles(loadedRoles);
       setLoadErr(false);
     } catch {
       setLoadErr(true);
@@ -719,24 +708,23 @@ function PanelAccessSection({
     setBusy(true);
     setMsg(null);
     try {
-      const r =
-        roleId === null
-          ? await fetch(`/api/v1/players/${playerId}/role`, {
-              method: 'DELETE',
-              credentials: 'include',
-            })
-          : await fetch(`/api/v1/players/${playerId}/role`, {
-              method: 'PUT',
-              credentials: 'include',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(buildRoleAssignPayload(roleId, expiresAt, comment)),
-            });
-      if (r.status === 409 || r.status === 403) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
-        setMsg({ kind: 'err', text: roleActionErrorText(body.error, r.status) });
-        return;
+      try {
+        if (roleId === null) {
+          await apiSend(`/api/v1/players/${playerId}/role`, { method: 'DELETE' });
+        } else {
+          await apiSend(`/api/v1/players/${playerId}/role`, {
+            method: 'PUT',
+            json: buildRoleAssignPayload(roleId, expiresAt, comment),
+          });
+        }
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 409 || e.status === 403)) {
+          const body = e.jsonBody<{ error?: string }>() ?? {};
+          setMsg({ kind: 'err', text: roleActionErrorText(body.error, e.status) });
+          return;
+        }
+        throw e instanceof ApiError ? new Error(`HTTP ${e.status}`) : e;
       }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await reload();
       onRoleChanged();
       setEditing(false);

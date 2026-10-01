@@ -48,7 +48,7 @@ External services: only Steam CDN (read-only via `depot_update`) and Epic Online
 - **The bridge is the only path to root.** Anything that requires privilege (`docker run`, `ufw` rules, writes under `/var/lib/squad-panel/`) goes through it. RPC method names are pinned by [`packages/shared-config/src/bridge-methods.ts`](../../packages/shared-config/src/bridge-methods.ts).
 - **`SquadGame/ServerConfig/*.cfg` is the source of truth for live config.** SteamCMD ships the templates inside the depot volume; the install flow seeds host-side copies, and from then on the host files are RW-mounted into the container. Squad re-reads a subset live (`Admins.cfg`, `Bans.cfg`, `Remote*ListHosts.cfg`).
 - **Audit log is append-only and hash-chained.** A DB trigger rejects `UPDATE`/`DELETE`. `pnpm verify:audit-chain` validates integrity out-of-band.
-- **RNSquadJS is not a dependency.** The RCON wire client and log parser are our own code (`apps/workers/rcon/src/protocol.ts`, `apps/workers/log-ingest/src/parser/`). We do not vendor or fork RNSquadJS.
+- **RNSquadJS is an optional per-server sidecar, never forked.** The RCON wire client and the log parser are our own code (`apps/workers/rcon/src/protocol.ts`, `apps/workers/log-ingest/src/parser/`) and remain the path for servers that have not been cut over. Cut-over servers also run an upstream RNSquadJS container (`docker/rnsquadjs/`, started through `container_run_rnsquadjs`), pinned by SHA and extended only through the `panelBridge` plugin overlay; see [decisions.md](decisions.md) and the [migration spec](../superpowers/specs/2026-04-24-rnsquadjs-migration-design.md).
 
 ## Where to look next
 

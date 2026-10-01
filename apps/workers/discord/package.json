@@ -15,6 +15,7 @@
     "@squad/db": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "@squad/shared-types": "workspace:*",
+    "@squad/worker-kit": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "ioredis": "^6.0.0",
     "pino": "^10.3.1"

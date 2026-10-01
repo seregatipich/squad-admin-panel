@@ -76,6 +76,32 @@ pnpm turbo run test --force   # bypass Turbo cache
 
 The UI is in **Russian**. All user-visible strings (labels, headings, error messages, button text, empty-state copy) must be written in Russian. Do not translate to English unless the user explicitly requests it.
 
+## Web data fetching
+
+Pages in `apps/web` reach the API through `apps/web/src/lib/api.ts` and `apps/web/src/lib/use-polled-resource.ts`, not through a hand-written `fetch(`.
+
+| Need | Use |
+|---|---|
+| A JSON read or write whose body the page uses | `apiFetch<T>(path, { method, json, signal })` |
+| A mutation whose answer is only checked for success | `apiSend(path, { method, json })` (never reads the body) |
+| Branching on the error status per caption | `apiResult<T>(path, opts)`: `{ ok: true, data }` or `{ ok: false, error }` |
+| A read that loads on mount and optionally polls | `useApiResource<T>(path, { intervalMs, pauseWhenHidden })` |
+| The same, with a custom fetcher or key | `usePolledResource<T>(key, (signal) => ..., options)` |
+
+Defaults: `credentials: 'include'`, `cache: 'no-store'`, `accept: application/json`, and a 10 s timeout for reads (a mutation is not time-bounded; pass `timeoutMs` to bound it). A non-2xx answer throws `ApiError` (`status`, `responseText`, `jsonBody()`, `codeOrStatus()`); `describeHttpError(error, withBody?)` renders it as `HTTP <status>`, so the strings pages show stay what they were.
+
+`usePolledResource` aborts the in-flight request on unmount, on a key change and on every explicit `refresh()`, never leaks its timer, skips a poll tick while a request is still in flight, and keeps the last data when a refetch fails. `refresh({ skipIfInFlight: true })` is for nudges that can fire faster than the API answers (live-bus events). `pauseWhenHidden` skips ticks on a hidden tab and refetches when it returns.
+
+### Raw-fetch ratchet
+
+`apps/web/src/raw-fetch-ratchet.test.ts` (it runs with the rest of the web suite, locally and in the `test-web` job) counts `fetch(` calls in non-test source, outside `src/lib/api.ts`, and compares them per file with `apps/web/raw-fetch-baseline.tsv` (`path<TAB>count`, sorted, one line per file). It fails when a file has more raw fetches than its baseline or a new file has any, and also when the baseline is higher than reality, so every migration commits its gain. After moving calls to the helpers above, regenerate the baseline and commit it with the change:
+
+```bash
+pnpm --filter @squad/web fetch-baseline:update
+```
+
+The script refuses to raise a count: a new raw `fetch(` is fixed in the code, never in the baseline. Comment lines are not counted. Binary downloads (`blob()`) and `FormData` uploads are the legitimate leftovers until the helpers learn them.
+
 ## API conventions
 
 - Framework: Fastify 5 with `@fastify/type-provider-zod`. All route schemas are Zod objects.
@@ -136,7 +162,7 @@ Defined in `lefthook.yml`. Run automatically after `pnpm install`.
 | `go-fmt` | `apps/bridge/**/*.go` staged | Fails when `gofmt -l -s` lists a file, then `go vet ./...` for linux/amd64 (the bridge is Linux-only). Skipped when Go is not installed. |
 | `gitleaks` | All staged files | Scans for secrets and blocks the commit on a finding. Skipped when gitleaks is not installed. |
 
-The pre-push hook runs `scripts/pre-push-checklist.sh`: biome, a gitleaks scan, typecheck of the changed packages and their dependents, and the tests of the changed packages — about a minute. It is the only check a `dev` push gets before it deploys the dev stand; see `CLAUDE.md` "Local pre-check".
+The pre-push hook runs `scripts/pre-push-checklist.sh`: biome, a gitleaks scan, typecheck of the changed packages and their dependents, and the tests of the changed packages — about a minute. It is the only check a `dev` push gets before it deploys the dev stand; see [ci.md](ci.md).
 
 Never bypass hooks with `--no-verify` unless explicitly instructed.
 
@@ -144,7 +170,7 @@ Never bypass hooks with `--no-verify` unless explicitly instructed.
 
 All project documentation lives under `docs/`. After every code change, check whether the documentation needs to be updated. A task is not complete until documentation matches the final code.
 
-See `CLAUDE.md` (project root) for the full documentation workflow and required structure.
+See the "Documentation" rule in [`CLAUDE.md`](../../CLAUDE.md#documentation) and the table of contents in [`docs/README.md`](../README.md).
 
 ## See also
 

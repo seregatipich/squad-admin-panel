@@ -6,7 +6,8 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 
 ### Architecture
 
-- [**Architecture map**](architecture/map.md) — the whole system in one document: subsystem map, dependency graph, route catalogue, schema ERD, messaging substrates, end-to-end flows, extension guide
+- [**Architecture map**](architecture/map.md) — short verified overview: repository layout, privilege boundary, API, workers, messaging, database
+- [Architecture summary](architecture/README.md) — three privilege zones, component diagram, constraints
 - [System overview](architecture/system-overview.md) — privilege zones, components, bird's-eye view
 - [Data flow](architecture/data-flow.md) — install flow, event pipeline, RCON loop
 - [RBAC](architecture/rbac.md) — permission keys, system roles, enforcement
@@ -20,7 +21,8 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 - [`live-bus`](components/live-bus/README.md) — typed WebSocket push channel + Redis pub/sub fan-out
 - [`web`](components/web/README.md) — Next.js dashboard ([design system](components/web/design-system.md))
 - [`bridge`](components/bridge/README.md) — Go host daemon (the only privileged component)
-- [`workers`](components/workers/README.md) — RCON, log-ingest, archiver, partitioner, stubs
+- [`rbac`](components/rbac/README.md) — permission registry, roles, enforcement
+- [`workers`](components/workers/README.md) — the worker fleet, one directory per documented worker
 - [`db`](components/db/README.md) — Drizzle schema + Postgres migrations
 - [`diag`](components/diag/README.md) — `@squad/diag` panel-internal diagnostic event emitter (Redis Stream `diag:queue`)
 - [`shared-types`](components/shared-types/README.md) — Zod schemas + `EventEnvelope`
@@ -39,12 +41,25 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 ### Development
 
 - [Local development](development/local-development.md) — clone-to-running-stack
+- [Local test setup](development/local-test-setup.md) — isolated, migrated test database; env vars; API test rules
 - [Testing](development/testing.md) — unit / integration / e2e tiers
 - [Conventions](development/conventions.md) — monorepo layout, language choices, commit style, invariants
 - [Code style](development/code-style.md) — formatting, naming, imports, Biome config
+- [CI gate and pre-check](development/ci.md) — the `ci` workflow on `master`, SHA pinning, `test:cov`, the pre-push checklist
+- [Dev stand and promotion](development/deploy.md) — stand deploy, rollback, fast-forward promotion
+- [Completion evidence](development/completion-evidence.md) — issue evidence comments and the parallel-wave handoff
+- [Agent enforcement harness](development/agent-harness.md) — branch-model guards, runners, deploy pipeline, troubleshooting
+- [Solving issues in parallel](development/solve-issues-parallel.md) — `pnpm solve:issues` with Claude Managed Agents
+
+### Open design specs
+
+- [RNSquadJS migration](superpowers/specs/2026-04-24-rnsquadjs-migration-design.md) — sidecar cutover; fleet rollout and cleanup phases are still open
+- [Diagnostic bundle and panel disk breakdown](superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md) — the disk breakdown shipped; the diagnostic bundle endpoint is not implemented
+
+Specs and plans of shipped work are removed; git history keeps them.
 
 ## Maintenance rules
 
-`docs/` is part of the source of truth. Every change to code, schema, configuration, or workflow must land with the matching documentation update in the same task. The full policy lives in [CLAUDE.md](../CLAUDE.md#documentation-system).
+`docs/` is part of the source of truth. Every change to code, schema, configuration, or workflow must land with the matching documentation update in the same task. The policy is the "Documentation" rule in [CLAUDE.md](../CLAUDE.md#documentation); new docs are linked from the table of contents above.
 
 When code and docs disagree, **the code wins** — but the doc must be updated to match in the same change. Never document behavior that does not exist.

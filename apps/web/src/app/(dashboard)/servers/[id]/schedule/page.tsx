@@ -25,6 +25,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { apiFetch, apiResult, apiSend, describeHttpError } from '@/lib/api';
 import type { MessageTemplate } from '@/lib/messageTemplates';
 
 type TaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -148,26 +149,13 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [tasksRes, historyRes, layersRes] = await Promise.all([
-        fetch(`/api/v1/servers/${id}/scheduled-tasks`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-        fetch(`/api/v1/servers/${id}/scheduled-tasks/history`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
-        fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
+      const [tasksBody, historyBody, layersBody] = await Promise.all([
+        apiFetch<{ tasks: ScheduledTask[]; capabilities: Capabilities }>(
+          `/api/v1/servers/${id}/scheduled-tasks`,
+        ),
+        apiFetch<{ runs: TaskRun[] }>(`/api/v1/servers/${id}/scheduled-tasks/history`),
+        apiFetch<{ rows: LayerRow[] }>('/api/v1/layers'),
       ]);
-      if (!tasksRes.ok) throw new Error(`HTTP ${tasksRes.status}`);
-      if (!historyRes.ok) throw new Error(`HTTP ${historyRes.status}`);
-      if (!layersRes.ok) throw new Error(`HTTP ${layersRes.status}`);
-      const tasksBody = (await tasksRes.json()) as {
-        tasks: ScheduledTask[];
-        capabilities: Capabilities;
-      };
-      const historyBody = (await historyRes.json()) as { runs: TaskRun[] };
-      const layersBody = (await layersRes.json()) as { rows: LayerRow[] };
       setTasks(tasksBody.tasks);
       setCaps(tasksBody.capabilities);
       setRuns(historyBody.runs);
@@ -177,19 +165,16 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
       // only disables the template picker / server multi-select, never the page.
       try {
         const [templatesRes, serversRes] = await Promise.all([
-          fetch('/api/v1/message-templates', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' }),
+          apiResult<MessageTemplate[]>('/api/v1/message-templates'),
+          apiResult<{ items: ServerRow[] }>('/api/v1/servers'),
         ]);
-        if (templatesRes.ok) setTemplates((await templatesRes.json()) as MessageTemplate[]);
-        if (serversRes.ok) {
-          const serversBody = (await serversRes.json()) as { items: ServerRow[] };
-          setServerList(serversBody.items ?? []);
-        }
+        if (templatesRes.ok) setTemplates(templatesRes.data);
+        if (serversRes.ok) setServerList(serversRes.data.items ?? []);
       } catch {
         // ignore — broadcast extras stay empty
       }
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setLoading(false);
     }
@@ -291,13 +276,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
       if (scheduleMode === 'one_off') body.scheduled_at = new Date(`${scheduledAt}Z`).toISOString();
       else body.recurrence = recurrence.trim();
 
-      const res = await fetch(`/api/v1/servers/${id}/scheduled-tasks`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      await apiSend(`/api/v1/servers/${id}/scheduled-tasks`, { method: 'POST', json: body });
       setName('');
       setLayer('');
       setMessage('');
@@ -308,7 +287,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
       setMsg('Задача создана');
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setSaving(false);
     }
@@ -317,30 +296,23 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
   async function toggle(task: ScheduledTask) {
     setErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/scheduled-tasks/${task.id}`, {
+      await apiSend(`/api/v1/servers/${id}/scheduled-tasks/${task.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !task.enabled }),
+        json: { enabled: !task.enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     }
   }
 
   async function remove(task: ScheduledTask) {
     setErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/scheduled-tasks/${task.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/servers/${id}/scheduled-tasks/${task.id}`, { method: 'DELETE' });
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     }
   }
 

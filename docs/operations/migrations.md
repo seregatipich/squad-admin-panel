@@ -85,11 +85,12 @@ Never renumber or edit an applied migration file — not even a comment.
 
 ### Writing a migration
 
-`bash scripts/test-migration-lint.sh` (run in CI) enforces the first two rules:
+`bash scripts/test-migration-lint.sh` (run in CI) enforces the first two rules and the journal check below:
 
 - **No `BEGIN;` / `COMMIT;`.** `drizzle-orm`'s `migrate()` runs every pending migration in one transaction. An explicit `COMMIT` ends it early, and every later migration then runs in autocommit, so a failure half-way leaves a partially applied schema and no journal row. Migrations 0008–0020 predate this rule and are grandfathered.
 - **CHECK constraints on large partitioned tables are added `NOT VALID`** (`events`, `chat_messages`, `combat_events`, `diagnostic_events`, `bonus_transactions`, `player_sessions`), followed by `VALIDATE CONSTRAINT` in its own statement. A plain `ADD CONSTRAINT … CHECK` scans every partition under an ACCESS EXCLUSIVE lock that is held until the migration transaction commits; `VALIDATE` only takes SHARE UPDATE EXCLUSIVE. The same applies to foreign keys on large tables.
 - **Indexes on large partitioned tables** are built per partition: `CREATE INDEX … ON ONLY parent`, one index per partition, then `ALTER INDEX … ATTACH PARTITION`.
+- **The journal and the files agree** (checked for every migration, no grandfathering). Merging two branches that each added a migration collides on the tail of `meta/_journal.json`; keep both sides, give the later migration the next free number, and make its `when` later than the previous entry's. The lint fails on a file with no journal entry, an entry with no file, two files sharing a number, a repeated `tag` or `idx`, and a `when` that is not later than the previous entry's — the last is silent in production, because `drizzle-orm` skips an entry older than the latest one already applied.
 - **Stay compatible with the previous release**, which keeps running against the new schema after a rollback: add first, drop what it still reads only in a later release.
 
 ### Hand-written constraint DDL

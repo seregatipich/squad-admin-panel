@@ -51,4 +51,3 @@ Requires primary GID `panel` (`user: "0:${PANEL_GID:-987}"` in `compose.yml`). `
 - [configuration.md](./configuration.md)
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
-- [changelog.md](./changelog.md)

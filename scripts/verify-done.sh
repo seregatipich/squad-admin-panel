@@ -8,7 +8,9 @@
 # proves the state claims that agents most often get wrong:
 #
 #   1. the working tree is clean (everything committed);
-#   2. you are on `dev` and it matches `origin/dev` (everything pushed);
+#   2. HEAD is the `origin/dev` tip (everything merged and pushed) and sits on
+#      `dev` or on a detached HEAD — the normal state when `dev` is checked
+#      out in another worktree; any other branch fails;
 #   3. the branch model is intact (git-guard doctor reports no problems);
 #   4. the dev stand runs this tip: the `deploy` run for the current dev
 #      tip succeeded (a tip that only changes docs, which the deploy ignores,
@@ -201,15 +203,24 @@ fi
 # --- 2. everything merged and pushed -----------------------------------------
 git fetch --quiet origin || fail "git fetch origin failed"
 
+head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+dev_sha=$(git rev-parse origin/dev 2>/dev/null || echo "")
+
+# Every check below compares against origin/dev, never the local `dev` ref:
+# `dev` is usually checked out in another worktree, which leaves this one on a
+# detached HEAD at the dev tip. That state is the integration state too, so it
+# passes; a detached HEAD anywhere else, or any other branch, does not.
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 if [ "$branch" = "dev" ]; then
   pass "on integration branch dev"
+elif [ "$branch" = "HEAD" ] && [ -n "$head_sha" ] && [ "$head_sha" = "$dev_sha" ]; then
+  pass "detached HEAD at the origin/dev tip (dev is checked out elsewhere)"
+elif [ "$branch" = "HEAD" ]; then
+  fail "detached HEAD at $head_sha, not at the origin/dev tip $dev_sha — finished work must be merged into dev (see CLAUDE.md workflow)"
 else
   fail "on '$branch', not 'dev' — finished work must be merged into dev (see CLAUDE.md workflow)"
 fi
 
-head_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
-dev_sha=$(git rev-parse origin/dev 2>/dev/null || echo "")
 if [ -n "$head_sha" ] && [ "$head_sha" = "$dev_sha" ]; then
   pass "dev is pushed (HEAD == origin/dev == ${dev_sha:0:12})"
 else

@@ -21,6 +21,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 
 const POLL_MS = 30_000;
@@ -77,14 +78,10 @@ export default function TokensPage() {
     listGeneration.current += 1;
     const generation = listGeneration.current;
     try {
-      const [meRes, tokRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me/tokens', { credentials: 'include', cache: 'no-store' }),
+      const [freshMe, freshTokens] = await Promise.all([
+        apiFetch<Me>('/api/v1/me'),
+        apiFetch<ApiToken[]>('/api/v1/me/tokens'),
       ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!tokRes.ok) throw new Error(`HTTP ${tokRes.status}`);
-      const freshMe = (await meRes.json()) as Me;
-      const freshTokens = (await tokRes.json()) as ApiToken[];
       if (generation !== listGeneration.current) return;
       setMe(freshMe);
       setTokens(freshTokens);
@@ -130,22 +127,19 @@ export default function TokensPage() {
     setCreating(true);
     setMsg(null);
     try {
-      const res = await fetch('/api/v1/me/tokens', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          scopes: Array.from(selectedScopes),
-        }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      let created: CreateResponse;
+      try {
+        created = await apiFetch<CreateResponse>('/api/v1/me/tokens', {
+          method: 'POST',
+          json: { name: name.trim(), scopes: Array.from(selectedScopes) },
+        });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        const body = e.jsonBody<{ error?: unknown }>();
         const known = typeof body?.error === 'string' ? CREATE_ERROR_MESSAGES[body.error] : null;
-        setMsg({ kind: 'err', text: known ?? describeHttpStatus(res.status) });
+        setMsg({ kind: 'err', text: known ?? describeHttpStatus(e.status) });
         return;
       }
-      const created = (await res.json()) as CreateResponse;
       listGeneration.current += 1;
       setJustCreated(created);
       setTokens((prev) => [
@@ -172,11 +166,7 @@ export default function TokensPage() {
     setRevokingId(id);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/me/tokens/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/me/tokens/${id}`, { method: 'DELETE' });
       listGeneration.current += 1;
       setTokens((prev) =>
         prev.map((t) => (t.id === id ? { ...t, revoked_at: new Date().toISOString() } : t)),

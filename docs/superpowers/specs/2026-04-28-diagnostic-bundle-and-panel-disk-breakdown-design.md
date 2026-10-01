@@ -2,7 +2,7 @@
 
 Status: **Draft** (brainstormed 2026-04-28)
 Owner: TBD (assign at implementation time)
-Related work: `docs/superpowers/specs/2026-04-25-panel-observability-design.md` (parent observability epic)
+Related work: the parent observability epic (design `2026-04-25-panel-observability-design.md`, shipped; recoverable from repository history)
 
 ## 1. Goal
 
@@ -16,7 +16,7 @@ The deliverable is **two minimally-invasive UI changes** (a topbar diagnostics p
 
 ## 2. Non-goals
 
-- No external observability stack (Loki/Grafana/ELK). That is a separate initiative tracked in `2026-04-25-panel-observability-design.md`.
+- No external observability stack (Loki/Grafana/ELK). That is a separate initiative out of scope here.
 - No Squad-game internals. Squad container and `SquadGame.log` are tapped **only for `Warning|Error|Fatal|LogExit` lines** as supporting context for incidents — never as a content source.
 - No tamper-evident hash chain on diagnostic events. That role is owned by `audit_log` and is unchanged here.
 - No per-server diagnostic bundle. Bundle is global only.
@@ -323,14 +323,12 @@ Track A and Track B are independent. Either can ship first. A1+A2 are mandatory 
 
 Following the documentation hard-gate in `CLAUDE.md`, the following docs MUST be created/updated in the same PR(s):
 
-**New component**: `docs/components/diagnostic-bundle/` (full 8-file template — README, api, data-model, flows, configuration, testing, troubleshooting, changelog).
+**New component**: `docs/components/diagnostic-bundle/` (full 8-file template — README, api, data-model, flows, configuration, testing, troubleshooting).
 
 **Updated**:
 - `docs/components/bridge/api.md` — new RPCs `panel_disk_usage`, `file_read_tail`
-- `docs/components/bridge/changelog.md` — new RPCs entry
 - `docs/components/api/api.md` — new routes `GET /diagnostics/bundle`, `POST /diagnostics/wipe`, `GET /host/disk-usage`
 - `docs/components/api/data-model.md` — `diagnostic_events` table schema
-- `docs/components/api/changelog.md` — entry
 - `docs/components/web/api.md` and `flows.md` — new components `<DiagnosticsMenu>`, `<DiskBreakdownModal>`, disk widget extension
 - `docs/components/workers/worker-diag-flush/` — new worker, full 8-file template
 - `docs/components/workers/worker-event-partition/configuration.md` — additional 24h drop policy for diag partitions

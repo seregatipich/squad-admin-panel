@@ -1,8 +1,9 @@
 /**
  * A positive integer from the environment, or `undefined` when unset/blank.
- * Mirrors `apps/workers/rcon/src/env.ts`'s `positiveIntEnv` — copy-paste
- * between workers is deliberate (see the architecture note in the repo
- * `CLAUDE.md`), not a shared dependency.
+ * Not `@squad/worker-kit`'s `positiveIntEnv(name, fallback)`: that one throws
+ * on a bad value, while this one reports it as `undefined` so
+ * `requiredTickIntervalMs` can word the error for tick intervals. Mirrors
+ * `apps/workers/rcon/src/env.ts`.
  */
 export function positiveIntEnv(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;

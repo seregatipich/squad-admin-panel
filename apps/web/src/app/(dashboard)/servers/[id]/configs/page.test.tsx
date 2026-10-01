@@ -1127,15 +1127,17 @@ describe('ConfigsPage — опрос сервера (#1335)', () => {
     const listBefore = count('/configs');
     const driftBefore = count('/configs/drift');
 
+    // Каждый ответ успевает разобраться между тиками: опрос дрейфа пропускает
+    // тик, пока предыдущий запрос ещё в полёте, а не наслаивает на него новый.
     await act(async () => {
-      vi.advanceTimersByTime(8000 * 3);
+      await vi.advanceTimersByTimeAsync(8000 * 3);
     });
     expect(count('/configs')).toBe(listBefore);
     expect(count('/configs/drift')).toBe(driftBefore + 3);
 
     setVisibility('hidden');
     await act(async () => {
-      vi.advanceTimersByTime(8000 * 3);
+      await vi.advanceTimersByTimeAsync(8000 * 3);
     });
     expect(count('/configs/drift')).toBe(driftBefore + 3);
 

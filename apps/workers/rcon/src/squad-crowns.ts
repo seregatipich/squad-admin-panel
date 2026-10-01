@@ -1,6 +1,6 @@
 /**
- * Creator crowns for the live roster (spec:
- * docs/superpowers/specs/2026-09-27-squad-history-design.md §1 "Crown rule").
+ * Creator crowns for the live roster (see
+ * docs/components/workers/rcon/flows.md).
  *
  * Folds `squad.*` events into one history per squad creator (EOS id) for the
  * current match:

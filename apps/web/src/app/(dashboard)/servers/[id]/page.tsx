@@ -1,5 +1,5 @@
 'use client';
-import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
 import { BroadcastComposer } from '@/components/BroadcastComposer';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
@@ -16,6 +16,7 @@ import {
   type StatusState,
 } from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
@@ -138,14 +139,36 @@ function rconView(status: RconStatus): { state: StatusState; label: string } {
  */
 export default function ServerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [data, setData] = useState<ServerResponse | null>(null);
-  const [canChat, setCanChat] = useState(false);
-  const [canChangeMap, setCanChangeMap] = useState(false);
-  const [canBan, setCanBan] = useState(false);
-  const [canDownloadLogs, setCanDownloadLogs] = useState(false);
-  const [canSyncAdminsCfg, setCanSyncAdminsCfg] = useState(false);
-  const [modPermissions, setModPermissions] = useState<string[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  // Each GET /servers/:id triggers several DB/Redis reads and two privileged
+  // bridge RPCs (containerInspect, docker stats), so a slow response must not
+  // pile up behind the next poll tick or a live rcon.status/server.status
+  // nudge (#633): the hook skips a tick while a request is in flight, and the
+  // nudge below passes `skipIfInFlight`. server.status/rcon.status already
+  // push every change live; the poll is only a backstop, so it pauses while
+  // the tab is hidden instead of hammering the bridge/docker daemon for a
+  // screen no one is watching.
+  const {
+    data = null,
+    errorMessage: err,
+    refresh,
+    setData,
+  } = useApiResource<ServerResponse>(`/api/v1/servers/${id}`, {
+    intervalMs: POLL_INTERVAL_MS,
+    pauseWhenHidden: true,
+  });
+  // Permission fetch is best-effort; chat UI simply stays hidden without it.
+  const { data: me } = useApiResource<{ squad_permissions?: string[]; permissions?: string[] }>(
+    '/api/v1/me',
+  );
+  const canChat = me?.squad_permissions?.includes('chat') ?? false;
+  const canChangeMap = me?.squad_permissions?.includes('changemap') ?? false;
+  const canBan = me?.squad_permissions?.includes('ban') ?? false;
+  const canDownloadLogs = me?.permissions?.includes('server:download_logs') ?? false;
+  const canSyncAdminsCfg = me?.permissions?.includes('admin_group:edit') ?? false;
+  const modPermissions = useMemo(
+    () => (me?.permissions ?? []).filter((key) => key.startsWith('mod:')),
+    [me],
+  );
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLive, setLogsLive] = useState(false);
   const [logsError, setLogsError] = useState<{
@@ -155,71 +178,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectNowRef = useRef<(() => void) | null>(null);
-  // Guards against overlapping requests: each GET /servers/:id triggers
-  // several DB/Redis reads and two privileged bridge RPCs (containerInspect,
-  // docker stats), so a slow response must not pile up behind the next poll
-  // tick or a live rcon.status/server.status nudge (#633).
-  const refreshInFlightRef = useRef(false);
-
-  async function refresh() {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
-    try {
-      const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData((await r.json()) as ServerResponse);
-      setErr(null);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      refreshInFlightRef.current = false;
-    }
-  }
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh closes over `id`
-  useEffect(() => {
-    void refresh();
-    const t = setInterval(() => {
-      // server.status/rcon.status already push every change live; the poll
-      // is only a backstop, so it can skip entirely while the tab is hidden
-      // instead of hammering the bridge/docker daemon for a screen no one is
-      // watching (#633).
-      if (document.hidden) return;
-      void refresh();
-    }, POLL_INTERVAL_MS);
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok || cancelled) return;
-        const me = (await res.json()) as { squad_permissions?: string[]; permissions?: string[] };
-        if (!cancelled) {
-          setCanChat(me.squad_permissions?.includes('chat') ?? false);
-          setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
-          setCanBan(me.squad_permissions?.includes('ban') ?? false);
-          setCanDownloadLogs(me.permissions?.includes('server:download_logs') ?? false);
-          setCanSyncAdminsCfg(me.permissions?.includes('admin_group:edit') ?? false);
-          setModPermissions((me.permissions ?? []).filter((key) => key.startsWith('mod:')));
-        }
-      } catch {
-        // permission fetch is best-effort; chat UI simply stays hidden
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const onLiveStatus = useCallback(
     (event: { data: { server_id: string; status: string } }) => {
@@ -235,13 +193,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   // worker-rcon публикует `rcon.status`, только когда меняется то, что здесь
   // видно (игроки, карта, следующий слой, очередь), — перечитываем карточку
   // сразу, не дожидаясь очередного тика опроса.
-  const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
   const onLiveRcon = useCallback(
     (event: { data: { server_id: string } }) => {
-      if (event.data.server_id === id) void refreshRef.current();
+      if (event.data.server_id === id) void refresh({ skipIfInFlight: true });
     },
-    [id],
+    [id, refresh],
   );
   useLiveSubscription('rcon.status', onLiveRcon);
 

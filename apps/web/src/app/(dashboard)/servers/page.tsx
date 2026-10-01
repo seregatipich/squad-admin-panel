@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
@@ -26,7 +26,9 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { ApiError, apiSend } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { formatSeedProgress, type SeedingSummary } from './seeding-format';
 
 interface Server {
@@ -91,44 +93,16 @@ const ACTION_LABEL = {
 
 export default function ServersPage() {
   const locale = useIntlLocale();
-  const [data, setData] = useState<ServersResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const {
+    data,
+    errorMessage: err,
+    refresh: loadServers,
+    setData,
+  } = useApiResource<ServersResponse>('/api/v1/servers', { intervalMs: POLL_MS });
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [actingId, setActingId] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-
-  /**
-   * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
-   * в замыкании эффекта: тот же запрос запускает и кнопка «Повторить», у
-   * которой отменять нечего.
-   */
-  const loadServers = useCallback(async (isStale: () => boolean = () => false) => {
-    try {
-      const r = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as ServersResponse;
-      if (!isStale()) {
-        setData(j);
-        setErr(null);
-      }
-    } catch (e) {
-      if (!isStale()) setErr((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const isStale = () => cancelled;
-    void loadServers(isStale);
-    const t = setInterval(() => {
-      void loadServers(isStale);
-    }, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [loadServers]);
 
   const onStatus = useCallback((event: { data: { server_id: string; status: string } }) => {
     setData((prev) => {
@@ -237,23 +211,15 @@ export default function ServersPage() {
     setActingId(`${id}:${action}`);
     setActionErr(null);
     try {
-      const r = await fetch(`/api/v1/servers/${id}/${action}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!r.ok) {
-        const body = (await r.json().catch(() => null)) as {
-          message?: string;
-          error?: string;
-        } | null;
-        setActionErr(
-          `Не удалось выполнить «${ACTION_LABEL[action]}»: ${body?.message ?? body?.error ?? `HTTP ${r.status}`}`,
-        );
-      }
+      await apiSend(`/api/v1/servers/${id}/${action}`, { method: 'POST', json: {} });
     } catch (e) {
-      setActionErr(`Не удалось выполнить «${ACTION_LABEL[action]}»: ${(e as Error).message}`);
+      const body =
+        e instanceof ApiError ? e.jsonBody<{ message?: string; error?: string }>() : null;
+      const reason =
+        e instanceof ApiError
+          ? (body?.message ?? body?.error ?? `HTTP ${e.status}`)
+          : (e as Error).message;
+      setActionErr(`Не удалось выполнить «${ACTION_LABEL[action]}»: ${reason}`);
     } finally {
       setActingId(null);
     }

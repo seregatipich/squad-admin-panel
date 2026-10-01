@@ -15,10 +15,9 @@
     "@squad/db": "workspace:*",
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
+    "@squad/worker-kit": "workspace:*",
     "drizzle-orm": "^0.45.0",
-    "ioredis": "^6.0.0",
-    "pino": "^10.3.1",
-    "postgres": "^3.4.5"
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
