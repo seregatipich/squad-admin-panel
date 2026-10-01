@@ -9,6 +9,7 @@
     "build": "node scripts/sync-monaco.mjs && next build",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "fetch-baseline:update": "UPDATE_FETCH_BASELINE=1 vitest run src/raw-fetch-ratchet.test.ts",
     "test:e2e": "playwright test",
     "clean": "rm -rf .next .turbo public/monaco"
   },
