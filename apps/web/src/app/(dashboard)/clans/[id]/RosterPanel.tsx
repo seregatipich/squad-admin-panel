@@ -1,118 +1,34 @@
 'use client';
 
-import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertDialog,
-  Badge,
   Button,
   Card,
   CardHeader,
-  Checkbox,
   EmptyState,
-  IconButton,
   InlineBanner,
-  Modal,
   Pagination,
   SearchField,
-  Select,
   Skeleton,
-  SortableTh,
-  Table,
-  TableBody,
-  TableHead,
-  TableRow,
-  Td,
-  Th,
   Toolbar,
   type ToolbarProps,
-  TrashIcon,
 } from '@/components/ui';
 import { ApiError, ApiResponseError, apiFetch, apiSend } from '@/lib/api';
-
-export interface RosterMember {
-  player_id: string;
-  canonical_name: string;
-  steam_id64: string | null;
-  eos_id: string | null;
-  member_role: string;
-  has_priority: boolean;
-  reserve_from_role: boolean;
-  joined_at: string;
-  last_seen_at: string | null;
-  online_60d_seconds: number;
-}
-
-interface RosterResponse {
-  clan_id: string;
-  items: RosterMember[];
-  total: number;
-  page: number;
-  limit: number;
-  priority_count: number;
-  max_priority_slots: number;
-  /**
-   * The viewer's own manage level, computed server-side by the same
-   * `clanManageLevel` gate the mutating routes use. Never derive this from
-   * searching `items` for the viewer's own row — that row can be (and, once
-   * searched, sorted, or paginated, routinely is) absent from this page even
-   * though the server still grants the viewer full manage rights (#509).
-   */
-  viewer_manage_level: 'full' | 'deputy' | null;
-}
-
-interface PriorityErrorBody {
-  error?: string;
-  limit?: number;
-  used?: number;
-}
-
-/**
- * Maps a `PUT .../priority` error body to a Russian message for the error
- * banner. `priority_pool_limit` includes the pool usage when the API
- * returns it; other codes fall back to a fixed message.
- */
-export function priorityErrorMessage(body: PriorityErrorBody): string {
-  switch (body.error) {
-    case 'priority_pool_limit':
-      return typeof body.used === 'number' && typeof body.limit === 'number'
-        ? `Лимит пула приоритетов исчерпан (${body.used} из ${body.limit})`
-        : 'Лимит пула приоритетов исчерпан';
-    case 'priority_expired':
-      return 'Срок приоритета клана истёк';
-    case 'priority_source_conflict':
-      return 'Приоритет уже предоставлен через роль игрока';
-    default:
-      return `Действие не выполнено: ${body.error ?? 'unknown'}`;
-  }
-}
-
-interface MeResponse {
-  player_id: string;
-  can_manage_clans: boolean;
-}
-
-interface SearchCandidate {
-  id: string;
-  steam_id64: string | null;
-  canonical_name: string;
-  eos_id: string | null;
-  clan_id: string | null;
-  clan_name: string | null;
-}
-
-export const ROLE_LABELS: Record<string, string> = {
-  leader: 'Глава',
-  deputy: 'Зам',
-  member: 'Участник',
-};
-
-const PAGE_LIMIT = 25;
-const SEARCH_MIN_CHARS = 3;
-const PRIORITY_LOCK_MS = 3000;
-
-/** Подписи направления сортировки — часть доступного имени заголовка колонки. */
-const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по убыванию' } as const;
+import { AddMemberModal } from './AddMemberModal';
+import { RosterTable } from './RosterTable';
+import {
+  deriveCapabilities,
+  type MeResponse,
+  PAGE_LIMIT,
+  PRIORITY_LOCK_MS,
+  type PriorityErrorBody,
+  priorityErrorMessage,
+  type RosterMember,
+  type RosterResponse,
+  type SortField,
+  transferLeadershipMessage,
+} from './roster-model';
 
 /*
  * Ссылка на выгрузку остаётся обычным `<a>`, а не `ButtonLink`: `next/link`
@@ -121,76 +37,6 @@ const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по у
  */
 const DOWNLOAD_LINK_CLASS =
   'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
-
-export type SortField = 'name' | 'role' | 'priority' | 'joined_at' | 'last_seen' | 'online';
-
-/**
- * Confirmation text for the "transfer leadership" dialog. The server always
- * demotes the clan's *current* leader to deputy, never the viewer — an admin
- * with `can_manage_clans` who is not themself the leader must not be told
- * that they personally will be demoted.
- */
-export function transferLeadershipMessage(isViewerLeader: boolean, targetName: string): string {
-  return isViewerLeader
-    ? `${targetName} станет главой клана, а вы — заместителем.`
-    : `${targetName} станет главой клана. Текущий глава станет заместителем.`;
-}
-
-export function memberRoleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? role;
-}
-
-export function formatOnlineDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
-  const hours = Math.floor(seconds / 3600);
-  if (hours >= 1) return `${hours} ч`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes} мин`;
-}
-
-/** Формат даты в колонках «Вступил» и «Был(а)»: один и тот же для обеих. */
-export function formatMemberDate(iso: string | null): string {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-export interface Capabilities {
-  canAdd: boolean;
-  canRemoveMembers: boolean;
-  canManageFull: boolean;
-  canTogglePriority: boolean;
-  /** True when the viewer is themself the clan's current leader (a roster row), not merely an admin with `can_manage_clans`. */
-  isLeader: boolean;
-}
-
-export function deriveCapabilities(
-  me: MeResponse | null,
-  viewerManageLevel: 'full' | 'deputy' | null,
-): Capabilities {
-  const canManageFull = Boolean(me?.can_manage_clans) || viewerManageLevel === 'full';
-  const isDeputy = viewerManageLevel === 'deputy';
-  // 'full' also covers a global clan manager; the leader is the viewer whose
-  // full control comes from the clan itself.
-  const isLeader = viewerManageLevel === 'full' && !me?.can_manage_clans;
-  return {
-    canManageFull,
-    canAdd: canManageFull || isDeputy,
-    canRemoveMembers: canManageFull || isDeputy,
-    // Mirrors the API gate on PUT .../priority (clanManageLevel !== null):
-    // full managers and deputies may toggle, rank-and-file members may not;
-    // a deputy only for rank-and-file members (see RosterRow).
-    canTogglePriority: canManageFull || isDeputy,
-    isLeader,
-  };
-}
 
 /**
  * Ростер клана: состав, роли, слоты приоритета и действия над участниками.
@@ -536,77 +382,19 @@ export default function RosterPanel({
             action={searching ? <Button onClick={() => setQ('')}>Сбросить фильтр</Button> : null}
           />
         ) : (
-          <Table ariaLabel="Участники клана">
-            <TableHead>
-              <TableRow>
-                <SortableTh
-                  sortKey="name"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Участник"
-                  directionText={SORT_DIRECTION_TEXT}
-                />
-                <SortableTh
-                  sortKey="role"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Роль"
-                  directionText={SORT_DIRECTION_TEXT}
-                />
-                <SortableTh
-                  sortKey="priority"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Приоритет"
-                  directionText={SORT_DIRECTION_TEXT}
-                />
-                <SortableTh
-                  sortKey="joined_at"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Вступил"
-                  directionText={SORT_DIRECTION_TEXT}
-                />
-                <SortableTh
-                  sortKey="last_seen"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Был(а)"
-                  directionText={SORT_DIRECTION_TEXT}
-                />
-                <SortableTh
-                  sortKey="online"
-                  activeKey={sort}
-                  direction={order}
-                  onSort={changeSort}
-                  label="Наиграно (60 дн.)"
-                  directionText={SORT_DIRECTION_TEXT}
-                  align="right"
-                />
-                <Th align="right">Действия</Th>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {members.map((member) => (
-                <RosterRow
-                  key={member.player_id}
-                  member={member}
-                  caps={caps}
-                  busy={busyPlayerIds.has(member.player_id)}
-                  locked={lockedPlayerIds.has(member.player_id)}
-                  onChangeRole={changeRole}
-                  onRemove={setPendingRemove}
-                  onTransfer={setPendingTransfer}
-                  onTogglePriority={togglePriority}
-                />
-              ))}
-            </TableBody>
-          </Table>
+          <RosterTable
+            members={members}
+            caps={caps}
+            sort={sort}
+            order={order}
+            onSort={changeSort}
+            busyPlayerIds={busyPlayerIds}
+            lockedPlayerIds={lockedPlayerIds}
+            onChangeRole={changeRole}
+            onRemove={setPendingRemove}
+            onTransfer={setPendingTransfer}
+            onTogglePriority={togglePriority}
+          />
         )}
 
         {pageCount > 1 ? (
@@ -664,239 +452,5 @@ export default function RosterPanel({
         onConfirm={() => void confirmTransfer()}
       />
     </section>
-  );
-}
-
-export function RosterRow({
-  member,
-  caps,
-  busy,
-  locked = false,
-  onChangeRole,
-  onRemove,
-  onTransfer,
-  onTogglePriority,
-}: {
-  member: RosterMember;
-  caps: Capabilities;
-  busy: boolean;
-  /** True for `PRIORITY_LOCK_MS` after a successful toggle, to stop a rapid re-click racing the server's pool-limit check. */
-  locked?: boolean;
-  onChangeRole: (playerId: string, role: string) => void;
-  onRemove: (member: RosterMember) => void;
-  onTransfer: (member: RosterMember) => void;
-  onTogglePriority: (member: RosterMember, enabled: boolean) => void;
-}) {
-  const isLeader = member.member_role === 'leader';
-  const canEditThisRole = caps.canManageFull && !isLeader;
-  const canRemoveThis =
-    !isLeader && (caps.canManageFull || (caps.canRemoveMembers && member.member_role === 'member'));
-  // A deputy toggles priority for rank-and-file members only, as the API enforces.
-  const canTogglePriorityThis =
-    caps.canManageFull || (caps.canTogglePriority && member.member_role === 'member');
-
-  return (
-    <TableRow interactive>
-      <Td>
-        <Link
-          href={`/all-players/${member.player_id}`}
-          className="text-accent no-underline hover:brightness-110"
-        >
-          {member.canonical_name}
-        </Link>
-      </Td>
-      <Td>
-        {canEditThisRole ? (
-          <Select
-            size="sm"
-            aria-label={`Роль участника ${member.canonical_name}`}
-            value={member.member_role}
-            disabled={busy}
-            onChange={(e) => onChangeRole(member.player_id, e.target.value)}
-          >
-            <option value="deputy">Зам</option>
-            <option value="member">Участник</option>
-          </Select>
-        ) : isLeader ? (
-          <Badge tone="warn">{memberRoleLabel(member.member_role)}</Badge>
-        ) : (
-          <span className="text-ink-2">{memberRoleLabel(member.member_role)}</span>
-        )}
-      </Td>
-      <Td>
-        {member.reserve_from_role ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-ink-3"
-            title="Приоритет из другого источника"
-          >
-            <input type="checkbox" checked disabled readOnly className="size-3.5 accent-ink-3" />
-            <span className="text-xs">роль</span>
-          </span>
-        ) : canTogglePriorityThis ? (
-          // Подпись скрыта визуально: колонка уже названа заголовком, но без
-          // доступного имени флажок нем для скринридера.
-          <Checkbox
-            label={<span className="sr-only">Приоритет в очереди</span>}
-            checked={member.has_priority}
-            disabled={busy || locked}
-            onChange={(e) => onTogglePriority(member, e.target.checked)}
-            title={locked ? 'Подождите несколько секунд перед следующим изменением' : undefined}
-          />
-        ) : (
-          <span className="text-ink-2">{member.has_priority ? 'да' : '—'}</span>
-        )}
-      </Td>
-      <Td className="whitespace-nowrap text-ink-2">{formatMemberDate(member.joined_at)}</Td>
-      <Td className="whitespace-nowrap text-ink-2">{formatMemberDate(member.last_seen_at)}</Td>
-      <Td numeric className="text-ink-2">
-        {formatOnlineDuration(member.online_60d_seconds)}
-      </Td>
-      <Td align="right">
-        <div className="flex items-center justify-end gap-2">
-          {caps.canManageFull && !isLeader ? (
-            <Button size="sm" disabled={busy} onClick={() => onTransfer(member)}>
-              Передать лидерство
-            </Button>
-          ) : null}
-          {canRemoveThis ? (
-            <IconButton
-              size="sm"
-              tone="destructive"
-              icon={<TrashIcon />}
-              label={`Удалить ${member.canonical_name} из клана`}
-              disabled={busy}
-              onClick={() => onRemove(member)}
-            />
-          ) : null}
-        </div>
-      </Td>
-    </TableRow>
-  );
-}
-
-function AddMemberModal({
-  open,
-  onClose,
-  onAdd,
-  allowDeputy,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onAdd: (playerId: string, role: string) => void;
-  allowDeputy: boolean;
-}) {
-  const [term, setTerm] = useState('');
-  const [results, setResults] = useState<SearchCandidate[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [role, setRole] = useState('member');
-  const addRoleId = useId();
-
-  // SearchField already debounces onCommit (see its own `delay` prop); a
-  // second timer here only doubled the wait before a request and added a
-  // second place for a stale response to race a newer one. The effect runs
-  // straight off the committed `term`, with a `cancelled` guard so an older
-  // request never overwrites a newer one's results.
-  useEffect(() => {
-    const trimmed = term.trim();
-    if (trimmed.length < SEARCH_MIN_CHARS) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-    let cancelled = false;
-    setSearching(true);
-    void (async () => {
-      try {
-        const body = await apiFetch<{ items: SearchCandidate[] }>(
-          `/api/v1/players/search?q=${encodeURIComponent(trimmed)}`,
-        );
-        if (!cancelled) setResults(body.items);
-      } catch {
-        /* ignore */
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [term]);
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Добавить участника"
-      closeLabel="Закрыть"
-      footer={
-        <Button variant="secondary" onClick={onClose}>
-          Отмена
-        </Button>
-      }
-    >
-      <div className="space-y-3">
-        <SearchField
-          value={term}
-          onCommit={setTerm}
-          label="Поиск игрока"
-          placeholder="Ник, SteamID64 или EOS ID (мин. 3 символа)"
-          clearLabel="Очистить поиск"
-        />
-
-        <div className="flex items-center gap-2 text-xs text-ink-2">
-          <label htmlFor={addRoleId}>Роль при добавлении</label>
-          <Select
-            id={addRoleId}
-            size="sm"
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            className="w-auto"
-          >
-            <option value="member">Участник</option>
-            {allowDeputy ? <option value="deputy">Зам</option> : null}
-          </Select>
-        </div>
-
-        <div className="max-h-72 space-y-1 overflow-y-auto">
-          {searching ? <Skeleton variant="block" count={2} label="Ищем игроков" /> : null}
-          {!searching && term.trim().length >= SEARCH_MIN_CHARS && results.length === 0 ? (
-            <EmptyState
-              variant="filtered"
-              title="Ничего не нашлось"
-              description="Ни один игрок не подходит под запрос."
-            />
-          ) : null}
-          {results.map((candidate) => {
-            const alreadyInClan = candidate.clan_id !== null;
-            return (
-              <div
-                key={candidate.id}
-                className="flex items-center justify-between gap-2 rounded-ctl border border-line bg-raised px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] text-ink">{candidate.canonical_name}</div>
-                  <div className="truncate text-xs text-ink-3">
-                    {candidate.steam_id64 ?? candidate.eos_id ?? '—'}
-                    {alreadyInClan ? (
-                      <span className="ml-2 text-warn">
-                        уже в клане{candidate.clan_name ? ` «${candidate.clan_name}»` : ''}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={alreadyInClan}
-                  onClick={() => onAdd(candidate.id, role)}
-                >
-                  Добавить
-                </Button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </Modal>
   );
 }
