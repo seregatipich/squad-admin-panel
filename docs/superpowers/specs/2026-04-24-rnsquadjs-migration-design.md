@@ -217,7 +217,7 @@ Phases 0–2 are reversible with a single revert. Phase 3 onwards requires rolli
 
 ## 12. Execution deviations (2026-06-12)
 
-Recorded during the integration-completion pass (see `docs/superpowers/plans/2026-06-12-rnsquadjs-integration-completion.md` for full rationale):
+Recorded during the integration-completion pass (the implementation plan is in the repository history):
 
 - **D1 — config.json is a bind-mounted file, not HTTP.** The loopback-guarded `/internal/rnsquadjs/config/:id` endpoint is unreachable from a host-network sidecar, and `curl -o` cannot write to a `--read-only` rootfs. The API renders `/run/squad-panel/rnsquadjs/{id}/config.json` (atomic tmp+rename, chown 1001, 0600); the bridge bind-mounts it read-only at `/app/config.json`.
 - **D2 — per-server socket subdirectory.** `{root}/{id}/sock/` is the only sidecar-writable level (mounted at `/run/panelBridge`); the shared-root single-socket layout in §3.2 would collide across sidecars and let the sidecar rewrite its own config through the rw parent.
