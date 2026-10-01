@@ -7,7 +7,7 @@
  */
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
@@ -224,18 +224,28 @@ describe('/api/v1/servers/:id/logs/ws stream cap (#1298)', () => {
     expect(code).toBe(1013);
     expect(frames).toContainEqual({ error: 'too_many_streams' });
 
-    // Closing one stream frees its slot.
+    // Closing one stream frees its slot. The server releases it in its own
+    // close handler, so retry until a new socket is admitted. A refusal is sent
+    // as soon as the socket opens, i.e. before the pong to a ping sent right
+    // after open: once the pong is in, a missing error frame means admitted.
     const first = open.shift() as WebSocket;
     first.close();
     await new Promise<void>((resolve) => first.on('close', () => resolve()));
-    await new Promise((r) => setTimeout(r, 50));
-    const again = new WebSocket(url);
-    const againFrames: Array<Record<string, unknown>> = [];
-    again.on('message', (raw) => againFrames.push(JSON.parse(raw.toString())));
-    await new Promise<void>((resolve) => again.on('open', () => resolve()));
-    await new Promise((r) => setTimeout(r, 100));
+    const again = await vi.waitFor(async () => {
+      const candidate = new WebSocket(url);
+      const candidateFrames: Array<Record<string, unknown>> = [];
+      candidate.on('message', (raw) => candidateFrames.push(JSON.parse(raw.toString())));
+      await new Promise<void>((resolve) => candidate.on('open', () => resolve()));
+      await new Promise<void>((resolve) => {
+        candidate.on('pong', () => resolve());
+        candidate.ping();
+      });
+      if (candidateFrames.some((f) => f.error === 'too_many_streams')) {
+        throw new Error('slot not released yet');
+      }
+      return candidate;
+    });
     expect(again.readyState).toBe(WebSocket.OPEN);
-    expect(againFrames).not.toContainEqual({ error: 'too_many_streams' });
     open.push(again);
 
     for (const ws of open) ws.close();

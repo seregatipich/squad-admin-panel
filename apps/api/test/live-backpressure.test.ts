@@ -81,7 +81,7 @@ describe('/api/v1/ws/live backpressure', () => {
 
     for (let index = 0; index < 20; index++) {
       app.liveBus.publish(chat(10_000 + index, 1024));
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setImmediate(resolve));
     }
     await expect.poll(() => received.filter((id) => id.startsWith('bp-100')).length).toBe(20);
     expect(ws.readyState).toBe(WebSocket.OPEN);

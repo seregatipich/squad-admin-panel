@@ -17,6 +17,7 @@ import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import type { LiveEvent } from '../../src/plugins/live-bus.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
+import { wsRoundTrip } from '../helpers/ws-round-trip.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const OWNER_STEAM_ID = testSteamId(143000);
@@ -208,7 +209,7 @@ describe('SEED-4 seed-call notifications', () => {
         server_name: 'Seed Notification Server',
         join_link: 'steam://connect/test-host:7787',
       });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await wsRoundTrip(actorSocket.socket);
       expect(actorSocket.received).toHaveLength(0);
 
       const storedEvents = await h.db
@@ -260,7 +261,7 @@ describe('SEED-4 seed-call notifications', () => {
       });
       expect(callAfterUnsubscribe.statusCode).toBe(200);
       expect(callAfterUnsubscribe.json().notified).toBe(0);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await wsRoundTrip(subscriberSocket.socket);
       expect(subscriberSocket.received).toHaveLength(1);
 
       const subscriptions = await h.app.inject({

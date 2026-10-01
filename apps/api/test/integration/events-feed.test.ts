@@ -114,9 +114,15 @@ describe('events feed (NOTIFY → live-bus → WebSocket)', () => {
     await insertEvent(null, 'bansync.completed');
 
     await waitFor(() => appended(frames).length >= 3);
-    await new Promise((r) => setTimeout(r, 150));
-    const byServer = new Map(appended(frames).map((f) => [f.data.server_id, f.data.kinds]));
-    expect(appended(frames)).toHaveLength(3);
+    // A burst that failed to coalesce would leave more frames for a, b or the
+    // global feed. They flush in order with the next event's frame, so wait
+    // for a sentinel server's frame instead of sleeping.
+    const sentinel = await makeServer();
+    await insertEvent(sentinel, 'match.started');
+    await waitFor(() => appended(frames).some((f) => f.data.server_id === sentinel));
+    const burst = appended(frames).filter((f) => f.data.server_id !== sentinel);
+    const byServer = new Map(burst.map((f) => [f.data.server_id, f.data.kinds]));
+    expect(burst).toHaveLength(3);
     expect(byServer.get(a)).toEqual(['combat_damage', 'combat_death']);
     expect(byServer.get(b)).toEqual(['match.started']);
     expect(byServer.get(null)).toEqual(['bansync.completed']);

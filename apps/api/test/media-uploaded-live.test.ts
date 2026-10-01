@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
@@ -20,6 +20,23 @@ async function connectAs(playerId: string): Promise<{ frames: LiveEvent[]; close
   ws.on('message', (raw) => frames.push(JSON.parse(raw.toString()) as LiveEvent));
   await new Promise<void>((resolve) => ws.on('open', () => resolve()));
   return { frames, close: () => ws.close() };
+}
+
+/**
+ * Publishes a broadcast `server.status` sentinel and waits until every given
+ * frame list holds it. A socket receives frames in publish order, so anything
+ * published earlier has been delivered or filtered out by then.
+ */
+async function flushLiveBus(...frameLists: LiveEvent[][]): Promise<void> {
+  const ts = `flush-${Date.now()}`;
+  app.liveBus.publish({
+    type: 'server.status',
+    ts,
+    data: { server_id: 'flush', status: 'running', source: 'reconciler' },
+  });
+  await vi.waitFor(() => {
+    for (const frames of frameLists) expect(frames.some((f) => f.ts === ts)).toBe(true);
+  });
 }
 
 beforeAll(async () => {
@@ -71,7 +88,7 @@ describe('media.uploaded live delivery', () => {
     };
     app.liveBus.publish(event);
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await flushLiveBus(minter.frames, other.frames);
 
     expect(minter.frames.filter((f) => f.type === 'media.uploaded')).toEqual([event]);
     expect(other.frames.filter((f) => f.type === 'media.uploaded')).toEqual([]);
@@ -98,7 +115,7 @@ describe('media.uploaded live delivery', () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await flushLiveBus(frames);
     expect(frames.filter((f) => f.type === 'media.uploaded')).toEqual([]);
     ws.close();
   });

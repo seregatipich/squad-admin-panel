@@ -2,10 +2,10 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-
 import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import liveRoutes from '../src/routes/live.js';
+import { wsRoundTrip } from './helpers/ws-round-trip.js';
 
 let app: FastifyInstance;
 let port: number;
@@ -95,10 +95,6 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-async function settle(ms = 200): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
-}
-
 /** Connects a socket and records the type of every frame it receives. */
 async function connectRecordingTypes(
   combatView: boolean,
@@ -155,7 +151,7 @@ describe('/api/v1/ws/live combat replay buffer', () => {
 
     const { ws, received } = await connect(false);
     app.liveBus.publish(combat('2026-07-09T11:03:01.000Z'));
-    await settle();
+    await wsRoundTrip(ws);
     expect(received).toHaveLength(0);
     await close(ws);
   });
@@ -163,7 +159,7 @@ describe('/api/v1/ws/live combat replay buffer', () => {
   it('does not deliver combat.event to a connection with no authenticated user', async () => {
     const { ws, received } = await connect();
     app.liveBus.publish(combat('2026-07-09T11:04:00.000Z'));
-    await settle();
+    await wsRoundTrip(ws);
     expect(received).toHaveLength(0);
     await close(ws);
   });
@@ -197,7 +193,7 @@ describe('/api/v1/ws/live combat replay buffer', () => {
 
     app.liveBus.publish(vehicle);
     await waitFor(() => allowed.types.includes('combat.vehicle'));
-    await settle();
+    await wsRoundTrip(denied.ws);
 
     expect(denied.types).not.toContain('combat.vehicle');
     await close(denied.ws);

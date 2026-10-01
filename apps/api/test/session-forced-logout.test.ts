@@ -16,7 +16,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import Redis from 'ioredis';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { mintApiToken } from '../src/lib/api-tokens.js';
 import diagPlugin from '../src/lib/diag.js';
@@ -499,9 +499,13 @@ describe('server-side close of live sockets on revocation (#12)', () => {
       });
       const sock = await connectIgnoringRevocation(h.port, { bearer: minted.plaintext });
       await subscribeTo(sock, ['combat.event']);
+      const selectSpy = vi.spyOn(h.db, 'select');
       // Several revalidation ticks: each reloads the owner's role, which does
       // hold combat_view and can_assign_roles — the token delegates neither.
-      await new Promise((r) => setTimeout(r, 500));
+      // Every tick queries the database and a tick only starts once the
+      // previous one finished, so repeated queries mean completed ticks.
+      await vi.waitFor(() => expect(selectSpy.mock.calls.length).toBeGreaterThanOrEqual(6), 5_000);
+      selectSpy.mockRestore();
 
       h.app.liveBus.publish(combatEvent());
       h.app.liveBus.publish({
@@ -533,17 +537,20 @@ describe('server-side close of live sockets on revocation (#12)', () => {
 
       await h.db.update(roles).set({ combatView: false }).where(eq(roles.id, combatRoleId));
       invalidatePermissionCache(player.playerId);
-      // Several revalidation ticks elapse before the next publish.
-      await new Promise((r) => setTimeout(r, 500));
-
-      h.app.liveBus.publish(combatEvent());
-      h.app.liveBus.publish(deliveryMarker('ws-revocation-marker'));
-      await waitFor(() =>
-        sock.frames.some(
-          (f) => f.type === 'rcon.status' && f.data.server_id === 'ws-revocation-marker',
-        ),
-      );
-      expect(combatFrames()).toBe(1);
+      // Publish until a revalidation tick has applied the downgrade. Each
+      // round ends on a broadcast marker, so a missing combat frame means the
+      // event was filtered out, not that it is still in flight.
+      let round = 0;
+      await vi.waitFor(async () => {
+        const before = combatFrames();
+        const marker = `ws-revocation-marker-${round++}`;
+        h.app.liveBus.publish(combatEvent());
+        h.app.liveBus.publish(deliveryMarker(marker));
+        await waitFor(() =>
+          sock.frames.some((f) => f.type === 'rcon.status' && f.data.server_id === marker),
+        );
+        expect(combatFrames()).toBe(before);
+      }, 5_000);
       expect(sock.closeCode()).toBeNull();
       await closeWs(sock.ws);
     });

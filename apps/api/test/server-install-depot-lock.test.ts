@@ -99,8 +99,8 @@ describe('POST /api/v1/servers/:id/install during a depot update', () => {
 
     expect(resp.statusCode).toBe(409);
     expect(resp.json().error).toBe('depot_update_in_progress');
-    // Give a wrongly spawned background install time to reach containerRun.
-    await new Promise((r) => setTimeout(r, 200));
+    // An install claims the server ('installing') before the route replies, so
+    // an unchanged status below proves no background install was spawned.
     expect(containerRuns).toEqual([]);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, id) });
     expect(row?.status).toBe(statusBefore);

@@ -17,6 +17,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { decryptString, deserialize } from '../../src/lib/crypto.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForBlockedBackendOn } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -341,19 +342,26 @@ describe('concurrent writes of one file are serialized (#282)', () => {
     const gateA = new Promise<void>((resolve) => {
       releaseA = resolve;
     });
+    let aAtGate: () => void = () => undefined;
+    const aReachedGate = new Promise<void>((resolve) => {
+      aAtGate = resolve;
+    });
     h.bridge.fileAtomicWrite = vi.fn(async (params) => {
       const result = await original(params);
-      // Hold A between its disk write and its history insert until B is done
-      // (or 500 ms pass, when a lock keeps B from starting at all).
+      // Hold A between its disk write and its history insert until B is done,
+      // or until B is parked on the per-file advisory lock A holds.
       if (params.path === path && params.content === 'A\n') {
-        await Promise.race([gateA, new Promise((r) => setTimeout(r, 500))]);
+        aAtGate();
+        await gateA;
       }
       return result;
     });
 
     const a = put(id, 'MOTD.cfg', { content: 'A\n' });
-    await new Promise((r) => setTimeout(r, 50));
-    const b = put(id, 'MOTD.cfg', { content: 'B\n' }).finally(() => releaseA());
+    await aReachedGate;
+    const b = put(id, 'MOTD.cfg', { content: 'B\n' });
+    await Promise.race([waitForBlockedBackendOn(h.url, 5_000), b]);
+    releaseA();
     const [resA, resB] = await Promise.all([a, b]);
 
     expect(resA.statusCode, resA.body).toBe(200);

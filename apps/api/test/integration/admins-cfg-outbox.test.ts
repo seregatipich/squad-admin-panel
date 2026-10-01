@@ -265,11 +265,14 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
     if (!failingServer || !healthyServer) throw new Error('expected two active servers');
     const [failingRow] = await h.db
       .insert(adminsCfgSyncOutbox)
-      .values({ serverId: failingServer, payload: makeEvent('poisoned-stream') })
+      .values({
+        serverId: failingServer,
+        payload: makeEvent('poisoned-stream'),
+        createdAt: new Date(Date.now() - 1_000),
+      })
       .returning({ id: adminsCfgSyncOutbox.id });
     const failingId = failingRow?.id;
     if (!failingId) throw new Error('outbox insert returned no row');
-    await new Promise((resolve) => setTimeout(resolve, 5));
     const [healthyRow] = await h.db
       .insert(adminsCfgSyncOutbox)
       .values({ serverId: healthyServer, payload: makeEvent('healthy-stream') })

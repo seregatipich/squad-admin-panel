@@ -9,13 +9,20 @@ type Transaction = Parameters<Parameters<DatabaseClient['transaction']>[0]>[0];
 const BLOCKED_POLL_INTERVAL_MS = 20;
 
 /**
- * Polls `pg_stat_activity` until some backend of the current database waits on a lock
- * another session holds — i.e. the request under test reached a statement
- * that conflicts with the transaction the test keeps open.
+ * Polls `pg_stat_activity` until `minBlocked` backends of the current database
+ * wait on a lock another session holds — i.e. the requests under test reached
+ * statements that conflict with the transaction the test keeps open.
  *
- * @throws Error when nothing blocks within `timeoutMs`.
+ * @param db - Connection used for the polling query (not one the requests use).
+ * @param timeoutMs - How long to wait for the backends to block.
+ * @param minBlocked - How many waiting backends to wait for; defaults to 1.
+ * @throws Error when fewer than `minBlocked` backends block within `timeoutMs`.
  */
-export async function waitForBlockedBackend(db: DatabaseClient, timeoutMs = 3000): Promise<void> {
+export async function waitForBlockedBackend(
+  db: DatabaseClient,
+  timeoutMs = 3000,
+  minBlocked = 1,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const rows = await db.execute<{ c: number }>(sql`
@@ -23,10 +30,32 @@ export async function waitForBlockedBackend(db: DatabaseClient, timeoutMs = 3000
       FROM pg_stat_activity
       WHERE wait_event_type = 'Lock' AND datname = current_database()
     `);
-    if ((rows[0]?.c ?? 0) > 0) return;
+    if ((rows[0]?.c ?? 0) >= minBlocked) return;
     await new Promise((resolve) => setTimeout(resolve, BLOCKED_POLL_INTERVAL_MS));
   }
   throw new Error('no backend became blocked on a lock');
+}
+
+/**
+ * {@link waitForBlockedBackend} over its own short-lived connection to
+ * `databaseUrl`, for tests whose harness pool has no free connection left to
+ * poll with while the app and the open transaction hold theirs.
+ */
+export async function waitForBlockedBackendOn(
+  databaseUrl: string,
+  timeoutMs = 3000,
+  minBlocked = 1,
+): Promise<void> {
+  const client = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
+  try {
+    await waitForBlockedBackend(
+      drizzle(client, { schema }) as unknown as DatabaseClient,
+      timeoutMs,
+      minBlocked,
+    );
+  } finally {
+    await client.end();
+  }
 }
 
 /**
@@ -39,17 +68,20 @@ export async function waitForBlockedBackend(db: DatabaseClient, timeoutMs = 3000
  * `databaseUrl`, the harness `url`), because the harness pool that serves the
  * app holds only two.
  *
+ * @param minBlocked - How many backends must be waiting on the transaction's
+ *   locks before it commits; raise it when `request` fires several statements.
  * @returns Whatever `request` resolves to.
  */
 export async function raceAgainstOpenTransaction<T>(
   databaseUrl: string,
   mutate: (tx: Transaction) => Promise<void>,
   request: () => Promise<T>,
+  minBlocked = 1,
 ): Promise<T> {
   const client = postgres(databaseUrl, { max: 2, onnotice: () => undefined });
   const db = drizzle(client, { schema }) as unknown as DatabaseClient;
   try {
-    return await raceWith(db, mutate, request);
+    return await raceWith(db, mutate, request, minBlocked);
   } finally {
     await client.end();
   }
@@ -59,6 +91,7 @@ async function raceWith<T>(
   db: DatabaseClient,
   mutate: (tx: Transaction) => Promise<void>,
   request: () => Promise<T>,
+  minBlocked: number,
 ): Promise<T> {
   let release: () => void = () => {};
   const released = new Promise<void>((resolve) => {
@@ -78,7 +111,7 @@ async function raceWith<T>(
   const pending = request();
   let blockError: unknown = null;
   try {
-    await waitForBlockedBackend(db);
+    await waitForBlockedBackend(db, 3000, minBlocked);
   } catch (err) {
     blockError = err;
   }

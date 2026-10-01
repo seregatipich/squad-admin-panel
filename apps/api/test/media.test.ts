@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { mediaFiles, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { insertUploadedMedia } from '../src/lib/media-files.js';
 import { storeMediaUpload } from '../src/lib/media-storage.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -561,14 +561,17 @@ describe('media bytes on disk (#70)', () => {
     const id = randomUUID();
     async function* brokenSource(): AsyncGenerator<Buffer> {
       yield pngBytes(64);
-      // Let the first chunk reach the disk before the client "disconnects".
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Let the partial file appear on disk before the client "disconnects".
+      await vi.waitFor(() =>
+        expect(
+          readdirSync(h.mediaDir, { recursive: true }).some((f) => String(f).includes(id)),
+        ).toBe(true),
+      );
       throw new Error('client disconnected');
     }
     await expect(
       storeMediaUpload({ baseDir: h.mediaDir, id, mimeType: 'image/png', source: brokenSource() }),
     ).rejects.toThrow('client disconnected');
-    await new Promise((resolve) => setTimeout(resolve, 50));
     const leftovers = readdirSync(h.mediaDir, { recursive: true }).filter((f) =>
       String(f).includes(id),
     );

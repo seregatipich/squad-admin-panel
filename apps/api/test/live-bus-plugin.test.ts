@@ -50,8 +50,14 @@ describe('live-bus plugin robustness (#1301)', () => {
     const valid = marker('after-garbage');
     await publisher.publish('live-bus', JSON.stringify(valid));
 
-    await waitFor(() => received.length > 0);
-    await new Promise((r) => setTimeout(r, 50));
+    // The valid frame was published last and Redis keeps order, so every
+    // garbage frame before it has been handled once it arrives.
+    await waitFor(() =>
+      received.some(
+        (event) =>
+          'data' in event && 'server_id' in event.data && event.data.server_id === 'after-garbage',
+      ),
+    );
     expect(received).toEqual([valid]);
   });
 
