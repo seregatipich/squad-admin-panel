@@ -85,4 +85,3 @@ redis-cli xinfo groups diag:queue
 - [configuration.md](./configuration.md)
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
-- [changelog.md](./changelog.md)

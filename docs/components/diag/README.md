@@ -67,7 +67,6 @@ await diag.emit({
 - [`configuration.md`](configuration.md) — env vars and constants
 - [`testing.md`](testing.md) — vitest layout
 - [`troubleshooting.md`](troubleshooting.md) — what to check when events are missing
-- [`changelog.md`](changelog.md) — meaningful changes
 
 ## Cross-references
 

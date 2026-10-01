@@ -74,4 +74,3 @@ for await (const chunk of stream) {
 - [Flows](flows.md) — install/run/stop sequences, `depot_update` lifecycle.
 - [Testing](testing.md) — Go unit tests, `verify-bridge.sh` smoke, e2e.
 - [Troubleshooting](troubleshooting.md) — "bridge: disconnected" banner, peer-credentials failures.
-- [Changelog](changelog.md) — recent surface changes.

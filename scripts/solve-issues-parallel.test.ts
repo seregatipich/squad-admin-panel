@@ -154,6 +154,7 @@ describe('buildTaskPrompt', () => {
     assert.ok(prompt.includes('verify-done.sh --feature'));
     assert.ok(prompt.includes('Do NOT merge into `dev`'));
     assert.ok(prompt.includes('Feature-branch handoff evidence — not yet 100% complete'));
+    assert.ok(prompt.includes('docs/development/completion-evidence.md'));
     assert.ok(prompt.includes('point-by-point requirement coverage'));
     assert.ok(prompt.includes('runtime/functionality verification'));
     assert.ok(prompt.includes('Re-read the published comment'));

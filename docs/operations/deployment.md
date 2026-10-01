@@ -16,7 +16,7 @@ The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run
 
 The development stand (its origin is `vars.STAND_URL` of the `stand` environment) is not production:
 every push to `dev` runs there within minutes, **without tests** — `ci` verifies
-the code only once `dev` is fast-forwarded to `master` (see `CLAUDE.md`). A broken
+the code only once `dev` is fast-forwarded to `master` (see [`deploy.md`](../development/deploy.md)). A broken
 stand is fixed forward on `dev` or rolled back (below).
 
 [`docker/compose.stand.yml`](../../docker/compose.stand.yml) is a standalone compose file for
@@ -117,7 +117,7 @@ the next deploy syncs a newer one. Migrations are never undone: when the older c
 fewer migrations, its `packages/db/drizzle` differs from the recorded one, so the
 deploy takes a backup and runs the migrator, which applies nothing because the
 database is already ahead. That is why every migration must stay compatible with
-the release before it (`CLAUDE.md`).
+the release before it (see [`deploy.md`](../development/deploy.md)).
 
 On the host, without GitHub — the release before the running one:
 

@@ -136,7 +136,7 @@ Defined in `lefthook.yml`. Run automatically after `pnpm install`.
 | `go-fmt` | `apps/bridge/**/*.go` staged | Fails when `gofmt -l -s` lists a file, then `go vet ./...` for linux/amd64 (the bridge is Linux-only). Skipped when Go is not installed. |
 | `gitleaks` | All staged files | Scans for secrets and blocks the commit on a finding. Skipped when gitleaks is not installed. |
 
-The pre-push hook runs `scripts/pre-push-checklist.sh`: biome, a gitleaks scan, typecheck of the changed packages and their dependents, and the tests of the changed packages — about a minute. It is the only check a `dev` push gets before it deploys the dev stand; see `CLAUDE.md` "Local pre-check".
+The pre-push hook runs `scripts/pre-push-checklist.sh`: biome, a gitleaks scan, typecheck of the changed packages and their dependents, and the tests of the changed packages — about a minute. It is the only check a `dev` push gets before it deploys the dev stand; see [ci.md](ci.md).
 
 Never bypass hooks with `--no-verify` unless explicitly instructed.
 

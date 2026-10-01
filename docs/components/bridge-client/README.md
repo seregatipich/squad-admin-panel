@@ -34,5 +34,5 @@ app.get('/api/v1/servers/:id/logs', { websocket: true }, async (sock, req) => {
 
 ## Important
 
-- `attachHandlers` deliberately does NOT set `closed=true` on a decode error. Permanently closing wedges every subsequent caller. This pattern is called out in [`CLAUDE.md`](../../../CLAUDE.md#key-gotchas-worth-knowing-upfront) and [`components/bridge/flows.md`](../bridge/flows.md#decode-error--connection-loss).
+- `attachHandlers` deliberately does NOT set `closed=true` on a decode error. Permanently closing wedges every subsequent caller. This pattern is described in [`components/bridge/flows.md`](../bridge/flows.md#decode-error--connection-loss).
 - Long-running streams (`container_logs_follow`, `depot_update`) MUST use `app.makeBridgeClient()`, not `app.bridge`. The shared instance was starving sibling calls during long streams.
