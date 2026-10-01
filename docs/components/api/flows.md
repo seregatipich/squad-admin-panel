@@ -24,7 +24,7 @@ The WS uses `app.makeBridgeClient()` (per-socket bridge connection) so a long-ru
 
 ## Server soft-delete + backup
 
-Orchestrator: [`apps/api/src/lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts). Route: `DELETE /api/v1/servers/:id` in [`apps/api/src/routes/servers.ts`](../../../apps/api/src/routes/servers.ts).
+Orchestrator: [`apps/api/src/lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts). Route: `DELETE /api/v1/servers/:id` in [`apps/api/src/routes/servers/registry.ts`](../../../apps/api/src/routes/servers/registry.ts).
 
 ```
 DELETE /api/v1/servers/:id
@@ -143,7 +143,7 @@ Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and t
 
 ## Config edit (`PUT /api/v1/servers/:id/configs/:name`)
 
-Single source of truth: [`apps/api/src/routes/server-configs.ts`](../../../apps/api/src/routes/server-configs.ts) (`writeVersion` at line 403). Each edit pairs a host-filesystem write with a `config_versions` row — never one without the other.
+Single source of truth: [`apps/api/src/lib/server-configs/write.ts`](../../../apps/api/src/lib/server-configs/write.ts) (`writeVersion`, re-exported from `routes/server-configs.ts`). Each edit pairs a host-filesystem write with a `config_versions` row — never one without the other.
 
 **Editor exception — `License.cfg` is panel-managed (SRV-6, #45).** The editor never touches it: `PUT` (and `POST …/restore/:vid`) return `400 {error:'panel_managed_file'}`, and `GET …/configs/License.cfg` re-renders a masked copy (`LicenseKey=********`) from `server_credentials` instead of reading the disk bytes. The file is written exclusively by the server-settings license flow ([`lib/license-cfg.ts`](../../../apps/api/src/lib/license-cfg.ts) `syncLicenseCfg`, called from `PATCH /api/v1/servers/:id`): it bypasses `writeVersion`, writes the plaintext id+key pair to disk via the same `fileAtomicWrite`, inserts a **masked** `config_versions` row, and never fires a reload — the license applies on the next container start, surfaced as `server.license.restart_required` on `GET /servers/:id`.
 
@@ -629,7 +629,7 @@ api emits server.install.failed                 ← severity='error'; payload.st
 
 #### Start (POST /servers/:id/start)
 
-Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous — emits before returning to the caller.
+Source: [`routes/servers/start.ts`](../../../apps/api/src/routes/servers/start.ts). Synchronous — emits before returning to the caller.
 
 ```
 api emits server.start.requested
@@ -646,7 +646,7 @@ api emits server.start.failed → re-throw
 
 #### Stop (POST /servers/:id/stop)
 
-Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous, but blocks ~15 s on the graceful RCON wait. Sets a Redis fence at the start so the reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)) can distinguish a planned stop from an unexpected exit.
+Source: [`routes/servers/stop.ts`](../../../apps/api/src/routes/servers/stop.ts). Synchronous, but blocks ~15 s on the graceful RCON wait. Sets a Redis fence at the start so the reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)) can distinguish a planned stop from an unexpected exit.
 
 ```
 api: SET stop:requested:{server_id} EX 300
@@ -672,7 +672,7 @@ The reconciler-confirmed event is documented separately because it lives in `plu
 
 #### Soft-delete (DELETE /servers/:id)
 
-Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt` → Admins.cfg sync-queue cleanup (`redis: app.redis`).
+Source: [`routes/servers/registry.ts`](../../../apps/api/src/routes/servers/registry.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt` → Admins.cfg sync-queue cleanup (`redis: app.redis`).
 
 ```
 api emits server.soft_delete.requested
@@ -720,7 +720,7 @@ reconciler.tick(server):
         payload: {exit_code, oom_killed, signal, finished_at, started_at}
 ```
 
-The fence `stop:requested:{server.id}` is `SET … EX 300` by the stop handler in [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). The reconciler reads it with `GET` (does NOT consume) and lets it expire naturally; the next `/stop` request refreshes the TTL. The reconciler emit fires AFTER the DB update + LiveBus publish so a downstream consumer joining `events:server:{id}` and `diag:queue` sees the status change before the diag explanation.
+The fence `stop:requested:{server.id}` is `SET … EX 300` by the stop handler in [`routes/servers/stop.ts`](../../../apps/api/src/routes/servers/stop.ts). The reconciler reads it with `GET` (does NOT consume) and lets it expire naturally; the next `/stop` request refreshes the TTL. The reconciler emit fires AFTER the DB update + LiveBus publish so a downstream consumer joining `events:server:{id}` and `diag:queue` sees the status change before the diag explanation.
 
 `server.stop.reconciler_confirmed` only fires when the fence was set — if the panel never asked for a stop (a crash), the reconciler emits only `container.unexpected_exit`. This is what closes the loop opened in `POST /servers/:id/stop` (which emits `server.stop.requested` → `server.stop.done`); together they form: API requests stop → graceful RCON broadcast/end-match → bridge `containerStop` → reconciler observes the actual Docker exit and confirms it.
 

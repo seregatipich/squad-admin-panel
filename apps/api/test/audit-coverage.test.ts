@@ -14,7 +14,7 @@
  * Paths under /api/docs (Swagger static UI) are excluded.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -151,6 +151,25 @@ function registeredRouteFiles(): string[] {
     if (file) files.push(file);
   }
   return files;
+}
+
+/**
+ * Source text of a route module: the registered entry file plus, when the
+ * module was split into sub-plugins, every file of its sibling directory
+ * (`routes/clans.ts` + `routes/clans/*.ts`). The source-level checks below ask
+ * whether a module writes audit rows or emits diag events, which holds for the
+ * module as a whole rather than for one of its files.
+ */
+function routeModuleSource(file: string): string {
+  const entry = path.join(routesDir, file);
+  const parts = [readFileSync(entry, 'utf8')];
+  const subPluginDir = entry.replace(/\.ts$/, '');
+  if (existsSync(subPluginDir) && statSync(subPluginDir).isDirectory()) {
+    for (const name of readdirSync(subPluginDir).sort()) {
+      if (name.endsWith('.ts')) parts.push(readFileSync(path.join(subPluginDir, name), 'utf8'));
+    }
+  }
+  return parts.join('\n');
 }
 
 /** A stand-in for every decoration: any property read or call yields itself. */
@@ -293,7 +312,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
         .map((r) => r.file),
     );
     const silent = [...manualFiles].filter((file) => {
-      const source = readFileSync(path.join(routesDir, file), 'utf8');
+      const source = routeModuleSource(file);
       // The map and messaging modules share auditMapLikeAction (lib/map-guards.ts),
       // which is the writeAuditEntry call site for those routes.
       return !source.includes('writeAuditEntry(') && !source.includes('auditMapLikeAction(');
@@ -331,11 +350,10 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     const DIAG_EMIT_SERVER_RE = /diag\.emit\(\s*\{[\s\S]*?kind:\s*['"]server\.[a-z_.]+['"]/m;
 
     for (const [key, file] of STATUS_FLIPPING_ROUTES) {
-      const handlerFile = path.join(routesDir, file);
-      const source = readFileSync(handlerFile, 'utf8');
+      const source = routeModuleSource(file);
       if (!DIAG_EMIT_SERVER_RE.test(source)) {
         throw new Error(
-          `route ${key} flips server.status but does not emit a server.* diag event in ${handlerFile}`,
+          `route ${key} flips server.status but does not emit a server.* diag event in ${path.join(routesDir, file)}`,
         );
       }
     }
