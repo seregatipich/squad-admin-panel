@@ -52,6 +52,13 @@ func main() {
 		"addr", listener.Addr().String(),
 	)
 
+	if missing, err := capabilityDrift(); err != nil {
+		log.Warn("cannot verify capabilities", "err", err)
+	} else if len(missing) > 0 {
+		log.Error("bridge lacks required capabilities: the running unit is older than this binary; run scripts/install-host-bridge.sh to reinstall it and restart the service",
+			"missing", missing)
+	}
+
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
 
 	disp := &handlers.Dispatcher{
