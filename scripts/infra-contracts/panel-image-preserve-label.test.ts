@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * carry the label in its final stage.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 
 const PANEL_IMAGES = [
   'docker/api.Dockerfile',

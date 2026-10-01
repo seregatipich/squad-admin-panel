@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * compose-stand-worker-parity.test.ts, without a YAML dependency.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 
 function read(file: string): string {
   return readFileSync(resolve(REPO_ROOT, file), 'utf-8');

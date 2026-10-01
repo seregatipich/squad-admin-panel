@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * paths, so neither can silently come back.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 const CADDYFILES = ['docker/Caddyfile', 'docker/Caddyfile.stand'];
 
 function apiMatcherPaths(caddyfile: string): string[] {

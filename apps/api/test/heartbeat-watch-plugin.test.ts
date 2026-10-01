@@ -94,7 +94,7 @@ describe('heartbeat-watch plugin', () => {
 
   it('watches every worker service docker/compose.yml deploys (#37)', async () => {
     // Line-based parse of the top-level `worker-*` service keys, as in
-    // compose-stand-worker-parity.test.ts.
+    // scripts/infra-contracts/compose-stand-worker-parity.test.ts.
     const compose = readFileSync(resolve(__dirname, '../../../docker/compose.yml'), 'utf-8');
     const deployed = [...compose.matchAll(/^ {2}worker-([\w-]+):\s*$/gm)]
       .map((match) => match[1])

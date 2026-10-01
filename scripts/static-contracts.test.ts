@@ -43,6 +43,9 @@ describe('operation script static contracts', () => {
     ) as { scripts?: Record<string, string> };
     const testScripts = packageJson.scripts?.['test:scripts'] ?? '';
     assert.match(testScripts, /--test-concurrency=1/);
+    // The compose, Dockerfile and dependency contracts under scripts/infra-contracts
+    // are vitest suites that read repository files and need no database.
+    assert.match(testScripts, /vitest run --root scripts\/infra-contracts/);
     for (const testFile of [
       'scripts/deploy-workflow.test.ts',
       'scripts/bootstrap.test.ts',
