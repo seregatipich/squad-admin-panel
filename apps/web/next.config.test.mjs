@@ -25,3 +25,23 @@ describe('next.config redirects', () => {
     });
   });
 });
+
+describe('next.config webpack', () => {
+  it('maps .js imports to TypeScript source in dev so workspace packages resolve without a build', () => {
+    const config = nextConfig.webpack(
+      { resolve: { extensionAlias: { '.mjs': ['.mts'] } } },
+      { dev: true },
+    );
+
+    expect(config.resolve.extensionAlias).toEqual({
+      '.mjs': ['.mts'],
+      '.js': ['.ts', '.tsx', '.js'],
+    });
+  });
+
+  it('leaves production builds, which resolve the packages built into dist, untouched', () => {
+    const config = nextConfig.webpack({ resolve: {} }, { dev: false });
+
+    expect(config.resolve.extensionAlias).toBeUndefined();
+  });
+});

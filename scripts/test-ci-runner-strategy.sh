@@ -154,7 +154,7 @@ for suite in test-git-guard test-verify-done test-pre-push-checklist test-workfl
   test-dependency-pins test-migration-lint test-gitignore-patterns test-workflow-security \
   test-codeql-default-setup test-ci-runner-strategy test-ci-test-shard \
   test-image-preserve-labels test-rnsquadjs-runtime-copy test-bridge-package-scripts \
-  test-compose-env-passthrough test-postgres-max-connections; do
+  test-compose-env-passthrough test-postgres-max-connections test-local-dev-isolation; do
   has_line "$(sed -n '/^SUITES=($/,/^)$/p' "$contracts_runner")" "  ${suite}" ||
     fail "scripts/test-repo-contracts.sh does not run ${suite}"
   [ -f "$repo_root/scripts/${suite}.sh" ] || fail "scripts/${suite}.sh does not exist"
