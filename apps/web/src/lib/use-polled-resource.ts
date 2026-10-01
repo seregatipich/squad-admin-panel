@@ -33,11 +33,13 @@ export interface PolledResource<T> {
   /** `true` until the first fetch for the current key settles (success or failure). */
   loading: boolean;
   /**
-   * Fetches now, aborting a request that is still in flight. Never rejects:
-   * failures land in `error`. Resolves once the request settled or was
-   * superseded.
+   * Fetches now, aborting a request that is still in flight, unless
+   * `skipIfInFlight` is set: then a pending request is left alone and the call
+   * does nothing (for a nudge that fires faster than the API answers, where
+   * replacing the request each time would starve it). Never rejects: failures
+   * land in `error`. Resolves once the request settled or was superseded.
    */
-  refresh: () => Promise<void>;
+  refresh: (options?: { skipIfInFlight?: boolean }) => Promise<void>;
   /** Replaces `data` locally, e.g. to apply a live-bus push; the next fetch overwrites it. */
   setData: (next: SetStateAction<T | undefined>) => void;
 }
@@ -150,9 +152,14 @@ export function usePolledResource<T>(
     };
   }, [active, run, intervalMs, pauseWhenHidden]);
 
-  const refresh = useCallback(async () => {
-    if (active) await run();
-  }, [active, run]);
+  const refresh = useCallback(
+    async (refreshOptions?: { skipIfInFlight?: boolean }) => {
+      if (!active) return;
+      if (refreshOptions?.skipIfInFlight === true && inFlight.current) return;
+      await run();
+    },
+    [active, run],
+  );
 
   const setData = useCallback(
     (next: SetStateAction<T | undefined>) => {

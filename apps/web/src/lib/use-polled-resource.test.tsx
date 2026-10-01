@@ -370,6 +370,20 @@ describe('usePolledResource: aborting', () => {
     expect(result.current.data).toBe('new');
   });
 
+  it('refresh({ skipIfInFlight }) leaves a pending request alone but fetches when idle', async () => {
+    const { fetcher, calls } = controlledFetcher<string>();
+    const { result } = renderHook(() => usePolledResource('k', fetcher));
+    await act(() => result.current.refresh({ skipIfInFlight: true }));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.signal.aborted).toBe(false);
+
+    await act(async () => calls[0]?.settle.resolve('v'));
+    act(() => {
+      void result.current.refresh({ skipIfInFlight: true });
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it('drops an aborted request that failed after being superseded', async () => {
     const { fetcher, calls } = controlledFetcher<string>();
     const { result } = renderHook(() => usePolledResource('k', fetcher));

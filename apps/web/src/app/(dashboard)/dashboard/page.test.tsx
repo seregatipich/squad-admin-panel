@@ -15,7 +15,6 @@ vi.mock('@/lib/dal', () => ({
     permissions: ['servers.view'],
   }),
 }));
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
 
 let capturedOnStart: ((serverIds: string[]) => Promise<void>) | undefined;
 vi.mock('@/components/DepotUpdateModal', () => ({
@@ -188,7 +187,7 @@ describe('DashboardPage', () => {
           return {
             ok: false,
             status: 409,
-            json: async () => ({ error: 'update_in_progress' }),
+            text: async () => JSON.stringify({ error: 'update_in_progress' }),
           } as Response;
         }
         throw new Error(`unexpected fetch: ${url}`);
@@ -214,7 +213,7 @@ describe('DashboardPage', () => {
           return {
             ok: false,
             status: 409,
-            json: async () => ({ error: 'servers_running', server_ids: ['a', 'b'] }),
+            text: async () => JSON.stringify({ error: 'servers_running', server_ids: ['a', 'b'] }),
           } as Response;
         }
         throw new Error(`unexpected fetch: ${url}`);
