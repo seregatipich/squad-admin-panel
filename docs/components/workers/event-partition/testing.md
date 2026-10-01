@@ -48,7 +48,7 @@ Unit tests for `ensureDiagPartitions(sql)` — covers the `diagnostic_events` ro
 | Creates -1..+2 day partitions and drops partitions older than 24h | Mocked `sql` records 4 `CREATE TABLE IF NOT EXISTS` and 2 `DROP TABLE IF EXISTS` calls (driven by a stub `pg_inherits` result with two stale partitions) |
 | `CREATE TABLE` statements use `diagnostic_events_<YYYYMMDD>` partition naming | Each emitted statement matches `/CREATE TABLE IF NOT EXISTS diagnostic_events_\d{8} PARTITION OF diagnostic_events FOR VALUES FROM \('\d{4}-\d{2}-\d{2}'\) TO \('\d{4}-\d{2}-\d{2}'\);/` |
 
-Imports `ensureDiagPartitions` directly from `../src/index.js` and uses an inline `Object.assign(taggedTemplateFn, { unsafe: vi.fn() })` shape that mirrors what `postgres-js` exposes. Module-level `main()` is gated by an `isMainEntrypoint()` check (compares `realpathSync(process.argv[1])` to the resolved `import.meta.url`) so importing the file in a unit test does not start the worker.
+Imports `ensureDiagPartitions` directly from `../src/index.js` and uses an inline `Object.assign(taggedTemplateFn, { unsafe: vi.fn() })` shape that mirrors what `postgres-js` exposes. The worker is started by `runWorker` from `@squad/worker-kit`, which only starts it when the file is the entry script (it compares `realpathSync(process.argv[1])` to the resolved `import.meta.url`), so importing the file in a unit test does not start the worker.
 
 ### `contract.test.ts`
 
