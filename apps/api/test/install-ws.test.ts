@@ -5,7 +5,7 @@
  */
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import diagPlugin from '../src/lib/diag.js';
@@ -67,8 +67,10 @@ describe('server install WebSocket progress stream', () => {
     });
     await new Promise<void>((resolve) => ws.on('open', () => resolve()));
 
-    // Give the server a tick to flush the snapshot frames.
-    await new Promise((r) => setTimeout(r, 50));
+    // The buffered snapshot is replayed on connect, before any live frame.
+    await vi.waitFor(() =>
+      expect(received).toContainEqual(expect.objectContaining({ message: 'buffered-2' })),
+    );
     app.installProgress.publish(testId, {
       ts: '2026-04-23T00:00:02.000Z',
       step: 'systemd-unit',

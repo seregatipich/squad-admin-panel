@@ -1,7 +1,7 @@
 import { moderationActions, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -429,12 +429,14 @@ describeIfDb('GET /api/v1/public/banlist payload', () => {
     const etag = first.headers.etag as string;
     expect(etag).toBeTruthy();
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // The ETag must not depend on the clock: jump a minute ahead.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
     const repeat = await h.app.inject({
       method: 'GET',
       url: '/api/v1/public/banlist?format=json',
       headers: { authorization: `Bearer ${token}` },
     });
+    vi.useRealTimers();
     expect(repeat.headers.etag).toBe(etag);
 
     const conditional = await h.app.inject({

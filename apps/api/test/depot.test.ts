@@ -35,6 +35,21 @@ function trackedBridge() {
   });
 }
 
+async function waitForLastUpdate(): Promise<{
+  status?: string;
+  error?: string;
+  finished_at?: string;
+}> {
+  return vi.waitFor(
+    async () => {
+      const raw = await h.redis.get('depot:last_update');
+      if (!raw) throw new Error('depot:last_update never set');
+      return JSON.parse(raw);
+    },
+    { timeout: 2000, interval: 25 },
+  );
+}
+
 // One app + database per file. Each test starts with the default fake bridge
 // (tests swap its methods and files in place), no depot keys in Redis and the
 // owner back on Owner after asViewer().
@@ -265,15 +280,7 @@ describe('POST /api/v1/depot/update', () => {
       headers: { cookie },
     });
 
-    const deadline = Date.now() + 2000;
-    let lastUpdate: string | null = null;
-    while (Date.now() < deadline) {
-      lastUpdate = await h.redis.get('depot:last_update');
-      if (lastUpdate) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (!lastUpdate) throw new Error('depot:last_update never set');
-    const parsed = JSON.parse(lastUpdate);
+    const parsed = await waitForLastUpdate();
     expect(parsed.status).toBe('ok');
     expect(typeof parsed.finished_at).toBe('string');
   });
@@ -290,15 +297,7 @@ describe('POST /api/v1/depot/update', () => {
       headers: { cookie },
     });
 
-    const deadline = Date.now() + 2000;
-    let lastUpdate: string | null = null;
-    while (Date.now() < deadline) {
-      lastUpdate = await h.redis.get('depot:last_update');
-      if (lastUpdate) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (!lastUpdate) throw new Error('depot:last_update never set');
-    const parsed = JSON.parse(lastUpdate);
+    const parsed = await waitForLastUpdate();
     expect(parsed.status).toBe('failed');
     expect(parsed.error).toContain('steamcmd exploded');
   });
@@ -322,18 +321,13 @@ describe('POST /api/v1/depot/update', () => {
         headers: { cookie },
       });
 
-      const deadline = Date.now() + 2000;
-      let lastUpdate: { status?: string; error?: string } = {};
-      let updatingCleared = false;
-      while (Date.now() < deadline) {
-        lastUpdate = JSON.parse((await h.redis.get('depot:last_update')) ?? '{}');
-        updatingCleared = (await h.redis.get('depot:updating')) === null;
-        if (lastUpdate.status && updatingCleared) break;
-        await new Promise((r) => setTimeout(r, 50));
-      }
+      const lastUpdate = await waitForLastUpdate();
+      await vi.waitFor(async () => expect(await h.redis.get('depot:updating')).toBeNull(), {
+        timeout: 2000,
+        interval: 25,
+      });
       expect(lastUpdate.status).toBe('failed');
       expect(lastUpdate.error).toContain('redis unavailable');
-      expect(updatingCleared).toBe(true);
     } finally {
       xaddSpy.mockRestore();
     }
@@ -417,17 +411,10 @@ describe('POST /api/v1/depot/update', () => {
       headers: { cookie },
     });
 
-    const deadline = Date.now() + 2000;
-    let cleared = false;
-    while (Date.now() < deadline) {
-      const val = await h.redis.get('depot:updating');
-      if (!val) {
-        cleared = true;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(cleared).toBe(true);
+    await vi.waitFor(async () => expect(await h.redis.get('depot:updating')).toBeNull(), {
+      timeout: 2000,
+      interval: 25,
+    });
   });
 
   // Regression (#43 finding 321): a non-zero steamcmd exit code was reported as ok.
@@ -441,15 +428,7 @@ describe('POST /api/v1/depot/update', () => {
       headers: { cookie },
     });
 
-    const deadline = Date.now() + 2000;
-    let lastUpdate: string | null = null;
-    while (Date.now() < deadline) {
-      lastUpdate = await h.redis.get('depot:last_update');
-      if (lastUpdate) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (!lastUpdate) throw new Error('depot:last_update never set');
-    const parsed = JSON.parse(lastUpdate);
+    const parsed = await waitForLastUpdate();
     expect(parsed.status).toBe('failed');
     expect(parsed.error).toContain('exit code 5');
   });
@@ -469,12 +448,11 @@ describe('POST /api/v1/depot/update', () => {
       headers: { cookie },
     });
 
-    const deadline = Date.now() + 2000;
-    while (Date.now() < deadline && !(await h.redis.get('depot:last_update'))) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    // The lock is released in `finally`, after depot:last_update is written.
-    await new Promise((r) => setTimeout(r, 200));
+    // The lock is released in `finally`, after depot:last_update is written;
+    // the run closes its bridge client last, so no run left in flight means
+    // the release step has already been (not) taken.
+    await waitForLastUpdate();
+    await vi.waitFor(() => expect(openDepotRuns).toBe(0), { timeout: 2000, interval: 25 });
     expect(await h.redis.get('depot:updating')).toBe('other-holder');
   });
 });

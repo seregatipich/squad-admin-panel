@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
  * JavaScript. apps/web is not scanned — Next.js bundles its server code.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 const BUILTINS = new Set(builtinModules);
 
 interface ImageRuntimePackage {

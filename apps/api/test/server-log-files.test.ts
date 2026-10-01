@@ -307,8 +307,7 @@ describe('download backpressure and abort (#291)', () => {
     req.on('error', () => undefined);
     req.end();
 
-    await new Promise((r) => setTimeout(r, 750));
-    expect(state.pauseCalls).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(state.pauseCalls).toBeGreaterThan(0), { timeout: 5_000 });
     expect(state.emitted).toBeLessThan(state.maxFrames);
     req.destroy();
   });

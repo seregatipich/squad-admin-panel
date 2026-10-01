@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForBlockedBackendOn } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -484,8 +485,9 @@ describeIfDb('role management guards (#41)', () => {
           await released;
         });
         await locked;
-        const requests = Promise.all(fire());
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        const pending = fire();
+        const requests = Promise.all(pending);
+        await waitForBlockedBackendOn(h.url, 5_000, pending.length);
         release();
         await holder;
         return (await requests).map((r) => r.statusCode).sort();

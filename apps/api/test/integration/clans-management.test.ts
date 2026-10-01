@@ -11,6 +11,7 @@ import {
 } from '../../src/lib/audit-chain.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForBlockedBackendOn } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -748,7 +749,7 @@ describeIfDb('POST /api/v1/clans/:id/members on a clan created through the API',
   /**
    * Holds `SELECT ... FOR UPDATE` on the clan row in a second connection, starts
    * an add-member request, and proves the request waits on that row lock by
-   * asserting it is still unresolved after `LOCK_WAIT_MS`. `whileLocked` then
+   * asserting it is still unresolved once a backend waits on that lock. `whileLocked` then
    * mutates the clan inside the blocking transaction before it commits, which
    * reproduces a concurrent first add or disband deterministically.
    */
@@ -757,7 +758,6 @@ describeIfDb('POST /api/v1/clans/:id/members on a clan created through the API',
     playerId: string;
     whileLocked: (tx: postgres.TransactionSql) => Promise<unknown>;
   }): Promise<{ statusCode: number; body: { member_role?: string; error?: string } }> {
-    const LOCK_WAIT_MS = 300;
     const blocker = postgres(h.url, { max: 1, onnotice: () => undefined });
     try {
       let releaseLock: () => void = () => undefined;
@@ -787,7 +787,7 @@ describeIfDb('POST /api/v1/clans/:id/members on a clan created through the API',
         .finally(() => {
           settled = true;
         });
-      await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+      await waitForBlockedBackendOn(h.url);
       const settledWhileLocked = settled;
 
       releaseLock();

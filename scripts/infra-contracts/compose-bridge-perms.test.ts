@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const composePath = resolve(__dirname, '../../../docker/compose.yml');
+const composePath = resolve(__dirname, '../../docker/compose.yml');
 // Match the runtime directory; both legacy single-file mounts
 // (`/run/panel-host-bridge.sock`) and the current directory mount
 // (`/run/panel-host-bridge`) start with this prefix.

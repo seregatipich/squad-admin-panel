@@ -57,6 +57,9 @@ const createBody = {
   extra_args: '',
 };
 
+/** Depot templates the install rewrites with the server's own credentials and settings. */
+const REWRITTEN_BY_INSTALL = new Set(['Rcon.cfg', 'Server.cfg']);
+
 // Synthetic SteamCMD-shaped contents, sized roughly like the real depot
 // templates so the test catches "wrote zero bytes" regressions.
 const SYNTHETIC_CONTENTS: Record<string, string> = {
@@ -186,8 +189,12 @@ describe('server install depot seeding', () => {
       const destDir = `/var/lib/squad-panel/configs/${serverId}/ServerConfig`;
       for (const name of Object.keys(SYNTHETIC_CONTENTS)) {
         const buf = bridge.files.get(`${destDir}/${name}`);
-        expect(buf, `${name} should be written`).toBeDefined();
-        expect(buf?.length).toBeGreaterThan(0);
+        expect(buf?.length, `${name} should be written`).toBeGreaterThan(0);
+        if (!REWRITTEN_BY_INSTALL.has(name)) {
+          expect(buf?.toString('utf-8'), `${name} should be copied unchanged`).toBe(
+            SYNTHETIC_CONTENTS[name],
+          );
+        }
       }
 
       const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
@@ -217,8 +224,12 @@ describe('server install depot seeding', () => {
       const destDir = `/var/lib/squad-panel/configs/${serverId}/ServerConfig`;
       for (const name of Object.keys(SYNTHETIC_CONTENTS)) {
         const buf = bridge.files.get(`${destDir}/${name}`);
-        expect(buf, `${name} should be written under ${destDir}`).toBeDefined();
-        expect(buf?.length).toBeGreaterThan(0);
+        expect(buf?.length, `${name} should be written under ${destDir}`).toBeGreaterThan(0);
+        if (!REWRITTEN_BY_INSTALL.has(name)) {
+          expect(buf?.toString('utf-8'), `${name} should be copied unchanged`).toBe(
+            SYNTHETIC_CONTENTS[name],
+          );
+        }
       }
 
       // Rcon.cfg is a SYNTHETIC_CONTENTS key, so the loop above already
@@ -266,12 +277,13 @@ describe('server install depot seeding', () => {
       const fallbackLine = lines.find(
         (l) => l.step === 'configs' && /Admins\.cfg not in depot/.test(l.message),
       );
-      expect(fallbackLine, 'expected a creating-empty log line for Admins.cfg').toBeDefined();
+      expect(fallbackLine?.message, 'expected a creating-empty log line for Admins.cfg').toMatch(
+        /Admins\.cfg not in depot/,
+      );
 
       const destDir = `/var/lib/squad-panel/configs/${serverId}/ServerConfig`;
       const admins = bridge.files.get(`${destDir}/Admins.cfg`);
-      expect(admins).toBeDefined();
-      expect(admins?.length).toBe(0);
+      expect(admins).toEqual(Buffer.alloc(0));
 
       const versions = await h.db
         .select()
@@ -419,7 +431,8 @@ describe('server install depot seeding', () => {
 
       expect(res.statusCode, res.body).toBe(409);
       expect(res.json()).toMatchObject({ error: 'server_not_installable', status: 'running' });
-      await new Promise((r) => setTimeout(r, 100));
+      // The route replies 409 before it claims the server, so no background
+      // install exists that could still write a config.
       expect(write).not.toHaveBeenCalled();
       const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
       expect(row?.status).toBe('running');

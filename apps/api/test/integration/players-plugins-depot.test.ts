@@ -1,7 +1,7 @@
 import { auditLog, playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -316,15 +316,31 @@ describe('audit plugin', () => {
     await h.cleanup();
   });
 
+  /**
+   * The audit hook writes after the response is sent, and audit writes are
+   * serialised on the hash chain. Firing one audited request (an invalid
+   * `POST /roles`) and waiting for its row therefore proves every hook of an
+   * earlier request has finished, so a missing row really is missing.
+   */
+  async function flushAuditHook(cookie: string): Promise<void> {
+    const countRoleCreates = async () =>
+      (await h.db.select().from(auditLog).where(eq(auditLog.actionType, 'role.create'))).length;
+    const before = await countRoleCreates();
+    await h.app.inject({ method: 'POST', url: '/api/v1/roles', headers: { cookie }, payload: {} });
+    await vi.waitFor(async () => expect(await countRoleCreates()).toBe(before + 1));
+  }
+
   it('does not write audit rows for routes with audit: false', async () => {
     const cookie = await loginAsOwner(h);
-    const before = await h.db.select().from(auditLog);
+    const withoutSentinel = (rows: Array<{ actionType: string }>) =>
+      rows.filter((row) => row.actionType !== 'role.create');
+    const before = withoutSentinel(await h.db.select().from(auditLog));
     await h.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/host/info', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/host/metrics', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/permissions', headers: { cookie } });
-    await new Promise((r) => setTimeout(r, 100));
-    const after = await h.db.select().from(auditLog);
+    await flushAuditHook(cookie);
+    const after = withoutSentinel(await h.db.select().from(auditLog));
     expect(after.length).toBe(before.length);
   });
 
@@ -338,7 +354,7 @@ describe('audit plugin', () => {
     });
     expect(res.statusCode).toBe(201);
     const id = (res.json() as { id: string }).id;
-    await new Promise((r) => setTimeout(r, 150));
+    await flushAuditHook(cookie);
     const rows = await h.db.select().from(auditLog).where(eq(auditLog.targetId, id));
     expect(rows.map((row) => row.actionType)).toEqual(['issue.create']);
   });
@@ -365,7 +381,7 @@ describe('audit plugin', () => {
       .where(and(eq(auditLog.actionType, 'user.logout'), eq(auditLog.actorKind, 'system')));
     const res = await h.app.inject({ method: 'POST', url: '/api/v1/auth/logout' });
     expect(res.statusCode).toBe(401);
-    await new Promise((r) => setTimeout(r, 150));
+    await flushAuditHook(await loginAsOwner(h));
     const after = await h.db
       .select()
       .from(auditLog)

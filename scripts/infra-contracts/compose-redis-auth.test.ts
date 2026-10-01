@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
  * YAML dependency.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 // compose.yml publishes Redis on ${REDIS_HOST_PORT:-6379} (worktree isolation); the stand file pins 6379.
 const COMPOSE_FILES = ['docker/compose.yml', 'docker/compose.stand.yml'];
 

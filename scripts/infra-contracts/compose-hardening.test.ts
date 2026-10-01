@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
  * - every third-party base image is pinned by digest.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 const COMPOSE_FILES = ['docker/compose.yml', 'docker/compose.stand.yml'] as const;
 const read = (relativePath: string) => readFileSync(resolve(REPO_ROOT, relativePath), 'utf-8');
 

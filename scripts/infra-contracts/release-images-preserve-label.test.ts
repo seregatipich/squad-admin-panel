@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  * must keep filtering on it.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 const RELEASE_DOCKERFILES = [
   'docker/api.Dockerfile',
   'docker/web.Dockerfile',

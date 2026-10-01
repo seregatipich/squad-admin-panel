@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  * into a hard failure.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 const REFERENCE_COMPOSE = 'docker/compose.yml';
 const STAND_COMPOSE = 'docker/compose.stand.yml';
 

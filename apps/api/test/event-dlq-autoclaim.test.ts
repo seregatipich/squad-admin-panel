@@ -5,7 +5,7 @@
  * Needs REDIS_URL: skipped with a warning locally, a collection error under CI.
  */
 import Redis from 'ioredis';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { describeIfRedis } from '../../../packages/db/test/helpers/describe-if.js';
 
 const redisUrl = process.env.REDIS_URL;
@@ -115,14 +115,24 @@ describeIfRedis('events stream DLQ + XAUTOCLAIM', () => {
       '>',
     )) as Array<[string, Array<[string, string[]]>]> | null;
     expect(delivered).not.toBeNull();
-    // Wait a short time, then XAUTOCLAIM with min-idle-time=5ms so B takes it
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const reclaimed = (await r.xautoclaim(stream2, group, consumerB, '10', '0', 'COUNT', '10')) as [
-      string,
-      Array<[string, string[]]>,
-      string[],
-    ];
-    const claimedEntries = reclaimed[1];
+    // Idle time is measured by Redis itself, so poll XAUTOCLAIM until the
+    // message has been idle for min-idle-time (10 ms) and consumer B takes it.
+    const claimedEntries = await vi.waitFor(
+      async () => {
+        const reclaimed = (await r.xautoclaim(
+          stream2,
+          group,
+          consumerB,
+          '10',
+          '0',
+          'COUNT',
+          '10',
+        )) as [string, Array<[string, string[]]>, string[]];
+        if (reclaimed[1].length === 0) throw new Error('message not idle long enough yet');
+        return reclaimed[1];
+      },
+      { timeout: 2_000, interval: 10 },
+    );
     expect(claimedEntries.length).toBeGreaterThan(0);
     // Ack to clean up
     if (claimedEntries[0]) await r.xack(stream2, group, claimedEntries[0][0]);

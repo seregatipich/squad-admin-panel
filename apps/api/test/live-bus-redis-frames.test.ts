@@ -55,7 +55,8 @@ describe('live-bus Redis frames', () => {
 
     const ours = () => received.filter((event) => event.ts === marker);
     await waitFor(() => ours().some((event) => 'data' in event && typeof event.data === 'object'));
-    await new Promise((r) => setTimeout(r, 200));
+    // Pub/sub keeps publish order: the well-formed frame is last, so every
+    // rejected frame before it has already been handled.
 
     expect(ours()).toEqual([
       {

@@ -136,7 +136,7 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(result.saved_dir_removed).toBe(true);
     expect(result.ufw_rules_removed).toBe(4);
     expect(result.errors).toEqual([]);
-    expect(result.backup_marker_id).not.toBeNull();
+    expect(result.backup_marker_id).toEqual(expect.any(String));
 
     expect(directoryDelete).toHaveBeenCalledWith({
       path: `/var/lib/squad-panel/configs/${seeded.id}`,
@@ -169,7 +169,7 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(backupRows.length).toBe(ALLOWED_CONFIG_FILES.length);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
     expect(row?.deletionBackupMarkerId).toBe(result.backup_marker_id);
     expect(row?.deletedByPlayerId).toBe(h.seed.ownerPlayerId);
   });
@@ -248,7 +248,7 @@ describe('softDeleteServer (orchestrator)', () => {
 
     // Row is soft-deleted.
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
 
     // No config_versions inserted as backup markers.
     const versions = await h.db.query.configVersions.findMany({
@@ -286,7 +286,7 @@ describe('softDeleteServer (orchestrator)', () => {
 
     expect(result.files_backed_up).toBe(0);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('treats a mixed error set (some ENOENT, one transport) as bridge failure', async () => {
@@ -395,7 +395,7 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(result.files_backed_up).toBe(1);
     expect(result.configs_dir_removed).toBe(true);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('records partial-failure errors but still soft-deletes the row', async () => {
@@ -438,7 +438,7 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(result.errors[0]?.phase).toBe('configs_dir_delete');
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('records why the sidecar container and config dir could not be removed (#58)', async () => {
@@ -564,7 +564,7 @@ describe('DELETE /api/v1/servers/:id route', () => {
     expect(body.files_backed_up).toBe(ALLOWED_CONFIG_FILES.length);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
 
     expect(events.some((e) => (e as { type: string }).type === 'server.deleted')).toBe(true);
   });
@@ -604,7 +604,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     expect(await h.redis.exists(statusKey)).toBe(0);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('atomically completes every unapplied outbox row as server_removed', async () => {
@@ -732,7 +732,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     expect(result.sync_queue_removed).toBe(true);
     expect(result.errors.filter((e) => e.phase === 'sync_queue_cleanup')).toHaveLength(0);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('completes with sync_queue_removed=false when no redis is supplied (compat)', async () => {
@@ -754,7 +754,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     expect(result.sync_queue_removed).toBe(false);
     expect(result.sync_outbox_cancelled).toBe(0);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('records a sync_queue_cleanup error but still soft-deletes when redis fails', async () => {
@@ -786,7 +786,7 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
 
     expect(result.errors.some((e) => e.phase === 'sync_queue_cleanup')).toBe(true);
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBeInstanceOf(Date);
   });
 
   it('reports the UNLINK failure itself instead of masking it with a DEL retry (#66)', async () => {

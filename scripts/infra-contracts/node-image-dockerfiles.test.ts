@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
  *   sequential RUN per package.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = resolve(__dirname, '../..');
 
 /** Logical instructions: continuation lines joined, whitespace collapsed, comments dropped. */
 function instructions(block: string): string[] {
