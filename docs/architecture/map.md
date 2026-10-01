@@ -1042,7 +1042,7 @@ Dictionary keys are flat dot-namespaced strings — **73 keys**, across `app.*`,
 
 There is no locale selection anymore — `LOCALES = ['ru']` is the only value, so the `locale` cookie, `LocaleSwitch.tsx`, `src/i18n/server.ts`, and the `router.refresh()` round-trip they drove are all gone. `<html lang>` is hardcoded to `"ru"` in the root layout (`src/app/layout.tsx`) instead of being read per-request. `LocaleProvider` survives the cut — not for locale *selection*, but because `useTranslator()` and `useIntlLocale()` still have production call sites (see above); it always resolves to the Russian translator and the `ru-RU` Intl tag, falling back to the same values outside the provider instead of throwing (see "Dates and times" in `docs/components/web/README.md`).
 
-The honest scope: only **9 non-test files** import a translator, while **148 of 166 non-test `.tsx` files contain hard-coded Cyrillic literals**. i18n covers the shell — nav, auth pages, connection banner, API error codes — and nothing else. `lib/nav.ts` encodes the transitional state in its type: every item carries a legacy Russian `label` *and* an optional `labelKey`, with `nav.test.ts:19-33` asserting `ru[labelKey] === label`. Because `CommandPalette` searches and displays the raw `label`, the palette is unlocalized while the top bar is not. `/setup` bypasses the i18n layer entirely and is 100% hardcoded Russian, unlike `/login` and `/no-access`. `RoleEditor.tsx:67` throws `'Не удалось загрузить список permissions'` — a Russian string with an English word embedded, a fair summary of the migration's state.
+The honest scope: only **9 non-test files** import a translator, while **148 of 166 non-test `.tsx` files contain hard-coded Cyrillic literals**. i18n covers the shell — nav, auth pages, connection banner, API error codes — and nothing else. `lib/nav.ts` encodes the transitional state in its type: every item carries a legacy Russian `label` *and* an optional `labelKey`, with `nav.test.ts:19-33` asserting `ru[labelKey] === label`. Because `CommandPalette` searches and displays the raw `label`, the palette is unlocalized while the top bar is not. `/setup` bypasses the i18n layer entirely and is 100% hardcoded Russian, unlike `/login` and `/no-access`. `RoleEditor.tsx:67` throws `'Не удалось загрузить список permissions'` ("Failed to load the permissions list") — a Russian string with an English word embedded, a fair summary of the migration's state.
 
 ### 5.7 Styling and theming
 
@@ -1284,10 +1284,10 @@ Every outcome writes one `automation_runs` row and one `audit_log` row under `ac
 
 `clan-guard` enforces protected clan tags in two phases — `AdminWarn` plus a `moderation_actions` row, then a kick only after `gracePeriodSeconds` — with the warn lookup scoped `>= playerSessions.connectedAt` so the grace clock restarts each session, and a hard carve-out: a player whose role has `panelAccess` is **never kicked**, only re-warned. `role-expirer` clears up to 500 expired roles per tick, deletes the player's `sessions` rows plus `session:<id>` Redis keys and publishes `session.revoked` on the live bus so open tabs log out in ≤5 s; its VIP reminder tick fires the smallest crossed window from `economy_settings.vip_expiry_windows_days` and dedups via `ON CONFLICT DO NOTHING RETURNING` on `expiry_notifications`, so a renewal re-arms mechanically because `expires_at` is part of the key. `clan-priority-expirer` deliberately does **not** touch `clan_members.has_priority`, only `clans.priority_expiry_processed`, so extending a window restores priorities with no re-toggling.
 
-`config-sync` — единственный consumer admins-cfg outbox. `delivery.ts` сначала
-сохраняет устойчивый итог в PostgreSQL; только затем Lua атомарно выполняет
-`XACK` и точный `XDEL`. Bridge/RCON ошибка остаётся unacked с безопасным кодом и
-попадает в reclaim; applied replay не трогает файл или RCON. `event-partition`
+`config-sync` is the only consumer of the admins-cfg outbox. `delivery.ts` first
+persists the durable outcome in PostgreSQL; only then does Lua atomically perform
+`XACK` and an exact `XDEL`. A bridge/RCON error stays unacked with a safe code and
+goes into reclaim; an applied replay does not touch the file or RCON. `event-partition`
 is a hand-written `pg_partman` replacement: monthly partitions on `events`
 (current + next, dropping beyond `EVENTS_RETENTION_MONTHS = 24`) and day
 partitions on `diagnostic_events` (−1…+2 days, 24 h retention), with the stale
@@ -1831,7 +1831,7 @@ Until issue #6 the last four tables had **no rotator at all**: `player_sessions`
 | `host:metrics` | Redis stream | `MAXLEN ~ 5760` (`metrics-pack.ts:13`) | metrics-sampler | silent eviction |
 | `container:metrics:<id>` | Redis stream | `MAXLEN ~ '2880'` — hardcoded literal (`sampler.ts:63`) | metrics-sampler | silent eviction |
 | RCON streams | Redis | `MAXLEN ~ 500` (e.g. `scheduler/src/deps.ts:60`) | producers | silent eviction |
-| cfg-sync streams | Redis + PG outbox | relay без `MAXLEN`; после `applied_at` Lua атомарно делает `XACK` и точный `XDEL`, failed/unacked не удаляется | config-sync relay/consumer | успешный хвост ограничен consumer-aware удалением; недоступный сервер сохраняет полный backlog |
+| cfg-sync streams | Redis + PG outbox | relay without `MAXLEN`; after `applied_at` Lua atomically does `XACK` and an exact `XDEL`, failed/unacked entries are not deleted | config-sync relay/consumer | the successful tail is bounded by consumer-aware deletion; an unreachable server keeps its full backlog |
 | `crashes:<serverId>` | Redis zset | exact 24 h `ZREMRANGEBYSCORE` (`plugins/status-reconciler.ts:241`) | API plugin | exact, score-based trim |
 | event dedup keys | Redis | `DEDUP_TTL_SECONDS = 86_400` (`shared-types/src/events.ts:292`) | ban-sync, discord | key expiry |
 | Squad game logs | bridge filesystem | `squadLogRetentionDays = 10` (`handlers.go:582`) | bridge sweep, driven hourly by log-ingest | file unlink; optional archive-before-delete per `archive_server_ids` |
@@ -1955,7 +1955,7 @@ Redis is the second primary datastore, not a cache. There is no central key regi
 
 | Key | Type | Producer | Consumer | TTL / MAXLEN | Authoritative? | What breaks if lost |
 |---|---|---|---|---|---|---|
-| `rcon:status:<id>` | string(JSON) | `rcon/src/supervisor.ts:174` | `routes/servers.ts:112,256`; `server-map.ts:47`; metrics-sampler; legacy `config-sync` path | `EX 300` | no (cache) | Список серверов теряет RCON state; новая outbox-доставка опирается на PostgreSQL `servers.status` и точный command result, не на этот кеш |
+| `rcon:status:<id>` | string(JSON) | `rcon/src/supervisor.ts:174` | `routes/servers.ts:112,256`; `server-map.ts:47`; metrics-sampler; legacy `config-sync` path | `EX 300` | no (cache) | The server list loses RCON state; the new outbox delivery relies on PostgreSQL `servers.status` and the exact command result, not on this cache |
 | `rcon:roster:<id>` | string(JSON) | `supervisor.ts:199` | `routes/server-roster.ts:20`; `server-messaging.ts:152`; `report-actions.ts:268`; `lib/report-notify.ts:56` | `EX 90` | **yes** | Roster endpoint empty; in-game warn/kick targeting and report name-resolution lose their player list |
 | `rcon:squads:<id>` | string(JSON) | `supervisor.ts` (`writeSquads`) | `routes/server-roster.ts` (team/squad metadata); log-ingest `match-roster/store.ts` (squad names at match close) | `EX 90` | yes | Roster loses team/squad names; `match_players.squad_name` stays `null` |
 | `rcon:squad-crowns:<id>` | hash | `supervisor.ts` (`trackSquads`) | `routes/server-roster.ts` (`squad_crown`); re-read on worker start | `EX 21600`, refreshed on write; `DEL` on match reset | yes (current match) | Crowns vanish for the rest of the match; `squad.*` events in `events` are unaffected |
@@ -1964,7 +1964,7 @@ Redis is the second primary datastore, not a cache. There is no central key regi
 | `rcon:commands:<id>` | stream | `lib/rcon-worker-command.ts:54` + 6 workers | `rcon/src/commands.ts` | `MAXLEN ~ 500` | **yes** (in flight) | Queued kick/ban/broadcast commands dropped |
 | `rcon:command-result:<reqId>` | string | `rcon/src/commands.ts:94` | `lib/rcon-worker-command.ts:71` (deletes on read) | `EX 120` | **yes** (in flight) | Synchronous RCON calls time out with no result |
 | `events:server:<id>` / `events:global` / `events:dlq` | stream | `log-ingest/src/publish.ts:16`; ban-sync; API | `events.ts:294` groups | `MAXLEN ~ 10000` | **yes** (in flight) | Unconsumed domain events lost permanently; `events:dlq` has no reader |
-| `events:admins-cfg-sync:<id>` | stream | post-commit outbox relay | worker-config-sync | без `MAXLEN`; durable success → атомарные `XACK` + точный `XDEL` | partially — pending rows remain in PG; already-relayed/unapplied rows require Redis persistence/reclaim | Pending rows relay/reclaim after recovery; applied replay only cleans its exact stream entry |
+| `events:admins-cfg-sync:<id>` | stream | post-commit outbox relay | worker-config-sync | no `MAXLEN`; durable success → atomic `XACK` + exact `XDEL` | partially — pending rows remain in PG; already-relayed/unapplied rows require Redis persistence/reclaim | Pending rows relay/reclaim after recovery; applied replay only cleans its exact stream entry |
 | `dedup:<group>:<eventId>` | string | producers + consumers | same | `EX 86400` | dedup | Duplicate Discord notifications / duplicate ban applications on replay |
 | `panel:logs` | stream | `shared-config/src/log-stream-sink.ts:95` | `routes/logs.ts:61,77`; `lib/log-export.ts:40` | `MAXLEN ~ 100000` | **yes** | Log viewer and export empty |
 | `host:metrics` / `container:metrics:<id>` | stream | metrics-sampler | `routes/host.ts:78`; `routes/server-metrics.ts:39` | `MAXLEN 5760` / `~2880` | **yes** | ~48 h of host metric history gone |
@@ -2345,7 +2345,7 @@ The bridge has a separate heartbeat (`apps/api/src/plugins/bridge-heartbeat.ts`)
 
 ### 11.6 The status reconciler and orphan sweep
 
-`apps/api/src/plugins/status-reconciler.ts` is the most defensively written component in the repo; its docblock cites a production incident where a server hung in "Остановка". Constants (lines 31-36): `RECONCILE_INTERVAL_MS = 4_000`, `STUCK_AFTER_MS = 90_000`, `TICK_BUDGET_MS = 12_000`, `STALE_INSTALL_AFTER_MS = 30min`, `CRASH_LOOP_THRESHOLD = 3`, `CRASH_LOOP_WINDOW_MS = 5min`.
+`apps/api/src/plugins/status-reconciler.ts` is the most defensively written component in the repo; its docblock cites a production incident where a server hung in "Остановка" (Stopping). Constants (lines 31-36): `RECONCILE_INTERVAL_MS = 4_000`, `STUCK_AFTER_MS = 90_000`, `TICK_BUDGET_MS = 12_000`, `STALE_INSTALL_AFTER_MS = 30min`, `CRASH_LOOP_THRESHOLD = 3`, `CRASH_LOOP_WINDOW_MS = 5min`.
 
 Each tick selects rows in `TRANSIENT_STATES = {starting, stopping, running, stopped, ready}` and inspects them via the bridge in parallel under a whole-tick budget:
 

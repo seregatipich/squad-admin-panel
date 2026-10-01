@@ -172,6 +172,7 @@ If the guard denies a command, do not work around it — follow the workflow abo
 - Never commit secrets; keep sensitive configuration in environment variables and document required vars in `.env.example`.
 - Do not add `.md` files to the repository root. The only permitted root docs are `README.md` and this `CLAUDE.md`. Planning notes, roadmaps, handoffs, and other artifacts go in `docs/`.
 - Update README/runbooks/migration notes when behavior, setup, or operations change.
+- Write documentation in English; only quoted product UI strings (the web UI is Russian-only) and literals emitted by the code stay Russian.
 
 ## Commands
 

@@ -55,31 +55,31 @@ Run:
 pnpm --filter @squad/api test
 ```
 
-### Проверки эксплуатационных скриптов
+### Operational script checks
 
-`pnpm test:scripts` — отдельный последовательный контур для управляющих
-скриптов, которые не относятся к одному workspace-пакету. Он проверяет:
+`pnpm test:scripts` is a separate sequential suite for the management
+scripts that do not belong to a single workspace package. It verifies:
 
-- безопасные preflight/confirmation/fail-closed границы `bootstrap`,
-  `install-host-bridge`, `deploy`, `rebuild` и `uninstall` на временных
-  копиях со всеми host-командами, заменёнными журналирующими подменами;
-- настоящий length-prefixed JSON-протокол `verify-bridge` через временный
-  Unix-сокет;
-- ограниченную проверку сайдкарных shadow-потоков через временный Redis (`scripts/rnsquadjs-shadow-diff.mjs`);
-- `verify-audit-chain.ts` и реальные миграционные триггеры `audit_log` через
-  отдельные временные PostgreSQL-БД.
+- the safe preflight/confirmation/fail-closed boundaries of `bootstrap`,
+  `install-host-bridge`, `deploy`, `rebuild` and `uninstall` on temporary
+  copies, with every host command replaced by logging stubs;
+- the real length-prefixed JSON protocol of `verify-bridge` over a temporary
+  Unix socket;
+- a bounded check of the sidecar shadow streams through a temporary Redis (`scripts/rnsquadjs-shadow-diff.mjs`);
+- `verify-audit-chain.ts` and the real `audit_log` migration triggers against
+  separate temporary PostgreSQL databases.
 
-Для полного локального запуска передайте обе пары адресов. Audit-набор
-допускает отсутствие PostgreSQL только вне CI; в CI отсутствие БД завершает
-набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
+For a full local run, pass both pairs of URLs. The audit suite
+tolerates a missing PostgreSQL only outside CI; in CI a missing database fails
+the suite. The workflow first applies the migrations and only then runs
 `pnpm test:scripts`.
 
-`scripts/pre-push-checklist.sh` запускает этот контур последним пунктом, после
-тестов изменённых пакетов, и только когда ветка относительно `origin/dev`
-меняет `scripts/` или `.github/`. Контуру нужны PostgreSQL и Redis: без
-доступной БД предохранитель пропускает его с предупреждением, а `FULL=1`
-запускает его всегда и без БД завершается ошибкой. Ошибка любого
-эксплуатационного контракта блокирует отправку ветки. Подробнее — в разделе
+`scripts/pre-push-checklist.sh` runs this suite as its last item, after the
+tests of the changed packages, and only when the branch changes
+`scripts/` or `.github/` relative to `origin/dev`. The suite needs PostgreSQL and Redis: without
+an available database the guard skips it with a warning, while `FULL=1`
+always runs it and fails without a database. A failure of any
+operational contract blocks the push. For details, see the section
 [Git hooks](local-development.md#git-hooks).
 
 ```bash

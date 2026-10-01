@@ -39,7 +39,7 @@
 
 A server hosted elsewhere — another box, another panel — can be attached over RCON alone (`servers.runtime='external'`).
 
-1. Owner/Senior Admin picks «Подключить существующий» at `/servers/new` and enters the RCON host/port/password plus the A2S query port.
+1. Owner/Senior Admin picks «Подключить существующий» (Connect existing) at `/servers/new` and enters the RCON host/port/password plus the A2S query port.
 2. `POST /api/v1/servers/external` → rows in `servers` (`status='running'`, `runtime='external'`), `server_settings` (remote ports, empty `install_path`) and `server_credentials` (`rcon_host` set, password encrypted). No bridge call.
 3. `worker-rcon` picks the row up on its next 15 s reconcile, dials `rcon_host:rcon_port`, and from then on the server behaves like any other for players/squads/map/queue polling, A2S, chat commands and every RCON-driven admin action (kick, ban, warn, broadcast, layer change).
 4. Everything that needs the host is off for it: the status reconciler skips it (it would otherwise see no container and mark it `stopped`), config sync never pushes `Admins.cfg` to it, and the container/config/rotation/metrics routes answer 409 `external_server`.

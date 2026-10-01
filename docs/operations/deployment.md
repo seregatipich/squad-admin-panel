@@ -128,7 +128,7 @@ cd ~/apps/squad-admin-panel && bash scripts/rollback-stand.sh
 [`scripts/rollback-stand.sh`](../../scripts/rollback-stand.sh) hands the images
 recorded in `.release.prev.env` to `deploy-stand.sh`, which pulls any the host
 already pruned, recreates only what differs, and swaps the two release files —
-running it twice returns to where you started. The panel's «очистить docker»
+running it twice returns to where you started. The panel's «очистить docker» (Prune Docker)
 action (`POST /api/v1/host/docker-prune`) does not remove them: every release
 image carries `LABEL panel.preserve=true`, which the prune filters out. The compose file, the Caddyfile
 and the schema stay those of the synced tree, and the next push to `dev`
@@ -238,37 +238,37 @@ longer used; unregister the runner and delete the environment with its secrets.
 Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`) and
 `apps/api/test/compose-stand-*.test.ts`.
 
-## Вход через Steam
+## Sign-in with Steam
 
-Панель подтверждает Steam-личность сама через Steam OpenID:
-`/api/v1/auth/steam/login` отправляет пользователя на steamcommunity.com, а
-`/api/v1/auth/steam/callback` проверяет ответ, создаёт сессию и выдаёт права по
-RBAC панели. Realm и адрес возврата строятся из `PANEL_PUBLIC_URL`, поэтому в
-production он обязан быть HTTPS-origin (`https://<APP_DOMAIN>`); иначе API
-не стартует. Первый вошедший игрок становится Owner и проходит `/setup`.
+The panel verifies the Steam identity itself through Steam OpenID:
+`/api/v1/auth/steam/login` sends the user to steamcommunity.com, and
+`/api/v1/auth/steam/callback` validates the response, creates a session and grants permissions according to the
+panel's RBAC. The realm and the return URL are built from `PANEL_PUBLIC_URL`, so in
+production it must be an HTTPS origin (`https://<APP_DOMAIN>`); otherwise the API
+does not start. The first player to sign in becomes Owner and goes through `/setup`.
 
-### Интеграция bss.games удалена
+### bss.games integration removed
 
-До 2026-09-16 вход шёл через SSO bss.games, а магазин сайта выдавал VIP через
-подписанный webhook `/api/v1/integrations/vip/*` со строгим режимом ревизий.
-Миграция `0115_remove_bss_integration` удаляет триггеры и функции этого режима,
-таблицу `vip_lifecycle_events`, столбцы `players.role_lifecycle_event_id` и
-`panel_meta.vip_lifecycle_strict`, отзывает API-токен сайта и деактивирует тир
-`BSS VIP`. Роли и сроки уже купленных VIP остаются у игроков, дальше их снимает
-`worker-role-expirer`. После первого выпуска удалите из `.env.stand` ключи
-`BSS_*` и `VIP_LIFECYCLE_*`, а из Actions secrets — `BSS_SSO_SHARED_SECRET` и
-`PANEL_READ_API_TOKEN`: их больше ничто не читает.
+Until 2026-09-16, sign-in went through bss.games SSO, and the site's store granted VIP through a
+signed webhook `/api/v1/integrations/vip/*` with a strict revision mode.
+Migration `0115_remove_bss_integration` removes the triggers and functions of this mode,
+the `vip_lifecycle_events` table, the columns `players.role_lifecycle_event_id` and
+`panel_meta.vip_lifecycle_strict`, revokes the site's API token and deactivates the
+`BSS VIP` tier. The roles and expiry dates of VIPs already purchased stay with the players; from then on they are removed by
+`worker-role-expirer`. After the first release, delete these keys from `.env.stand`:
+`BSS_*` and `VIP_LIFECYCLE_*`, and from Actions secrets, `BSS_SSO_SHARED_SECRET` and
+`PANEL_READ_API_TOKEN`: nothing reads them any more.
 
-**Откат через 0115 невозможен (#50).** Миграция удалила столбцы и таблицу в том
-же выпуске (коммит `10134844`), где их убрали из схемы Drizzle, а не выпуском
-позже. Любой выпуск до `10134844` выбирает `players.role_lifecycle_event_id` и
-`panel_meta.vip_lifecycle_strict` в каждом `SELECT` по этим таблицам, поэтому
-после `rollback-stand.sh` или `deploy.yml -f sha=<старый sha>` на такой выпуск
-почти каждый запрос API падает с `column … does not exist`. Не откатывайтесь
-ниже `10134844`. Если это всё же нужно, сначала восстановите дамп, снятый
-деплоем перед 0115 (см. «Only when a migration itself destroyed data» выше):
-он же единственный источник истории `vip_lifecycle_events`, которую 0115
-удалила без архива.
+**Rollback through 0115 is impossible (#50).** The migration dropped the columns and the table in the
+same release (commit `10134844`) that removed them from the Drizzle schema, not in a release
+later. Any release before `10134844` selects `players.role_lifecycle_event_id` and
+`panel_meta.vip_lifecycle_strict` in every `SELECT` on these tables, so
+after `rollback-stand.sh` or `deploy.yml -f sha=<old sha>` to such a release
+almost every API request fails with `column … does not exist`. Do not roll back
+below `10134844`. If you still need to, first restore the dump taken by the
+deploy before 0115 (see "Only when a migration itself destroyed data" above):
+it is also the only source of the `vip_lifecycle_events` history, which 0115
+dropped without an archive.
 
 ## CI/CD runners
 
@@ -483,9 +483,9 @@ sudo systemctl restart panel-host-bridge.service
 3. Rebuild and restart affected services.
 4. Database migrations are forward-only. If the new schema has destructive changes, refer to [`migrations.md`](./migrations.md) for the manual rollback procedure.
 
-Для отката единого входа верните предыдущий image панели и прежний UI, не
-меняя общий секрет сайта. Уже отозванные одноразовой командой сессии не
-восстанавливаются; это единственная необратимая часть перехода.
+To roll back the unified sign-in, restore the previous panel image and the previous UI, without
+changing the site's shared secret. Sessions already revoked by the one-off command are
+not restored; this is the only irreversible part of the transition.
 
 ## Verifying a deployment
 
@@ -525,7 +525,7 @@ scripts/restore.sh --apply --snapshot ID  # destructive — restore a specific r
 
 ### Backup/restore from the panel UI (INFRA-8-P1)
 
-Operators with the `host:manage` permission get a **Настройки → Бэкапы** page (`/settings/backup`) that lists the restic snapshots, triggers a manual backup, and restores a chosen snapshot behind a strong typed confirmation (the operator must type the snapshot's short id). The API container has no docker socket, so these operations go through the Go host bridge — new RPCs `backup_snapshots` (`restic snapshots --json`), `backup_run` (`docker compose --profile backup run --rm backup backup`) and `backup_restore` (wraps `scripts/restore.sh --apply --snapshot <id>`) — behind the routes `GET/POST /api/v1/host/backups` and `POST /api/v1/host/backups/:id/restore` (audited `backup.run` / `backup.restore`).
+Operators with the `host:manage` permission get a **Настройки → Бэкапы** (Settings → Backups) page (`/settings/backup`) that lists the restic snapshots, triggers a manual backup, and restores a chosen snapshot behind a strong typed confirmation (the operator must type the snapshot's short id). The API container has no docker socket, so these operations go through the Go host bridge — new RPCs `backup_snapshots` (`restic snapshots --json`), `backup_run` (`docker compose --profile backup run --rm backup backup`) and `backup_restore` (wraps `scripts/restore.sh --apply --snapshot <id>`) — behind the routes `GET/POST /api/v1/host/backups` and `POST /api/v1/host/backups/:id/restore` (audited `backup.run` / `backup.restore`).
 
 Because the bridge shells out to `docker compose` and `scripts/restore.sh` from the panel's deploy directory, its systemd unit must name that directory, the compose file and the env files, so the RPCs inherit `RESTIC_PASSWORD` and `POSTGRES_PASSWORD` from the deploy's own env files. `scripts/install-host-bridge.sh` writes all three into its drop-in (`panel-host-bridge.service.d/install.conf`); the compose file and env files default to the base install and are overridable for the stand:
 
