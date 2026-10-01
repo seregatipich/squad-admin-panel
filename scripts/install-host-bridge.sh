@@ -97,9 +97,11 @@ install -m 0755 "$BIN_SRC" "$BIN_DST"
 
 # -------- 4. install systemd units -----------------------------------------
 
+# Hash of the installed unit files; files that do not exist yet (first
+# install) contribute nothing, so the fingerprint changes once they appear.
 unit_fingerprint() {
-  cat "$UNIT_DIR"/panel-host-bridge.service "$UNIT_DIR"/panel-host-bridge.socket \
-    "$UNIT_DIR"/panel-host-bridge.service.d/*.conf 2>/dev/null | sha256sum
+  { cat "$UNIT_DIR"/panel-host-bridge.service "$UNIT_DIR"/panel-host-bridge.socket \
+    "$UNIT_DIR"/panel-host-bridge.service.d/*.conf 2>/dev/null || true; } | sha256sum
 }
 UNITS_BEFORE=$(unit_fingerprint)
 
