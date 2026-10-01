@@ -374,24 +374,18 @@ importers:
       '@squad/diag':
         specifier: workspace:*
         version: link:../../../packages/diag
-      '@squad/shared-config':
-        specifier: workspace:*
-        version: link:../../../packages/shared-config
       '@squad/shared-types':
         specifier: workspace:*
         version: link:../../../packages/shared-types
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
       uuid:
         specifier: ^14.0.0
         version: 14.0.0
@@ -417,21 +411,15 @@ importers:
       '@squad/diag':
         specifier: workspace:*
         version: link:../../../packages/diag
-      '@squad/shared-config':
+      '@squad/worker-kit':
         specifier: workspace:*
-        version: link:../../../packages/shared-config
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22.10.1
@@ -682,21 +670,15 @@ importers:
       '@squad/diag':
         specifier: workspace:*
         version: link:../../../packages/diag
-      '@squad/shared-config':
+      '@squad/worker-kit':
         specifier: workspace:*
-        version: link:../../../packages/shared-config
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22.10.1
@@ -833,21 +815,15 @@ importers:
       '@squad/diag':
         specifier: workspace:*
         version: link:../../../packages/diag
-      '@squad/shared-config':
+      '@squad/worker-kit':
         specifier: workspace:*
-        version: link:../../../packages/shared-config
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22.10.1
@@ -919,18 +895,15 @@ importers:
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22.10.1
@@ -996,18 +969,15 @@ importers:
       '@squad/steam-api':
         specifier: workspace:*
         version: link:../../../packages/steam-api
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      postgres:
-        specifier: ^3.4.5
-        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22.10.1

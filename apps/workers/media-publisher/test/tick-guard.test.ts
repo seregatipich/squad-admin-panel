@@ -1,5 +1,5 @@
+import { guardAgainstOverlap as guardOverlappingTicks } from '@squad/worker-kit';
 import { describe, expect, it, vi } from 'vitest';
-import { guardOverlappingTicks } from '../src/tick-guard.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
