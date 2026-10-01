@@ -1,13 +1,9 @@
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { reconcileDossierAggregates } from '@squad/db';
-import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
-import Redis from 'ioredis';
-import pino from 'pino';
-import postgres from 'postgres';
+import type { Diag } from '@squad/diag';
+import { createWorkerLog, runWorker } from '@squad/worker-kit';
+import type postgres from 'postgres';
 
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-stats' } });
+const log = createWorkerLog('stats');
 
 const COMPONENT = 'worker-stats';
 // DOSSIER-2 (#189): guard against events missed during downtime. Runs nightly and
@@ -68,64 +64,29 @@ export async function runStatsReconcileTick(deps: StatsReconcileDeps): Promise<v
   }
 }
 
-async function main() {
-  const redisUrl = process.env.REDIS_URL;
-  const redis = redisUrl
-    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
-    : null;
-  const stopHeartbeat = redis
-    ? startHeartbeat({
-        redis,
-        name: 'stats',
-        statusFn: () => 'idle',
-        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
-      })
-    : () => {};
-
-  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
-
-  const url = process.env.DATABASE_URL;
-  const sql = url ? postgres(url, { max: 1 }) : null;
-  let interval: NodeJS.Timeout | null = null;
-  const shutdown = createGracefulShutdownController({
-    cleanup: async (sig) => {
-      log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
-      stopHeartbeat();
-      await sql?.end({ timeout: 5 }).catch(() => undefined);
-      await redis?.quit().catch(() => undefined);
-    },
-    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
-  });
-
-  if (sql) {
+runWorker({
+  name: 'stats',
+  log,
+  entrypoint: import.meta.url,
+  postgres: { optional: true, options: { max: 1 } },
+  redis: { optional: true },
+  heartbeatStatus: 'idle',
+  lifecycleDiag: false,
+  setup: ({ sql, diag }) => {
+    if (!sql) {
+      log.info('worker-stats idle — DATABASE_URL unset, dossier reconcile disabled');
+      return { ticks: [] };
+    }
     log.info('worker-stats started — dossier reconcile guard active');
-    await runStatsReconcileTick({ sql, diag });
-    await shutdown.markReady();
-    if (shutdown.isShutdownRequested()) return;
-    interval = setInterval(() => {
-      runStatsReconcileTick({ sql, diag }).catch((err) =>
-        log.error({ err: (err as Error).message }, 'dossier reconcile tick failed'),
-      );
-    }, RECONCILE_INTERVAL_MS);
-  } else {
-    log.info('worker-stats idle — DATABASE_URL unset, dossier reconcile disabled');
-    await shutdown.markReady();
-  }
-}
-
-function isMainEntrypoint(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainEntrypoint()) {
-  main().catch((err) => {
-    log.fatal({ err: (err as Error).message }, 'fatal');
-    process.exit(1);
-  });
-}
+    return {
+      ticks: [
+        {
+          intervalMs: RECONCILE_INTERVAL_MS,
+          overlap: 'allow',
+          failureMessage: 'dossier reconcile tick failed',
+          run: () => runStatsReconcileTick({ sql, diag }),
+        },
+      ],
+    };
+  },
+});
