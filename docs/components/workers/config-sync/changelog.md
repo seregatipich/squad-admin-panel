@@ -1,22 +1,22 @@
 # Changelog — worker-config-sync
 
-## 2026-09-30 — Ограничения и read-only корень контейнера (#47, #75)
+## 2026-09-30 — Limits and a read-only container root (#47, #75)
 
 ### Changed
 
-- Все воркеры в `docker/compose.yml` и `docker/compose.stand.yml` получают фрагмент `x-worker-limits` (`mem_limit: 512m`, `cpus: 1.0`) и `read_only: true` с `tmpfs: /tmp` из `x-hardening`; `config-sync` пишет только в `/run/panel-host-bridge`. См. `docs/operations/deployment.md`.
+- All workers in `docker/compose.yml` and `docker/compose.stand.yml` get the `x-worker-limits` fragment (`mem_limit: 512m`, `cpus: 1.0`) and `read_only: true` with `tmpfs: /tmp` from `x-hardening`; `config-sync` writes only to `/run/panel-host-bridge`. See `docs/operations/deployment.md`.
 
-## 2026-09-28 — восстановление после NOGROUP и отметка начала недоступности (#61)
+## 2026-09-28 — recovery after NOGROUP and an unreachable-since marker (#61)
 
-### Исправлено
+### Fixed
 
-- #873: при `NOGROUP` воркер пересоздаёт группу `config-sync` для каждого
-  активного сервера (раньше — только для новых), а затем ждёт 1 с перед
-  следующим чтением, поэтому потерянная группа активного сервера больше не
-  останавливает синхронизацию и не вызывает горячий цикл.
-- #871: промежуточный статус `syncing` переносит `unreachable_since` из
-  предыдущего статуса, поэтому отметка начала недоступности сохраняется между
-  попытками, и баннер о долгой недоступности Admins.cfg снова показывается.
+- #873: on `NOGROUP` the worker recreates the `config-sync` group for every
+  active server (previously only for new ones), and then waits 1 s before the
+  next read, so a lost group of an active server no longer
+  stops synchronization and does not cause a hot loop.
+- #871: the intermediate `syncing` status carries `unreachable_since` over from the
+  previous status, so the unreachable-since marker is preserved across
+  attempts, and the banner about long Admins.cfg unavailability is shown again.
 
 ## 2026-09-30 — audit hardening and sweep guards (#92)
 
@@ -32,54 +32,54 @@
 - Numeric env variables (`*_INTERVAL_MS`, `ADMINS_CFG_RECLAIM_MIN_IDLE_MS`,
   `ADMINS_CFG_RELAY_XADD_TIMEOUT_MS`) must be positive integers; a bad value fails startup.
 
-## 2026-09-27 — структура Admins.cfg защищена от значений из БД (#11)
+## 2026-09-27 — the Admins.cfg structure is protected from DB values (#11)
 
-### Исправлено
+### Fixed
 
-- Общий генератор `buildManagedSegmentBody` пропускает роль, имя которой не
-  годится как имя группы Admins.cfg (пустое, управляющие символы и переводы
-  строк, `:`, `,`, `/`), вместе с её строками `Admin=`. Комментарии назначений
-  и названия кланов пишутся одной строкой без последовательности `//`, поэтому
-  не могут добавить строки в сегмент или сдвинуть его маркеры.
+- The shared generator `buildManagedSegmentBody` skips a role whose name
+  is not usable as an Admins.cfg group name (empty, control characters and line
+  breaks, `:`, `,`, `/`), together with its `Admin=` lines. Assignment comments
+  and clan names are written on a single line without the `//` sequence, so they
+  cannot add lines to the segment or shift its markers.
 
-### Проверено
+### Verified
 
-- `packages/shared-config/test/admins-config.test.ts` и сценарий доставки
-  `test/delivery.integration.test.ts` на изолированных PostgreSQL и Redis.
+- `packages/shared-config/test/admins-config.test.ts` and the delivery scenario
+  `test/delivery.integration.test.ts` on isolated PostgreSQL and Redis.
 
-## 2026-09-16 — строгий режим VIP снят
+## 2026-09-16 — VIP strict mode removed
 
-### Удалено
+### Removed
 
-- Строгий режим `panel_meta.vip_lifecycle_strict` и проверка `superseded`-событий
-  магазина: worker всегда вставляет управляемый сегмент в исходный файл и
-  подтверждает каждую outbox-строку.
+- The `panel_meta.vip_lifecycle_strict` strict mode and the check of the store's `superseded` events:
+  the worker always inserts the managed segment into the source file and
+  acknowledges every outbox row.
 
-## 2026-09-03 — подтверждаемая доставка VIP (#5)
+## 2026-09-03 — confirmable VIP delivery (#5)
 
-### Изменено
+### Changed
 
-- VIP lifecycle создаёт по одной outbox-строке на сервер из зафиксированного
-  снимка с `correlation_id=event_id`; relay публикует её только после commit и
-  передаёт стабильный `_outbox_id`.
-- Worker сначала сохраняет в PostgreSQL `applied_at`, безопасный
-  `last_error` и нормализованный `reload_outcome`, а затем атомарно выполняет
-  `XACK` и точный `XDEL`. `server_removed` является успешным терминальным
-  исходом; временные `unavailable|timeout` остаются на повтор, постоянные
-  `rejected|invalid_result` видны как отказ без сырого RCON-текста.
-- Подписанный API status агрегирует подтверждения по `event_id`; `202` от
-  lifecycle больше нельзя трактовать как доставку. Состояние `applied`
-  возможно только для непустого полностью подтверждённого снимка, а
-  `superseded` имеет приоритет над поздним завершением старого outbox.
+- The VIP lifecycle creates one outbox row per server from a fixed
+  snapshot with `correlation_id=event_id`; the relay publishes it only after commit and
+  passes a stable `_outbox_id`.
+- The worker first saves `applied_at`, a safe
+  `last_error` and a normalized `reload_outcome` to PostgreSQL, and then atomically performs
+  `XACK` and an exact `XDEL`. `server_removed` is a successful terminal
+  outcome; transient `unavailable|timeout` stay for retry, permanent
+  `rejected|invalid_result` are visible as a failure without raw RCON text.
+- The signed API status aggregates acknowledgements by `event_id`; a `202` from the
+  lifecycle can no longer be treated as delivery. The `applied` state
+  is possible only for a non-empty, fully acknowledged snapshot, and
+  `superseded` takes priority over a late completion of an old outbox.
 
-### Проверено
+### Verified
 
-- Интеграционный сценарий API на изолированной PostgreSQL покрывает
-  `accepted -> applying -> applied`, постоянные и временные ошибки,
-  `server_removed`, пустой снимок, неизвестное событие и безопасный ответ без
-  платформенных идентификаторов, путей и сырого RCON. Управляемая гонка с
-  блокировкой таблицы подтверждает единый снимок supersession и outbox: новая
-  revision не позволяет старому событию вернуть смешанный `applied`.
+- The API integration scenario on an isolated PostgreSQL covers
+  `accepted -> applying -> applied`, permanent and transient errors,
+  `server_removed`, an empty snapshot, an unknown event and a safe response without
+  platform identifiers, paths and raw RCON. A controlled race with a
+  table lock confirms a single supersession and outbox snapshot: a new
+  revision does not let an old event return a mixed `applied`.
 
 ## 2026-07-28 — boot no longer requires the host bridge (#229)
 
@@ -139,8 +139,8 @@
 
 ### Fixed
 
-- **Root cause of `Admins.cfg недоступен / socket closed`**: `docker/compose.yml` had the worker on `group_add: [${PANEL_GID:-987}]` instead of `user: "0:${PANEL_GID:-987}"`. The container therefore ran with `gid=0(root)` as primary GID and 987 only in supplementary groups. The bridge's SO_PEERCRED auth check looks at the primary GID and rejected every connection with `rejected untrusted peer ... uid:0, user:root`. Every `file_read` and `file_atomic_write` failed with `socket closed` / `write EPIPE`, the syncer published `state: 'unreachable'`, and the drift banner surfaced to the operator. The same regression also affected `worker-log-ingest`. Fixed by replacing `group_add` with `user:` in both compose entries (matching the precedent set in commit 11cee5a for `worker-metrics-sampler`).
-- The combination of `bridge-client` transport retry (see `docs/components/bridge-client/changelog.md`) + the 30 s UI debounce makes routine `panel-host-bridge` restarts invisible to operators. Previously: any single dropped bridge call → `state: 'unreachable'` → user-facing "Admins.cfg недоступен на этом сервере" banner with a "Повторить синхронизацию" button for ≥ 60 s, until the worker's `reclaimPendingMessages` sweep eventually replayed the unacked event.
+- **Root cause of `Admins.cfg недоступен / socket closed`** (Admins.cfg unavailable / socket closed): `docker/compose.yml` had the worker on `group_add: [${PANEL_GID:-987}]` instead of `user: "0:${PANEL_GID:-987}"`. The container therefore ran with `gid=0(root)` as primary GID and 987 only in supplementary groups. The bridge's SO_PEERCRED auth check looks at the primary GID and rejected every connection with `rejected untrusted peer ... uid:0, user:root`. Every `file_read` and `file_atomic_write` failed with `socket closed` / `write EPIPE`, the syncer published `state: 'unreachable'`, and the drift banner surfaced to the operator. The same regression also affected `worker-log-ingest`. Fixed by replacing `group_add` with `user:` in both compose entries (matching the precedent set in commit 11cee5a for `worker-metrics-sampler`).
+- The combination of `bridge-client` transport retry (see `docs/components/bridge-client/changelog.md`) + the 30 s UI debounce makes routine `panel-host-bridge` restarts invisible to operators. Previously: any single dropped bridge call → `state: 'unreachable'` → user-facing "Admins.cfg недоступен на этом сервере" (Admins.cfg is unavailable on this server) banner with a "Повторить синхронизацию" (Retry synchronization) button for ≥ 60 s, until the worker's `reclaimPendingMessages` sweep eventually replayed the unacked event.
 
 ### Verification
 
@@ -153,7 +153,7 @@
 
 ### Added
 
-- `admins_cfg.sync_failed` audit row written on every bridge error (read or atomic-write phase). Spec §2.7.7 — "audit пишет failed sync attempts". Includes `phase`, `error`, and counts in the row context.
+- `admins_cfg.sync_failed` audit row written on every bridge error (read or atomic-write phase). Spec §2.7.7 — "the audit records failed sync attempts". Includes `phase`, `error`, and counts in the row context.
 - **Pending-message reclaim** via `XAUTOCLAIM` (`apps/workers/config-sync/src/index.ts`): runs once at boot and every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (default 30 s) per active server. Takes ownership of any pending message older than `ADMINS_CFG_RECLAIM_MIN_IDLE_MS` (default 60 s) and replays it. Closes the spec §2.7.7 "retry until success" guarantee — handles previous-consumer crashes, process restarts (consumer name regeneration), and persistently-unreachable bridges.
 - Two new env vars: `ADMINS_CFG_RECLAIM_INTERVAL_MS`, `ADMINS_CFG_RECLAIM_MIN_IDLE_MS` (see `configuration.md`).
 

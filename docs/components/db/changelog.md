@@ -6,51 +6,51 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-09-30
 
-### Пересчёт рейтингов обновляет строки на месте (#78, 1140)
+### Leaderboard recompute updates rows in place (#78, 1140)
 
 **Files:** `packages/db/src/leaderboard/aggregate.ts`, `packages/db/test/leaderboard-aggregate.test.ts`
 
-- `recomputeLeaderboardPeriod` вместо `DELETE` всего периода и `INSERT` заново делает одним оператором `INSERT … ON CONFLICT ON CONSTRAINT player_stat_periods_identity DO UPDATE … WHERE <значения изменились>` и удаляет только исчезнувшие строки. Строки без изменений не перезаписываются, их 12 индексов не трогаются, мёртвые кортежи не копятся. Возвращаемое значение по-прежнему число строк периода.
-- Индексы метрик `player_stat_periods_*_idx` оставлены: все десять метрик доступны как `metric` в `GET /api/v1/leaderboards`, и каждый индекс обслуживает сортировку окна `row_number()`. Удаление без данных `pg_stat_user_indexes` с боевой БД ухудшило бы запросы.
+- `recomputeLeaderboardPeriod` no longer runs `DELETE` of the whole period followed by `INSERT`; it now uses a single `INSERT … ON CONFLICT ON CONSTRAINT player_stat_periods_identity DO UPDATE … WHERE <values changed>` statement and deletes only the rows that disappeared. Unchanged rows are not rewritten, their 12 indexes are not touched, and dead tuples do not accumulate. The return value is still the number of rows in the period.
+- The metric indexes `player_stat_periods_*_idx` are kept: all ten metrics are available as `metric` in `GET /api/v1/leaderboards`, and each index serves the `row_number()` window sort. Dropping them without `pg_stat_user_indexes` data from the production database would degrade queries.
 
-### Заметки игрока переживают удаление автора (migration 0137, #78, 1137)
+### Player notes survive deletion of their author (migration 0137, #78, 1137)
 
 **Files:** `packages/db/drizzle/0137_player_notes_author_set_null.sql`, `packages/db/src/schema/player-notes.ts`, `apps/api/test/notes-deleted-author.test.ts`
 
-- `player_notes.author_id` стал nullable, FK `player_notes_author_id_players_id_fk` пересоздан с `ON DELETE SET NULL` (было `CASCADE`: удаление игрока-автора стирало все его заметки о других игроках).
-- Совместимо с предыдущим релизом: ослабляется ограничение, данные не меняются; внутренние join'ы прежних маршрутов просто пропускают заметку без автора.
+- `player_notes.author_id` became nullable, and the FK `player_notes_author_id_players_id_fk` was recreated with `ON DELETE SET NULL` (it was `CASCADE`: deleting an author player erased all of their notes about other players).
+- Compatible with the previous release: a constraint is relaxed and no data changes; the internal joins of the previous routes simply skip a note without an author.
 
-### Схема TS приведена к фактическому DDL, jsonb типизированы (#78, 1123, 1126, 1127)
+### TS schema aligned with the actual DDL, jsonb columns typed (#78, 1123, 1126, 1127)
 
 **Files:** `packages/db/src/schema/{events,combat-events,players,vip-tiers,seasons,servers,discord,external-ban-sources}.ts`, `packages/db/test/schema-ddl-parity.test.ts`
 
-- Объявлены индексы `events_seeding_kind_occurred_idx` (без `INCLUDE`, его drizzle не выражает), `combat_events_match_uuid_occurred_idx`, `players_bonus_balance_desc_idx`, `vip_tiers_role_id_idx`, `vip_tiers_purchasable_idx`, `seasons_start_day_key` и CHECK-и `vip_tiers_*` и `discord_message_templates_event_type_chk`/`_locale_chk`; `servers_status_enum` переименован в фактическое имя `servers_status_check`. DDL не менялся.
-- `schema-ddl-parity.test.ts` сверяет мигрированную БД (`pg_indexes`, `pg_constraint`) с объявлениями в схеме в обе стороны; оставшиеся необъявленные CHECK-и перечислены в тесте явным списком.
-- `discord_message_templates.template` типизирован как `DiscordEmbedTemplate`, `external_ban_sources.parser_config` как `Record<string, unknown>`: касты `as` у потребителей убраны.
-- `discord_message_templates.locale` остаётся описательной меткой языка текста шаблона, а не ключом выбора: `event_type` уникален, один шаблон на событие. Мультиязычность потребовала бы ослабить уникальность до `(event_type, locale)`, что ломает однострочные выборки предыдущего релиза; решение отложено до двухрелизной миграции.
+- Declared the indexes `events_seeding_kind_occurred_idx` (without `INCLUDE`, which drizzle cannot express), `combat_events_match_uuid_occurred_idx`, `players_bonus_balance_desc_idx`, `vip_tiers_role_id_idx`, `vip_tiers_purchasable_idx`, `seasons_start_day_key` and the CHECK constraints `vip_tiers_*` and `discord_message_templates_event_type_chk`/`_locale_chk`; `servers_status_enum` was renamed to the actual name `servers_status_check`. The DDL did not change.
+- `schema-ddl-parity.test.ts` compares the migrated database (`pg_indexes`, `pg_constraint`) with the declarations in the schema in both directions; the remaining undeclared CHECK constraints are listed explicitly in the test.
+- `discord_message_templates.template` is typed as `DiscordEmbedTemplate` and `external_ban_sources.parser_config` as `Record<string, unknown>`: the `as` casts in consumers were removed.
+- `discord_message_templates.locale` remains a descriptive label for the language of the template text, not a selection key: `event_type` is unique, one template per event. Multilingual support would require relaxing the uniqueness to `(event_type, locale)`, which breaks the previous release's single-row lookups; the decision is deferred to a two-release migration.
 
-### Заполнение combat_events.match_uuid для старых событий (migration 0138, #50 / #1073)
+### Backfill of combat_events.match_uuid for old events (migration 0138, #50 / #1073)
 
 **Files:** `packages/db/drizzle/0138_combat_events_match_uuid_backfill.sql`, `packages/db/test/combat-events-match-backfill.migration.test.ts`
 
-Одноразовый идемпотентный UPDATE: события до 0131 получают `match_uuid` матча того же сервера, покрывающего `occurred_at` (как `resolveMatchId` в log-ingest). Затрагиваются только строки с `match_uuid IS NULL` внутри известного матча; остальные остаются NULL. Bigint `match_id` не трогается (в нём никогда не было данных) и удаляется отдельным релизом, когда его не читает ни один выпуск. Совместимо с откатом.
+A one-off idempotent UPDATE: events before 0131 get the `match_uuid` of the match on the same server that covers `occurred_at` (like `resolveMatchId` in log-ingest). Only rows with `match_uuid IS NULL` inside a known match are touched; the rest stay NULL. The bigint `match_id` is not touched (it never held data) and is dropped in a separate release, once no release reads it. Compatible with rollback.
 
-### GeoIP: разрешение IP подключений в log-ingest (без миграции, #51)
+### GeoIP: resolving connection IPs in log-ingest (no migration, #51)
 
 **Files:** `packages/db/src/geoip/mmdb.ts`, `apps/workers/log-ingest/src/{index,player-identity/store}.ts`, `docker/compose{,.stand}.yml`
 
-- `maxmind` объявлен зависимостью `@squad/db`, `createMmdbLookup` использует статический импорт (раньше динамический `import(name)` молча возвращал `null`).
-- `worker-log-ingest` открывает GeoLite2-City из `GEOIP_DB_PATH` при старте и передаёт `geo` в `recordIpObservation`; без файла поля остаются `NULL`, как и раньше. Каталог с базой монтируется read-only (`GEOIP_DB_DIR`, по умолчанию `/var/lib/squad-panel/geoip`).
-- Автоматическая загрузка по ключу из `geoip_settings` по-прежнему не подключена.
+- `maxmind` is declared as a dependency of `@squad/db`, and `createMmdbLookup` uses a static import (previously the dynamic `import(name)` silently returned `null`).
+- `worker-log-ingest` opens GeoLite2-City from `GEOIP_DB_PATH` at startup and passes `geo` to `recordIpObservation`; without the file the fields stay `NULL`, as before. The directory with the database is mounted read-only (`GEOIP_DB_DIR`, default `/var/lib/squad-panel/geoip`).
+- Automatic download by the key from `geoip_settings` is still not wired up.
 
-### Неиспользуемые индексы и один open-снимок балансировщика (migration 0136, #78)
+### Unused indexes and a single open balancer snapshot (migration 0136, #78)
 
 **Files:** `packages/db/drizzle/0136_index_cleanup_balancer_open_key.sql`, `packages/db/src/schema/{balancer-proposals,external-ban-sources,media-upload-tokens,reporter-stats,sessions,diagnostic-events}.ts`, `packages/db/test/index-cleanup.migration.test.ts`
 
-- Удалены индексы, которые не читает ни один запрос: `external_bans_source_id_idx` (префикс `external_bans_dedup_key`), `reporter_stats_trusted_idx`, `reporter_stats_spam_idx`, `sessions_last_activity_idx`, `media_upload_tokens_expires_at_idx`, `diagnostic_events_server_ts_idx`, `diagnostic_events_kind_ts_idx`.
-- `balancer_proposals_open_key`: частичный уникальный индекс `(server_id, mode) WHERE status = 'open'`. Уже существующие дубли open переводятся в `superseded` (остаётся самый новый по `generated_at`).
-- Совместимо с предыдущим релизом: меняются только индексы; откат не требует действий.
-- `reconcileDossierAggregates`: режим `repair` берёт `SHARE ROW EXCLUSIVE` на три таблицы агрегатов и запрещён вместе с `windowHours`. Удалены неиспользуемые `openPlayerSession`, `closePlayerSession`, `closeCrashedSessions`, `aggregateSessionsByDay` (сессиями владеет воркер rcon).
+- Dropped the indexes that no query reads: `external_bans_source_id_idx` (covered by the `external_bans_dedup_key` prefix), `reporter_stats_trusted_idx`, `reporter_stats_spam_idx`, `sessions_last_activity_idx`, `media_upload_tokens_expires_at_idx`, `diagnostic_events_server_ts_idx`, `diagnostic_events_kind_ts_idx`.
+- `balancer_proposals_open_key`: a partial unique index `(server_id, mode) WHERE status = 'open'`. Existing duplicate open rows are moved to `superseded` (the newest by `generated_at` is kept).
+- Compatible with the previous release: only indexes change; rollback needs no action.
+- `reconcileDossierAggregates`: `repair` mode takes `SHARE ROW EXCLUSIVE` on the three aggregate tables and is forbidden together with `windowHours`. Removed the unused `openPlayerSession`, `closePlayerSession`, `closeCrashedSessions`, `aggregateSessionsByDay` (sessions are owned by the rcon worker).
 
 
 ### Audit-wave migrations consolidated into 0119–0135
@@ -83,23 +83,23 @@ The audit branches each added migrations independently and collided on 0119–01
 
 ## 2026-09-28
 
-### Индексы поиска и хранения, подтверждённые заявки whitelist (migrations 0119, 0120, #52)
+### Search and retention indexes, verified whitelist applications (migrations 0119, 0120, #52)
 
 **Files:** `packages/db/drizzle/0119_search_and_retention_indexes.sql`, `packages/db/drizzle/0120_whitelist_application_verified.sql`, `packages/db/src/schema/{players,player-name-history,player-reports,events,whitelist-applications}.ts`, `packages/db/test/search-and-retention-indexes.migration.test.ts`
 
-- 0119: триграммные GIN-индексы `players_canonical_name_normalized_trgm_idx` и `player_name_history_name_normalized_trgm_idx` для поиска ников `LIKE '%…%'` (B-tree такой поиск не обслуживает); `player_reports_reporter_created_idx (reporter_player_id, created_at)` и `player_reports_handler_player_idx`; `processed_events_processed_at_idx` под удаление по сроку хранения вместо неиспользуемого `processed_events_group_idx`.
-- 0120: `whitelist_applications.verified boolean NOT NULL DEFAULT false`; уникальность «одна ожидающая заявка на SteamID64» теперь отдельно для подтверждённых и неподтверждённых заявок, так что анонимная заявка на чужой SteamID больше не блокирует владельца.
-- Обе миграции совместимы с предыдущим релизом: меняются только индексы и добавляется столбец со значением по умолчанию.
+- 0119: trigram GIN indexes `players_canonical_name_normalized_trgm_idx` and `player_name_history_name_normalized_trgm_idx` for nickname search with `LIKE '%…%'` (a B-tree does not serve such a search); `player_reports_reporter_created_idx (reporter_player_id, created_at)` and `player_reports_handler_player_idx`; `processed_events_processed_at_idx` for retention-based deletion instead of the unused `processed_events_group_idx`.
+- 0120: `whitelist_applications.verified boolean NOT NULL DEFAULT false`; the uniqueness of "one pending application per SteamID64" now applies separately to verified and unverified applications, so an anonymous application for someone else's SteamID no longer blocks the owner.
+- Both migrations are compatible with the previous release: only indexes change and a column with a default value is added.
 
-### `recomputeServerDailyStats`: онлайн и администраторы (#52)
+### `recomputeServerDailyStats`: online and administrators (#52)
 
-- Онлайн — это все подключённые сессии (`online`, `boost`, `seed`); раньше игроки в режиме сидинга и boost выпадали из `avg_online`, `peak_online`, `online_seconds`. Очередь (`queue`) по-прежнему считается отдельно.
-- Роль только с `reserve` (VIP, `QueuePriority`) больше не делает игрока администратором в `avg_admins`, `peak_admins`.
-- Уже посчитанные дни не пересчитываются: воркер переписывает только окно «вчера + сегодня».
+- Online means all connected sessions (`online`, `boost`, `seed`); previously players in seeding and boost mode dropped out of `avg_online`, `peak_online`, `online_seconds`. The queue (`queue`) is still counted separately.
+- A role with only `reserve` (VIP, `QueuePriority`) no longer makes a player an administrator in `avg_admins`, `peak_admins`.
+- Days that were already computed are not recomputed: the worker rewrites only the "yesterday + today" window.
 
-### `seed-demo` только для локальной базы (#52)
+### `seed-demo` for a local database only (#52)
 
-- Скрипт отказывается работать при `NODE_ENV=production` и с хостом `DATABASE_URL`, отличным от `localhost`, `127.0.0.1`, `::1`, `postgres` (разрешить удалённую тестовую базу: `SEED_DEMO_ALLOW_REMOTE=1`). Он исключён из сборки (`tsconfig.build.json`) и не попадает в `dist/` и образ API. Демо-SteamID лежат ниже диапазона реальных аккаунтов; существующее название организации не затирается.
+- The script refuses to run with `NODE_ENV=production` and with a `DATABASE_URL` host other than `localhost`, `127.0.0.1`, `::1`, `postgres` (to allow a remote test database: `SEED_DEMO_ALLOW_REMOTE=1`). It is excluded from the build (`tsconfig.build.json`) and does not end up in `dist/` or the API image. Demo SteamIDs lie below the range of real accounts; an existing organization name is not overwritten.
 
 ### Trigram indexes for player-name substring search (migration 0119)
 
@@ -304,11 +304,11 @@ New table `issue_links` (#156) — the structural link between a tracker ticket 
 
 - `issue_links(id, issue_id, entity_type, entity_id, created_by, created_at)`. `issue_id` `REFERENCES issues(id) ON DELETE CASCADE`; `created_by` `REFERENCES players(id) ON DELETE SET NULL` (drives the detach ownership check).
 - CHECK `issue_links_entity_type_check` — `entity_type IN ('player','server','moderation_action','media_file')`.
-- `entity_id` is deliberately **not** a foreign key, exactly as in `media_links`: it is polymorphic across four target tables, so existence is verified by the API route layer before insert and a vanished target reads back as «Удалённый объект» instead of breaking the ticket.
+- `entity_id` is deliberately **not** a foreign key, exactly as in `media_links`: it is polymorphic across four target tables, so existence is verified by the API route layer before insert and a vanished target reads back as «Удалённый объект» (Deleted object) instead of breaking the ticket.
 - Unique index `issue_links_issue_entity_key` on `(issue_id, entity_type, entity_id)` — one link per ticket/target pair; a duplicate surfaces as `409 link_exists`.
 - Indexes `issue_links_entity_idx` on `(entity_type, entity_id)` (reverse lookup for the player card) and `issue_links_issue_idx` on `(issue_id)`.
 
-**Deletion strategy** (the acceptance criteria required one to be fixed in the migration): cascade on `issue_id`, no constraint on `entity_id`. "Нельзя удалить игрока при живых ссылках" is unreachable on a polymorphic column — `RESTRICT` needs a foreign key — and the panel exposes no hard player-delete route, so the read path degrading gracefully is the whole mitigation.
+**Deletion strategy** (the acceptance criteria required one to be fixed in the migration): cascade on `issue_id`, no constraint on `entity_id`. "Cannot delete a player while live references exist" is unreachable on a polymorphic column — `RESTRICT` needs a foreign key — and the panel exposes no hard player-delete route, so the read path degrading gracefully is the whole mitigation.
 ### LEAD-5 — server_daily_stats (migration 0101)
 
 **Files:** `packages/db/drizzle/0101_server_daily_stats.sql`, `packages/db/src/schema/server-daily-stats.ts`, `packages/db/src/statistics/daily.ts`, `packages/db/src/schema/index.ts`, `packages/db/src/index.ts`, `packages/db/test/statistics-daily.test.ts`
@@ -410,7 +410,7 @@ No schema change — the `seeding_seconds` column, its `player_stat_periods_metr
 - Color CHECK loosened to accept either a Tailwind palette name or a `#RRGGBB` hex code (back-compat with palette-named seed roles).
 - New table `role_squad_permissions(role_id uuid → roles, squad_permission_key text)` with a CHECK enumerating the 21 Squad in-game permission keys.
 
-### Migration 0015 — re-seed roles per Эпик 2 Phase 2 spec
+### Migration 0015 — re-seed roles per Epic 2 Phase 2 spec
 
 - Owner row updated: `color='#FF0000'`, all three access flags `true`.
 - Five new non-system roles created (or upserted by name): **Admin** `#CD5C5C` (panel_access), **Moderator** `#2E8B57` (panel_access), **QueuePriority** `#DAA520`, **Cameraman** `#8B008B`, **Intern** `#005EC2`. Each gets a distinct Squad-permission set per spec — see `docs/components/rbac/data-model.md`.

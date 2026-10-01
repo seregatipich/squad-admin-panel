@@ -32,7 +32,7 @@ docker compose up -d web
 
 **Cause:** The Steam account authenticated successfully but the player has `role_id = NULL` in the database. The user has not been granted a panel role.
 
-**Fix:** An existing Owner user must assign a role to the player via `/users` → "Назначить роль" or via `/players/:steam_id64` → PanelAccessSection.
+**Fix:** An existing Owner user must assign a role to the player via `/users` → "Назначить роль" (Assign role) or via `/players/:steam_id64` → PanelAccessSection.
 
 ---
 
@@ -68,7 +68,7 @@ sg panel -c 'bash scripts/verify-bridge.sh'
 
 ---
 
-## Dashboard host block shows "bridge: недоступен"
+## Dashboard host block shows "bridge: недоступен" (unavailable)
 
 **Symptom:** The Host widget on the dashboard shows a red status and the bridge as unavailable.
 
@@ -82,7 +82,7 @@ sudo systemctl restart panel-host-bridge
 
 ---
 
-## MetricHistoryModal shows "Ошибка загрузки"
+## MetricHistoryModal shows "Ошибка загрузки" (Loading error)
 
 **Symptom:** Clicking a metric card (CPU, RAM, Disk, Net) on the dashboard opens the modal but shows an error.
 
@@ -94,7 +94,7 @@ sudo systemctl restart panel-host-bridge
 
 ## ConnectionBanner stuck red after refresh
 
-**Symptom:** The top of every dashboard page shows «Связь с панелью потеряна — переподключаемся…» and never disappears.
+**Symptom:** The top of every dashboard page shows «Связь с панелью потеряна — переподключаемся…» (Connection to the panel lost — reconnecting…) and never disappears.
 
 **Cause:** Either the session expired (the WS `Sec-WebSocket-Protocol` upgrade fails because the cookie is no longer valid) or the API was restarted and the singleton lost its socket. The reconnect schedule walks `BACKOFF_STEPS_MS = [1s, 2s, 4s, 8s, 16s, 30s]` and stops re-trying when the page goes idle.
 
@@ -102,13 +102,13 @@ sudo systemctl restart panel-host-bridge
 
 ## ConnectionBanner stuck amber
 
-**Symptom:** Banner shows «Bridge не отвечает — операции с сервером временно недоступны».
+**Symptom:** Banner shows «Bridge не отвечает — операции с сервером временно недоступны» (Bridge is not responding — server operations are temporarily unavailable).
 
 **Cause:** API is fine and the WS is open, but `bridge-heartbeat` reports `bridge.connection: down`. The Go daemon at `/run/panel-host-bridge/bridge.sock` died or the systemd unit failed.
 
 **Fix:** `sudo systemctl status panel-host-bridge` and `sudo systemctl restart panel-host-bridge.service`. The banner clears within ~5 s of the next successful ping.
 
-## "Архив серверов" page is empty after I deleted servers
+## "Архив серверов" (Server archive) page is empty after I deleted servers
 
 **Symptom:** `/servers/archive` shows zero rows even though servers were deleted in the past.
 
@@ -116,7 +116,7 @@ sudo systemctl restart panel-host-bridge
 
 **Fix:** none. Old deletions are gone; future ones will appear here.
 
-## Restore wizard fails at "Установка"
+## Restore wizard fails at "Установка" (Installation)
 
 **Symptom:** `/servers/archive/[id]/restore` got past the slug step (server row created), but the install WS shows red errors.
 
@@ -132,7 +132,7 @@ sudo systemctl restart panel-host-bridge
 
 ## Steam login lands on `/me` instead of the panel
 
-**Symptom:** Fresh installation: you authenticated via Steam but landed on the «Мой VIP» self-service page (`/me`) rather than the dashboard. Since VIPSUB-5 (#171) every successful Steam login gets a session; a player whose role has no `panel_access` — including a player with no role at all — gets a `self_service`-scoped one and is redirected to `/me`. Typing a `(dashboard)` URL by hand bounces back to `/me` as well: the layout redirects any session whose `permissions` array is empty.
+**Symptom:** Fresh installation: you authenticated via Steam but landed on the «Мой VIP» (My VIP) self-service page (`/me`) rather than the dashboard. Since VIPSUB-5 (#171) every successful Steam login gets a session; a player whose role has no `panel_access` — including a player with no role at all — gets a `self_service`-scoped one and is redirected to `/me`. Typing a `(dashboard)` URL by hand bounces back to `/me` as well: the layout redirects any session whose `permissions` array is empty.
 
 **Cause:** The first-owner auto-claim did not fire, so your player has no panel role. `claimFirstOwner` skips when `panel_meta.first_owner_claimed` is already `true` or when some player already holds the Owner role — typically because someone else logged in first. The host sentinel `/var/lib/squad-panel/.first-owner-claimed` is written after a successful claim but is never consulted; the DB is the only source of truth.
 

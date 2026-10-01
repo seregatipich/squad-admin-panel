@@ -1,219 +1,219 @@
-# Дизайн-система панели — Apple HIG, тёмное оформление
+# Panel design system — Apple HIG, dark appearance
 
-Панель следует Apple Human Interface Guidelines в той их части, которая применима
-к плотному настольному веб-интерфейсу: оператор смотрит в один и тот же экран
-всю смену, работает мышью и клавиатурой, и почти всё, что он делает, — это
-чтение широких таблиц и запуск действий над сервером.
+The panel follows the Apple Human Interface Guidelines to the extent they apply
+to a dense desktop web interface: the operator looks at the same screen
+for an entire shift, works with a mouse and keyboard, and almost everything they do is
+reading wide tables and launching actions against a server.
 
-Токены живут в [`apps/web/src/styles/globals.css`](../../../apps/web/src/styles/globals.css);
-этот документ описывает, **как** ими пользоваться, и является источником правды
-для любой новой вёрстки. Примитивы, реализующие правила, — в
+The tokens live in [`apps/web/src/styles/globals.css`](../../../apps/web/src/styles/globals.css);
+this document describes **how** to use them and is the source of truth
+for any new markup. The primitives that implement the rules are in
 `apps/web/src/components/ui/`.
 
-## 1. Иерархия и типографика
+## 1. Hierarchy and typography
 
-Базовый кегль — 13px (`body`). Шкала выведена из HIG-шкалы macOS и сжата до
-пяти уровней; больше уровней на одном экране HIG не рекомендует.
+The base font size is 13px (`body`). The scale is derived from the macOS HIG scale and compressed to
+five levels; the HIG does not recommend more levels on a single screen.
 
-| Роль | Классы | Где применяется |
+| Role | Classes | Where it applies |
 |---|---|---|
-| Заголовок страницы | `text-[22px] font-semibold tracking-[-0.01em]` | ровно один на страницу, через `PageHeader` |
-| Заголовок раздела | `text-[17px] font-semibold` | заголовок крупного блока внутри страницы |
-| Заголовок карточки | `text-[13px] font-semibold` | `CardHeader` |
-| Основной текст | `text-[13px]` (по умолчанию) | содержимое, ячейки таблиц |
-| Вторичный текст | `text-xs text-ink-3` | подписи, подсказки, метаданные |
-| Надзаголовок | `text-2xs uppercase tracking-[0.06em] text-ink-3` | только служебные ярлыки над значением |
+| Page title | `text-[22px] font-semibold tracking-[-0.01em]` | exactly one per page, via `PageHeader` |
+| Section title | `text-[17px] font-semibold` | heading of a large block within a page |
+| Card title | `text-[13px] font-semibold` | `CardHeader` |
+| Body text | `text-[13px]` (default) | content, table cells |
+| Secondary text | `text-xs text-ink-3` | captions, hints, metadata |
+| Overline | `text-2xs uppercase tracking-[0.06em] text-ink-3` | only utility labels above a value |
 
-Правила:
+Rules:
 
-- **11px — нижняя граница.** Ничего мельче `text-2xs` в интерфейсе не существует.
-- **Заглавные буквы только для служебных ярлыков** («СЕРВЕРЫ», «CPU»). Смысловой
-  текст — заголовки страниц, названия колонок, имена — набирается обычным
-  регистром: HIG считает capitals вредными для скорости чтения.
-- **Вес вместо размера.** Различие уровней делается `font-semibold`, а не
-  прыжком кегля: так плотность остаётся ровной.
-- Цифры, которые складываются в столбцы, набираются `tabular-nums` (включено
-  глобально для `table` и класса `.tabular`).
+- **11px is the lower bound.** Nothing smaller than `text-2xs` exists in the interface.
+- **Capital letters only for utility labels** («СЕРВЕРЫ» (SERVERS), «CPU»). Meaningful
+  text — page titles, column names, names — is set in regular
+  case: the HIG considers capitals harmful to reading speed.
+- **Weight instead of size.** Levels are distinguished with `font-semibold`, not by a
+  jump in font size: this keeps the density even.
+- Numbers that stack into columns are set with `tabular-nums` (enabled
+  globally for `table` and the `.tabular` class).
 
-## 2. Сетка и отступы
+## 2. Grid and spacing
 
-8-точечная сетка. Разрешены `gap-1 gap-2 gap-3 gap-4 gap-6 gap-8`
-(4/8/12/16/24/32px) — и ничего между ними.
+8-point grid. Allowed: `gap-1 gap-2 gap-3 gap-4 gap-6 gap-8`
+(4/8/12/16/24/32px) — and nothing in between.
 
-Единственное исключение — `gap-1.5` (6px) **внутри одной строки-группы**:
-значок и его подпись, метка и число рядом с ней. Сетка расставляет блоки, а
-оптический зазор внутри одного элемента управления к ней не относится: 4px
-склеивает значок с текстом, 8px разрывает их на две вещи. В разметке страницы
-и между карточками `gap-1.5` не используется.
+The only exception is `gap-1.5` (6px) **inside a single row group**:
+an icon and its caption, a label and the number next to it. The grid lays out blocks, while
+the optical gap inside a single control does not follow it: 4px
+glues an icon to its text, 8px tears them into two things. In page markup
+and between cards `gap-1.5` is not used.
 
-| Уровень | Отступ |
+| Level | Spacing |
 |---|---|
-| Между крупными блоками страницы | `space-y-6` |
-| Между карточками в сетке | `gap-4` |
-| Внутри карточки | `p-4`, плотной — `p-3` |
-| Между подписью и значением | `gap-1` |
+| Between large page blocks | `space-y-6` |
+| Between cards in a grid | `gap-4` |
+| Inside a card | `p-4`, for a dense one — `p-3` |
+| Between a caption and a value | `gap-1` |
 
-Вертикальные поля страницы задаёт **только** `PageContainer`. Страница не
-добавляет ни `py-*`, ни `pb-20`.
+The vertical page margins are set **only** by `PageContainer`. A page does not
+add `py-*` or `pb-20`.
 
-### 2.1. Что делать, когда не помещается
+### 2.1. What to do when it does not fit
 
-**Горизонтальной прокрутки в навигации не бывает.** Пункт, уехавший за край
-полосы, недостижим, а единственным признаком его существования оказывается
-тонкая полоска прокрутки, которую не видно. На 1024px так пропадали три
-раздела из семи, включая «Настройки».
+**There is no horizontal scrolling in navigation.** An item that slips past the edge of the
+bar is unreachable, and the only sign of its existence is a
+thin scrollbar that cannot be seen. At 1024px three of seven
+sections disappeared this way, including «Настройки» (Settings).
 
-Правило: то, что не помещается, уходит в меню «Ещё» — панель остаётся в одну
-строку на любой ширине, и ни один раздел не становится недостижимым. Решение
-принимает `fitNavEntries` (`src/lib/nav-overflow.ts`) по измеренным ширинам;
-место под саму кнопку «Ещё» резервируется заранее, иначе последний влезший
-пункт вытолкнул бы её за край.
+The rule: whatever does not fit goes into the «Ещё» (More) menu — the bar stays on one
+line at any width, and no section becomes unreachable. The decision is
+made by `fitNavEntries` (`src/lib/nav-overflow.ts`) from the measured widths;
+space for the «Ещё» (More) button itself is reserved in advance, otherwise the last item that fit
+would push it past the edge.
 
-Горизонтальная прокрутка допустима только у **содержимого**, которое по своей
-природе шире экрана: широкая таблица, блок кода, лог. Навигация к ним не
-относится.
+Horizontal scrolling is acceptable only for **content** that is wider than the screen
+by nature: a wide table, a code block, a log. Navigation is
+not among them.
 
-## 3. Ширина содержимого
+## 3. Content width
 
-Пять разных `max-w` на одно приложение — это пять разных приложений. Ширина
-выбирается из четырёх вариантов через `PageContainer width=…`:
+Five different `max-w` values in one application make five different applications. The width
+is chosen from four variants via `PageContainer width=…`:
 
-| `width` | Значение | Для чего |
+| `width` | Value | What it is for |
 |---|---|---|
-| `full` (по умолчанию) | `max-w-[1600px]` | таблицы, дашборды, операционные экраны |
-| `wide` | `max-w-6xl` | список + детали, календари |
-| `reading` | `max-w-3xl` | настройки, сгруппированные списки |
-| `form` | `max-w-xl` | одиночная форма, мастер |
+| `full` (default) | `max-w-[1600px]` | tables, dashboards, operational screens |
+| `wide` | `max-w-6xl` | list + details, calendars |
+| `reading` | `max-w-3xl` | settings, grouped lists |
+| `form` | `max-w-xl` | a single form, a wizard |
 
-## 4. Поверхности, границы, радиусы
+## 4. Surfaces, borders, radii
 
-Три уровня и только они: `bg-bg` (страница) → `bg-surface` (карточка) →
-`bg-raised` (вложенный элемент управления, активное состояние).
+Three levels and only these: `bg-bg` (page) → `bg-surface` (card) →
+`bg-raised` (nested control, active state).
 
-- Разделители — `border-line`, внутри списков — `divide-y divide-line`.
-- Радиусы — `rounded-card` (10px) для карточек и `rounded-ctl` (6px) для
-  элементов управления. Значение `rounded` (4px) не используется.
-  Исключение — `rounded-sm` на **метках данных** размером 8–10px (квадратик
-  легенды, ячейка тепловой карты, вершина столбика): 6px превращает такой
-  квадрат в кружок, а кружок в легенде уже означает другое — состояние.
-- Тени не используются **нигде, включая плавающие слои**: меню, палитра
-  команд, диалог и всплывающее оповещение отделяются от фона рамкой и
-  поверхностью. Глубина передаётся поверхностью, как в тёмном оформлении Apple.
-- **Материал — только у прилипающих слоёв, плавающие непрозрачны.** Верхняя
-  панель, полоса серверов, шапка таблицы, прилипающая шапка карточки — это
-  `bg-surface/80 backdrop-blur-xl`: содержимое проезжает под ними, и размытие
-  показывает, что оно там есть. Меню, палитра команд, подсказки поиска —
-  сплошной `bg-surface`. Причина техническая и жёсткая: `backdrop-filter`
-  создаёт свой корень, и у элемента **внутри** размытого предка собственное
-  размытие не работает вовсе — остаётся только полупрозрачная заливка, сквозь
-  которую видно текст страницы. Выпадающее меню верхней панели именно так и
-  просвечивало.
-- Материал (`bg-surface/80 backdrop-blur-xl`) — только у прилипающих слоёв:
-  верхняя панель, панель серверов, шапка таблицы, подложка диалога.
+- Dividers — `border-line`, inside lists — `divide-y divide-line`.
+- Radii — `rounded-card` (10px) for cards and `rounded-ctl` (6px) for
+  controls. The `rounded` value (4px) is not used.
+  The exception is `rounded-sm` on **data marks** 8–10px in size (a legend
+  swatch, a heatmap cell, the tip of a bar): 6px turns such a
+  square into a circle, and a circle in a legend already means something else — a state.
+- Shadows are not used **anywhere, including floating layers**: menus, the command
+  palette, the dialog and the popup notification are separated from the background by a border and a
+  surface. Depth is conveyed by the surface, as in Apple's dark appearance.
+- **Material only on sticky layers; floating layers are opaque.** The top
+  bar, the server strip, the table header, the sticky card header are
+  `bg-surface/80 backdrop-blur-xl`: content scrolls under them, and the blur
+  shows that it is there. Menus, the command palette, search suggestions are
+  solid `bg-surface`. The reason is technical and hard: `backdrop-filter`
+  creates its own root, and an element **inside** a blurred ancestor gets no blur of its own at
+  all — only a semi-transparent fill remains, through
+  which the page text shows. The top bar's dropdown menu was see-through
+  in exactly this way.
+- Material (`bg-surface/80 backdrop-blur-xl`) is only for sticky layers:
+  the top bar, the server bar, the table header, the dialog backdrop.
 
-## 5. Цвет
+## 5. Color
 
-Цвет означает состояние, а не украшение.
+Color means state, not decoration.
 
-- `accent` — «сюда можно нажать»: ссылки, первичное действие, выделение.
-- `good` / `warn` / `crit` — состояние системы.
-- `crit` как фон кнопки — **только** необратимое разрушающее действие.
-  Обычные «Удалить фильтр», «Завершить сессию», «Отмена» — вторичные кнопки.
-- Остальные оттенки — только чтобы соседние категории (серии графиков, цвета
-  ролей) различались. Категориальный оттенок объявляется именованной константой
-  с комментарием, почему он категориальный, а не пишется строкой по месту.
-- **Надпись на подложке тона берёт `*-ink`, а не сам токен.** На собственной
-  подложке (`bg-accent-dim`, `bg-warn/10`, …) токен состояния садится до
-  4.01:1 (accent) и 3.98:1 (crit) над карточкой и не проходит AA для 11px —
-  а меньше 11px в панели ничего нет. Токены `accent-ink` / `good-ink` /
-  `warn-ink` / `crit-ink` дают на тех же подложках 4.96–6.55.
-- **Никогда только цветом.** Любое состояние дублируется текстом или значком.
+- `accent` — "you can click here": links, the primary action, selection.
+- `good` / `warn` / `crit` — system state.
+- `crit` as a button background is **only** for an irreversible destructive action.
+  The ordinary «Удалить фильтр» (Delete filter), «Завершить сессию» (End session), «Отмена» (Cancel) are secondary buttons.
+- The remaining hues exist only so that neighboring categories (chart series, role
+  colors) can be told apart. A categorical hue is declared as a named constant
+  with a comment on why it is categorical, rather than written as an inline string.
+- **Text on a tinted background uses `*-ink`, not the token itself.** On its own
+  tinted background (`bg-accent-dim`, `bg-warn/10`, …) the state token drops to
+  4.01:1 (accent) and 3.98:1 (crit) over the card and fails AA for 11px —
+  and nothing smaller than 11px exists in the panel. The `accent-ink` / `good-ink` /
+  `warn-ink` / `crit-ink` tokens give 4.96–6.55 on the same backgrounds.
+- **Never color alone.** Any state is duplicated with text or an icon.
 
-Штатные шкалы Tailwind (`neutral-800`, `sky-300`, …) в новой вёрстке не
-используются вовсе: они существуют только как совместимость и разрешены лишь
-там, где оттенок именно категориальный (`RoleColorDot`, доли диаграмм).
+The stock Tailwind scales (`neutral-800`, `sky-300`, …) are not used at all in new
+markup: they exist only for compatibility and are allowed only
+where the hue is genuinely categorical (`RoleColorDot`, chart shares).
 
-## 6. Элементы управления
+## 6. Controls
 
-| Элемент | Высота | Классы |
+| Element | Height | Classes |
 |---|---|---|
-| Кнопка `md` | 32px | `h-8 px-3 rounded-ctl text-xs font-medium` |
-| Кнопка `sm` | 28px | `h-7 px-2.5 rounded-ctl text-2xs font-medium` |
-| Кнопка-значок | 28×28px | `h-7 w-7 grid place-items-center rounded-ctl` |
-| Поле ввода | 32px | `h-8 px-2.5 rounded-ctl bg-raised border border-line` |
+| Button `md` | 32px | `h-8 px-3 rounded-ctl text-xs font-medium` |
+| Button `sm` | 28px | `h-7 px-2.5 rounded-ctl text-2xs font-medium` |
+| Icon button | 28×28px | `h-7 w-7 grid place-items-center rounded-ctl` |
+| Input field | 32px | `h-8 px-2.5 rounded-ctl bg-raised border border-line` |
 
-28px — нижняя граница цели нажатия для указателя (HIG для macOS); всё, что
-меньше, считается дефектом. У кнопки-значка обязателен `aria-label`.
+28px is the lower bound of a pointer target (macOS HIG); anything
+smaller is considered a defect. An icon button must have an `aria-label`.
 
-Варианты кнопки: `primary` (`bg-accent text-bg`), `secondary`
-(`bg-raised text-ink border border-line`), `ghost` (без фона, `hover:bg-raised`),
+Button variants: `primary` (`bg-accent text-bg`), `secondary`
+(`bg-raised text-ink border border-line`), `ghost` (no background, `hover:bg-raised`),
 `destructive` (`bg-crit text-bg`), `success` (`bg-green-700 text-white`),
-`plain` (текстовая, `text-accent`).
+`plain` (text-only, `text-accent`).
 
-`success` — утвердительное действие, открывающее возможность (например,
-«Изменить», снимающее режим только для чтения в редакторе конфигов). Это не
-`primary`: основное действие формы остаётся синим. Фон берётся с тёмной
-ступени зелёной шкалы, а не с семантического `good` (#30d158) — тот рассчитан
-на текст и бейджи, белый на нём даёт 1.9:1, тогда как `green-700` — 5.35:1.
+`success` is an affirmative action that unlocks a capability (for example
+«Изменить» (Edit), which lifts read-only mode in the config editor). It is not
+`primary`: the main action of a form stays blue. The background is taken from the dark
+step of the green scale, not from the semantic `good` (#30d158) — that one is designed for
+text and badges, white on it gives 1.9:1, whereas `green-700` gives 5.35:1.
 
-Порядок в подвале диалога — по HIG: подтверждающая кнопка **справа**, отмена
-слева от неё; Escape и «Отмена» делают одно и то же.
+The order in a dialog footer follows the HIG: the confirm button is on the **right**, cancel
+to its left; Escape and «Отмена» (Cancel) do the same thing.
 
-## 7. Фокус и клавиатура
+## 7. Focus and keyboard
 
-Глобальное правило `:focus-visible { outline: 2px solid accent; offset 2px }`
-уже задано. Ни один компонент не имеет права его снимать.
+The global rule `:focus-visible { outline: 2px solid accent; offset 2px }`
+is already in place. No component may remove it.
 
-- Выпадающее меню — `role="menu"` + `role="menuitem"`, стрелки вверх/вниз,
-  Home/End, Escape, возврат фокуса на триггер.
-- Модальное окно — нативный `<dialog>`: браузер сам даёт фокус-ловушку,
-  верхний слой, `::backdrop` и Escape.
-- Сортируемый заголовок таблицы — `<button>` с `aria-sort` на `<th>`.
+- Dropdown menu — `role="menu"` + `role="menuitem"`, up/down arrows,
+  Home/End, Escape, focus returns to the trigger.
+- Modal window — a native `<dialog>`: the browser itself provides the focus trap,
+  the top layer, `::backdrop` and Escape.
+- A sortable table header — a `<button>` with `aria-sort` on the `<th>`.
 
-## 8. Состояния
+## 8. States
 
-Каждый экран обязан отвечать на четыре вопроса: что грузится, что пусто, что
-сломалось, что происходит.
+Every screen must answer four questions: what is loading, what is empty, what
+broke, what is happening.
 
-- **Загрузка** — `Skeleton` в форме будущего содержимого, а не строка «Загрузка…».
-- **Пусто** — `EmptyState` с заголовком, объяснением и действием. Отдельно
-  различаются «ничего нет» и «ничего не нашлось по фильтру».
-- **Ошибка** — `InlineBanner tone="crit"` с текстом и кнопкой «Повторить».
-- **Выполняется** — кнопка переходит в `loading`, остаётся на месте и не меняет
-  ширину.
+- **Loading** — a `Skeleton` in the shape of the future content, not a «Загрузка…» (Loading…) string.
+- **Empty** — an `EmptyState` with a title, an explanation and an action. "Nothing exists" and
+  "nothing matched the filter" are distinguished.
+- **Error** — `InlineBanner tone="crit"` with text and a «Повторить» (Retry) button.
+- **In progress** — the button switches to `loading`, stays in place and does not change
+  width.
 
-## 9. Движение
+## 9. Motion
 
-Только чтобы объяснить изменение: `transition-colors duration-150`,
-появление слоя — `duration-200 ease-out`. Пульсация зарезервирована за
-индикатором «данные идут прямо сейчас» и больше нигде не применяется.
-`prefers-reduced-motion` уже обрабатывается глобально.
+Only to explain a change: `transition-colors duration-150`,
+a layer appearing — `duration-200 ease-out`. Pulsing is reserved for the
+"data is flowing right now" indicator and is not applied anywhere else.
+`prefers-reduced-motion` is already handled globally.
 
-## 10. Таблицы
+## 10. Tables
 
-- Шапка прилипает и знает, к чему. `Table` выбирает модель прокрутки: без
-  `maxHeight` таблица едет вместе со страницей и шапка прилипает к окну под
-  верхней панелью, с `maxHeight` — у таблицы свой скроллер и шапка прилипает к
-  его краю. Смещение публикуется переменной `--table-head-top`, а `TableHead`
-  просто её читает. Промежуточного варианта нет: блок с `overflow-x: auto`
-  вычисляет `overflow-y` тоже в `auto` и сам становится областью прокрутки,
-  внутри которой `sticky` уже не реагирует на прокрутку страницы.
-- Числовые колонки — `text-right tabular-nums`.
-- Высота строки — 36px (`h-9`), разделители `divide-y divide-line`,
-  наведение — `hover:bg-raised/40`.
-- Строка-ссылка — настоящий `<a>` внутри первой ячейки, а не `onClick` на `<tr>`.
-- Заголовки колонок переводятся: английских ярлыков в русской шапке нет.
+- The header sticks and knows to what. `Table` chooses the scroll model: without
+  `maxHeight` the table scrolls with the page and the header sticks to the window under the
+  top bar, with `maxHeight` the table has its own scroller and the header sticks to
+  its edge. The offset is published as the `--table-head-top` variable, and `TableHead`
+  simply reads it. There is no intermediate variant: a block with `overflow-x: auto`
+  computes `overflow-y` to `auto` as well and becomes a scroll container itself,
+  inside which `sticky` no longer reacts to page scrolling.
+- Numeric columns — `text-right tabular-nums`.
+- Row height — 36px (`h-9`), dividers `divide-y divide-line`,
+  hover — `hover:bg-raised/40`.
+- A link row — a real `<a>` inside the first cell, not an `onClick` on the `<tr>`.
+- Column headers are translated: there are no English labels in a Russian header.
 
-## 11. Сгруппированные списки (настройки)
+## 11. Grouped lists (settings)
 
-Экран настроек — это `Card` c `divide-y divide-line`: строка = подпись слева,
-элемент управления справа, пояснение под подписью `text-xs text-ink-3`.
-Пояснение к группе — под карточкой, не внутри. Это прямой аналог inset grouped
-таблиц Apple и заменяет россыпь разнородных форм.
+The settings screen is a `Card` with `divide-y divide-line`: a row = caption on the left,
+control on the right, explanation under the caption in `text-xs text-ink-3`.
+The explanation for a group goes under the card, not inside it. This is a direct analog of Apple's inset grouped
+tables and replaces a scatter of heterogeneous forms.
 
-## 12. Навигация
+## 12. Navigation
 
-- Верхняя панель (46px) — единственная глобальная навигация; боковой колонки нет.
-- Подразделы раздела — `SegmentedNav`, а не строка ссылок со стрелками.
-- Глубина не превышает двух уровней: панель → меню → страница.
-- Любая вложенная страница показывает возврат через `PageHeader backHref`.
+- The top bar (46px) is the only global navigation; there is no side column.
+- Subsections of a section — `SegmentedNav`, not a row of links with arrows.
+- Depth does not exceed two levels: bar → menu → page.
+- Any nested page shows a way back via `PageHeader backHref`.

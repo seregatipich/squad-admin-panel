@@ -1,47 +1,47 @@
 # `live-bus` — changelog
 
-## 2026-09-30 — #51 (находка #1327): триггер `events_appended` оставлен, порог пересмотра задокументирован
+## 2026-09-30 — #51 (finding #1327): `events_appended` trigger kept, review threshold documented
 
 ### Docs
 
-- `docs/operations/monitoring.md` — раздел «Live events feed: NOTIFY load»: замеры на стенде (около 1 200 строк `events` в сутки, пик 5 строк в секунду, очередь уведомлений пуста), команды проверки и порог пересмотра (`pg_notification_queue_usage()` стабильно выше 0,1 или более 100 строк в секунду). Кода это не меняет: глобальная блокировка очереди `pg_notify` проявляется на сотнях коммитов в секунду, а предыдущий релиз API получает живые события только через `LISTEN events_appended`, поэтому триггер остаётся до двухрелизного перехода (новый канал, затем удаление триггера).
+- `docs/operations/monitoring.md` — section «Live events feed: NOTIFY load»: measurements on the stand (about 1,200 `events` rows per day, a peak of 5 rows per second, an empty notification queue), the check commands and the review threshold (`pg_notification_queue_usage()` consistently above 0.1, or more than 100 rows per second). This changes no code: the global lock on the `pg_notify` queue shows up at hundreds of commits per second, and the previous API release receives live events only through `LISTEN events_appended`, so the trigger stays until the two-release transition (a new channel, then removal of the trigger).
 
-## 2026-09-28 — #62: кадры `combat.vehicle` больше не обходят `combat:view`
+## 2026-09-28 — #62: `combat.vehicle` frames no longer bypass `combat:view`
 
 ### Security
 
-- `apps/api/src/routes/live.ts` отсекал без `combat:view` только тип `combat.event`, а кадры `combat.vehicle` от worker-log-ingest (атакующий, оружие, урон, техника) уходили всем с `server:view`. Теперь фильтр срабатывает на любой тип с префиксом `combat.`. Регрессионный тест: `apps/api/test/combat-live-replay.test.ts`.
+- `apps/api/src/routes/live.ts` filtered out only the `combat.event` type for users without `combat:view`, so `combat.vehicle` frames from worker-log-ingest (attacker, weapon, damage, vehicle) went out to everyone with `server:view`. The filter now triggers on any type with the `combat.` prefix. Regression test: `apps/api/test/combat-live-replay.test.ts`.
 
-## 2026-09-28 — #69: подписки на события по сокету, сужение прав токена при перепроверке
-
-### Changed
-
-- `apps/api/src/routes/live.ts` — типы `chat.message`, `combat.event`, `rcon.roster`, `externalban.matched` и все не описанные в API события воркеров (`banname.matched`, `bansync.*`, `match.*`) приходят сокету только после кадра `{"type":"subscribe","events":[...]}` (отмена — `unsubscribe`; ответ — `subscribed`/`unsubscribed`). Хвост чата и боя больше не отправляется каждому подключению: он воспроизводится при подписке на `chat.message` / `combat.event`.
-- `ChatRingBuffer` и `CombatRingBuffer` заменены одним `ServerRingBuffer` (`apps/api/src/lib/server-ring-buffer.ts`); буфер удалённого сервера очищается по `server.deleted`.
-- Периодическая перепроверка сокета с API-токеном сужает права по scopes токена (`narrowToTokenScopes`), как и HTTP-хук: после первого тика токен больше не получает `combat.event` и уведомления о ролях по флагам роли владельца.
-- Web: `apps/web/src/lib/live-bus.ts` подписывает сокет на типы, которые слушают смонтированные `useLiveSubscription`, со счётчиком ссылок и повторной подпиской после переподключения.
-
-### Migration notes
-
-- Миграций БД нет. Сторонний клиент `/api/v1/ws/live`, которому нужны чат, бой или ростер, должен отправить `subscribe`.
-
-## 2026-09-27 — #12: сервер сам закрывает `/api/v1/ws/live` при отзыве сессии или потере прав
+## 2026-09-28 — #69: socket event subscriptions, token permissions narrowed on re-validation
 
 ### Changed
 
-- `apps/api/src/routes/live.ts` — событие `session.revoked` для собственной сессии сокета по-прежнему отправляется клиенту, после чего сервер закрывает сокет с кодом `4001` (`session revoked`), не полагаясь на клиента. Раз в 30 с (опция плагина `revalidateIntervalMs`) сокет заново проверяет сессию или API-токен и права игрока: пропавшая или отозванная сессия/токен — `4001`, потеря `server:view` (для `self_service`-сессии — `panel_access`) — `4003` (`forbidden`); фильтры `combat:view` и назначения ролей обновляются по свежим правам. Сбой проверки из-за недоступности Postgres/Redis сокет не закрывает — повтор на следующем тике.
-- `apps/api/src/routes/role-members.ts` — импорт в роль без `panel_access`, массовое удаление и перенос участников теперь публикуют `session.revoked` (передают `app.liveBus` в `revokeAllForPlayer`), поэтому открытые сокеты затронутых игроков закрываются сразу.
+- `apps/api/src/routes/live.ts` — the types `chat.message`, `combat.event`, `rcon.roster`, `externalban.matched` and all worker events not described in the API (`banname.matched`, `bansync.*`, `match.*`) reach the socket only after a `{"type":"subscribe","events":[...]}` frame (cancelled with `unsubscribe`; the reply is `subscribed`/`unsubscribed`). The chat and combat tail is no longer sent to every connection: it is replayed when subscribing to `chat.message` / `combat.event`.
+- `ChatRingBuffer` and `CombatRingBuffer` were replaced by a single `ServerRingBuffer` (`apps/api/src/lib/server-ring-buffer.ts`); the buffer of a deleted server is cleared on `server.deleted`.
+- The periodic re-validation of a socket using an API token narrows permissions to the token's scopes (`narrowToTokenScopes`), like the HTTP hook: after the first tick the token no longer receives `combat.event` or role notifications based on the owner's role flags.
+- Web: `apps/web/src/lib/live-bus.ts` subscribes the socket to the types listened to by mounted `useLiveSubscription` hooks, with reference counting and re-subscription after reconnect.
 
 ### Migration notes
 
-- Миграций БД нет.
+- No DB migrations. A third-party `/api/v1/ws/live` client that needs chat, combat or roster must send `subscribe`.
 
-## 2026-09-25 — `server.events.appended`: живая лента событий
+## 2026-09-27 — #12: the server closes `/api/v1/ws/live` itself when a session is revoked or permissions are lost
+
+### Changed
+
+- `apps/api/src/routes/live.ts` — the `session.revoked` event for the socket's own session is still sent to the client, after which the server closes the socket with code `4001` (`session revoked`) without relying on the client. Every 30 s (the plugin option `revalidateIntervalMs`) the socket re-checks the session or API token and the player's permissions: a missing or revoked session/token gives `4001`, loss of `server:view` (for a `self_service` session, `panel_access`) gives `4003` (`forbidden`); the `combat:view` and role-assignment filters are updated to the fresh permissions. A check failure caused by Postgres/Redis being unavailable does not close the socket — it is retried on the next tick.
+- `apps/api/src/routes/role-members.ts` — import into a role without `panel_access`, bulk removal and moving of members now publish `session.revoked` (they pass `app.liveBus` to `revokeAllForPlayer`), so the open sockets of the affected players are closed immediately.
+
+### Migration notes
+
+- No DB migrations.
+
+## 2026-09-25 — `server.events.appended`: live events feed
 
 ### Added
 
-- `apps/api/src/plugins/events-feed.ts` слушает Postgres `NOTIFY events_appended` (триггер миграции 0116 срабатывает на каждую вставку в `events`, кто бы её ни сделал), склеивает уведомления за 250 мс по серверу и публикует `server.events.appended` `{ server_id, kinds }`. Кадр не несёт данных событий — список перечитывает первую страницу через `GET /api/v1/events` с обычной проверкой прав.
-- Web: `EventsBrowser` подтягивает новые события сверху (не чаще раза в секунду), если кадр подходит под открытые фильтры; карточка сервера перечитывается сразу по `rcon.status`.
+- `apps/api/src/plugins/events-feed.ts` listens to Postgres `NOTIFY events_appended` (the migration 0116 trigger fires on every insert into `events`, whoever makes it), coalesces notifications per server over 250 ms and publishes `server.events.appended` `{ server_id, kinds }`. The frame carries no event data — the list re-reads the first page via `GET /api/v1/events` with the usual permission check.
+- Web: `EventsBrowser` pulls new events in at the top (at most once per second) if the frame matches the open filters; the server card is re-read immediately on `rcon.status`.
 
 ## 2026-07-09 — COMBAT-6: combat.event reconnect buffer + per-event combat:view gate
 

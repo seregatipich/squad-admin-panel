@@ -1,8 +1,8 @@
 # worker-config-sync — API surface
 
-Worker не имеет входящего HTTP/RPC. Он читает `events:admins-cfg-sync:<server_id>`,
-а для новых outbox-сообщений подтверждает файл и точный результат worker-rcon,
-не используя старый `rcon:status` как источник lifecycle-решения.
+The worker has no inbound HTTP/RPC. It reads `events:admins-cfg-sync:<server_id>`,
+and for new outbox messages it confirms the file and the exact worker-rcon result,
+without using the old `rcon:status` as the source of the lifecycle decision.
 
 ## Inputs (Redis Streams) — what the worker consumes
 
@@ -30,10 +30,10 @@ interface AdminsCfgSyncEvent {
 }
 ```
 
-Consumer group: `config-sync`. Новый `_outbox_id` связывает Redis-запись с
-PostgreSQL. Успех сначала получает `applied_at`, затем один Lua-скрипт выполняет
-`XACK` и точный `XDEL`. Ошибка остаётся unacked для reclaim; повреждённое или
-старое успешно обработанное сообщение тоже удаляется, чтобы ACKed-хвост не рос.
+Consumer group: `config-sync`. The new `_outbox_id` links the Redis entry with
+PostgreSQL. A success first gets `applied_at`, then a single Lua script performs
+`XACK` and an exact `XDEL`. An error stays unacked for reclaim; a corrupted or
+old, already successfully processed message is also deleted so that the ACKed tail does not grow.
 
 A separate `XAUTOCLAIM` pass runs every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (default 30s) per active server with `MIN-IDLE-TIME = ADMINS_CFG_RECLAIM_MIN_IDLE_MS` (default 60s) and a `COUNT 50` cap. It takes ownership of any messages stuck in another consumer's PEL — typically left behind by:
 - a previous worker process that crashed before XACK,
@@ -42,15 +42,15 @@ A separate `XAUTOCLAIM` pass runs every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (defaul
 
 The reclaim pass is invoked once at boot (catches messages orphaned across restarts) and on the periodic interval. Reclaimed messages take the same code path as freshly-delivered ones — successful sync acks; unreachable leaves them in the (now this-consumer's) PEL for the next cycle.
 
-API и mutation-workers пишут одну PostgreSQL outbox-строку на сервер. Только
-post-commit relay переносит её в Redis и добавляет `_outbox_id`.
+The API and mutation workers write one PostgreSQL outbox row per server. Only the
+post-commit relay moves it to Redis and adds `_outbox_id`.
 
 ## Outputs (Redis streams / keys) — what the worker writes
 
 ### `rcon:commands:<server_id>` (worker-rcon command stream)
 
-Для нового outbox живого сервера worker отправляет команду даже при уже
-совпавшем хеше файла: совпадение байтов не доказывает, что Squad перечитал файл.
+For a new outbox of a live server, the worker sends the command even if the
+file hash already matches: a byte match does not prove that Squad re-read the file.
 
 ```
 XADD rcon:commands:<server_id> MAXLEN ~ 500 * request <json>
@@ -60,11 +60,11 @@ where `<json>` is a `rconCommandRequestSchema` document with deterministic
 `request_id = admins-cfg-sync:<outbox_id>` and
 `command = AdminReloadServerConfig`.
 
-Worker ждёт до 4 секунд и принимает только `rconCommandResultSchema` с точными
-`server_id`, `request_id`, `command=AdminReloadServerConfig` и `ok=true`.
-`rejected|timeout|invalid_result|unavailable` сохраняются как безопасный код в
-outbox, оставляют `applied_at=NULL` и не разрешают `XACK`/`XDEL`. Старые
-сообщения без `_outbox_id` сохраняют прежний best-effort режим.
+The worker waits up to 4 seconds and accepts only an `rconCommandResultSchema` with exact
+`server_id`, `request_id`, `command=AdminReloadServerConfig` and `ok=true`.
+`rejected|timeout|invalid_result|unavailable` are saved as a safe code in the
+outbox, leave `applied_at=NULL` and do not allow `XACK`/`XDEL`. Old
+messages without `_outbox_id` keep the previous best-effort mode.
 
 ### `admins-cfg:status:<server_id>`
 

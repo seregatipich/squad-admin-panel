@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Отправитель проверяет сохранённый `template` (`isDiscordEmbedTemplate` из `@squad/shared-config`) и при повреждённой строке берёт шаблон по умолчанию, а не передаёт произвольный jsonb в рендер (#78, 1126). Тест: `test/sender.test.ts`.
+- The sender validates the stored `template` (`isDiscordEmbedTemplate` from `@squad/shared-config`) and, for a corrupted row, falls back to the default template instead of passing arbitrary jsonb to the renderer (#78, 1126). Test: `test/sender.test.ts`.
 
 ## 2026-09-30 — one Discord REST request wrapper (#92)
 
@@ -16,7 +16,7 @@
 
 ### Fixed
 
-- Шаблон с плейсхолдером-именем свойства прототипа (`{constructor}`, `{__proto__}`) больше не роняет отправку, а поле без значения (например, `{steam_id64}` у игрока только с EOS) и слишком длинный текст больше не дают HTTP 400 от Discord: это исправлено в `renderDiscordTemplate` из `@squad/shared-config` (#52).
+- A template with a placeholder named after a prototype property (`{constructor}`, `{__proto__}`) no longer breaks sending, and a field without a value (for example, `{steam_id64}` for a player with only an EOS ID) and overly long text no longer produce an HTTP 400 from Discord: this is fixed in `renderDiscordTemplate` from `@squad/shared-config` (#52).
 
 ## 2026-09-28 — consumer groups on new and re-created streams (#60)
 
@@ -51,7 +51,7 @@
   asking to wait longer than 60 s (`MAX_RETRY_AFTER_MS`) fails fast, and the
   retry sleep is interrupted by shutdown.
 - `fetchGuildMemberRoles` retries a 429 after `Retry-After` and reports
-  `rate_limited` when the retries run out, instead of `Discord вернул 429`.
+  `rate_limited` when the retries run out, instead of `Discord вернул 429` ("Discord returned 429").
 - `reconcileLinkedPlayers` loads mappings and link/role rows once per sweep
   (two queries instead of three per player), accepts `{ shouldStop }` to stop
   between players, and full-reconcile requests read in one batch are

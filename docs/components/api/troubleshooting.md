@@ -65,7 +65,7 @@ psql -c "SELECT context FROM audit_log WHERE action_type='server.delete' AND tar
 
 **Action**: there is no fallback — pre-Bundle-C deletions did not back up configs. Manually re-edit the cfg files via the editor at `/servers/:newId/configs`.
 
-## Server is stuck on "Остановка" / "Запускается" / "Установка"
+## Server is stuck on "Остановка" (Stopping) / "Запускается" (Starting) / "Установка" (Installing)
 
 **Symptom**: a row sits in `stopping`, `starting`, or `installing` for more than ~90 s and the UI never moves on.
 
@@ -93,7 +93,7 @@ The response includes `inspected_state`, `inspected_running`, and the resulting 
 
 If the row was wrongly stuck on a UUID that no longer has a container at all (`inspected_state: 'not_found'`), the reconcile will flip it to `stopped`. The UI will catch up on the next live-bus event.
 
-## Server is stuck on "Установка" / "installing"
+## Server is stuck on "Установка" (Installing) / "installing"
 
 **Symptom**: a row sits in `installing` for more than 30 min and the install pipeline never completes.
 

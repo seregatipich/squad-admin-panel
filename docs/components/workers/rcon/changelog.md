@@ -1,69 +1,69 @@
 # Changelog — worker-rcon
 
-## 2026-09-30 — Список разрешённых частных сетей для внешних серверов (#30, #333)
+## 2026-09-30 — Allowlist of private networks for external servers (#30, #333)
 
 ### Security
 
-- Новая настройка `EXTERNAL_HOST_PRIVATE_ALLOWLIST`: пусто (по умолчанию) — поведение прежнее, частные адреса разрешены; `none` или список адресов/CIDR ограничивает внешние серверы только перечисленными частными сетями. Проверяется и литерал хоста, и каждый адрес, в который он резолвится (защита от DNS rebinding). Неверное значение останавливает воркер при старте.
+- New setting `EXTERNAL_HOST_PRIVATE_ALLOWLIST`: empty (the default) keeps the previous behavior, with private addresses allowed; `none` or a list of addresses/CIDRs restricts external servers to the listed private networks only. Both the host literal and every address it resolves to are checked (protection against DNS rebinding). An invalid value stops the worker at startup.
 
-## 2026-09-27 — Пароль RCON с переводом строки не отправляется (#34)
+## 2026-09-27 — An RCON password containing a line break is not sent (#34)
 
 ### Security
 
-- `RconClient.connect()` отказывается подключаться, если пароль содержит CR, LF или NUL, и не открывает сокет. Так старые строки `server_credentials`, сохранённые до проверки в API, не могут протащить команды в Redis хоста через пакет SERVERDATA_AUTH.
+- `RconClient.connect()` refuses to connect if the password contains CR, LF or NUL, and does not open the socket. This way old `server_credentials` rows saved before the API-side check cannot smuggle commands into the host's Redis through the SERVERDATA_AUTH packet.
 
-## 2026-09-27 — Раздвоенная личность игрока больше не ломает опрос
-
-### Fixed
-
-- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 967): `upsertPlayers` искал игрока по `eos_id OR steam_id64` с `LIMIT 1` без порядка. Если eos и steam одного человека лежали в разных строках `players`, UPDATE падал на уникальном индексе, исключение обрывало весь опрос (после трёх неудач — RCON-соединение), а в `audit_log` каждые 30 с писалась ложная запись `player.steam_linked`. Теперь каждый игрок обрабатывается в своей транзакции, аудит пишется после UPDATE, строка с `eos_id` имеет приоритет, раздвоение помечается `steam_eos_conflict` (аудит `player.eos_steam_conflict` один раз), ошибка одного игрока логируется и не прерывает опрос, вставка новой строки идёт с `ON CONFLICT DO NOTHING` и повторным поиском. Тесты: `test/persist.integration.test.ts`, `test/persist.test.ts`.
-- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 977): чат-пакет (`SERVERDATA_CHAT_VALUE`, id 0) с телом ровно 246 байт начинается теми же 7 байтами, что и «хвост» сломанного второго ответа Squad на probe, и декодер срезал их где угодно в потоке. Поток терял границы кадров (`invalid RCON packet size: 0`), exec отклонялись, супервизор переподключался — длиной сообщения любой игрок мог держать RCON-соединение панели в цикле переподключений. Теперь хвост срезается только сразу после второго пустого ответа с тем же id. Тесты: `test/protocol.test.ts`.
-
-## 2026-09-27 — Просроченные операторские команды не выполняются (#36)
+## 2026-09-27 — A split player identity no longer breaks polling
 
 ### Fixed
 
-- Если в записи `rcon:commands:{id}` есть `deadline_at` и срок прошёл, воркер не выполняет команду. Он сохраняет результат `ok:false` с `error: "expired"` и подтверждает запись (`XACK`). API ставит этот срок на конец своего ожидания, поэтому команда, о которой оператору уже сообщили таймаут, не выполнится позже без записи в аудите и ledger и не выполнится дважды при повторе.
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 967): `upsertPlayers` looked a player up by `eos_id OR steam_id64` with `LIMIT 1` and no ordering. If one person's eos and steam IDs lived in different `players` rows, the UPDATE failed on a unique index, the exception aborted the whole poll (after three failures, the RCON connection), and a false `player.steam_linked` record was written to `audit_log` every 30 s. Now each player is processed in its own transaction, the audit is written after the UPDATE, the row with `eos_id` takes priority, the split is flagged `steam_eos_conflict` (audit `player.eos_steam_conflict` once), an error for one player is logged and does not abort the poll, and inserting a new row uses `ON CONFLICT DO NOTHING` with a repeated lookup. Tests: `test/persist.integration.test.ts`, `test/persist.test.ts`.
+- [#35](https://github.com/seregatipich/squad-admin-panel/issues/35) (finding 977): a chat packet (`SERVERDATA_CHAT_VALUE`, id 0) with a body of exactly 246 bytes starts with the same 7 bytes as the "tail" of Squad's broken second reply to the probe, and the decoder cut them off anywhere in the stream. The stream lost frame boundaries (`invalid RCON packet size: 0`), exec calls were rejected and the supervisor reconnected: any player could keep the panel's RCON connection in a reconnect loop with the length of a message. Now the tail is cut only immediately after the second empty reply with the same id. Tests: `test/protocol.test.ts`.
 
-## 2026-09-27 — История отрядов и короны создателей
+## 2026-09-27 — Expired operator commands are not executed (#36)
+
+### Fixed
+
+- If an `rcon:commands:{id}` entry has a `deadline_at` and the deadline has passed, the worker does not execute the command. It stores an `ok:false` result with `error: "expired"` and acknowledges the entry (`XACK`). The API sets this deadline to the end of its own wait, so a command for which the operator has already been told about a timeout is not executed later without an audit and ledger record, and is not executed twice on retry.
+
+## 2026-09-27 — Squad history and creator crowns
 
 ### Added
 
-- Воркер записывает создание отрядов, смену командира и роспуск отрядов в `events` (`squad.created`, `squad.leader_changed`, `squad.disbanded`) и в поток `events:server:{id}`. Создание отряда датируется RCON-сообщением `has created Squad`, которое раньше отбрасывалось. Смена командира и роспуск вычисляются сравнением соседних снимков состава (раз в 2 с).
-- Хэш `rcon:squad-crowns:{id}` хранит короны создателей текущего матча: серую (передал командование товарищу) и красную (ушёл из отряда или с сервера, будучи командиром). Хэш удаляется на смене матча, TTL 6 ч.
-- Подсказка `rcon:refresh` теперь передаёт супервизору `reason`: `match.started` / `match.ended` сбрасывают историю отрядов без ложных «роспусков».
+- The worker records squad creation, leader changes and squad disbanding in `events` (`squad.created`, `squad.leader_changed`, `squad.disbanded`) and in the `events:server:{id}` stream. Squad creation is dated by the RCON message `has created Squad`, which used to be discarded. Leader changes and disbanding are computed by comparing adjacent roster snapshots (every 2 s).
+- The `rcon:squad-crowns:{id}` hash holds the creator crowns of the current match: gray (handed command to a teammate) and red (left the squad or the server while being the leader). The hash is deleted when the match changes, TTL 6 h.
+- The `rcon:refresh` hint now passes the supervisor a `reason`: `match.started` / `match.ended` reset the squad history without false "disbandings".
 
-## 2026-09-25 — Состояние сервера в панели обновляется сразу
+## 2026-09-25 — Server state in the panel updates immediately
 
 ### Changed
 
-- Состав обновляется каждые 2 с (было 5 с), карта / следующий слой / режим / очередь / тикрейт — каждые 5 с отдельным лёгким опросом `ShowServerInfo` + `ShowNextMap` (раньше — только в полном тике раз в 30 с). Интервалы настраиваются `RCON_ROSTER_INTERVAL_MS` и `RCON_INFO_INTERVAL_MS`. Полный тик с базой, A2S и сидингом по-прежнему раз в 30 с.
-- Сразу после подключения состав и инфо сервера читаются немедленно, а не через первый тик таймера.
-- `rcon:status` пишется при каждом обновлении, но `rcon:status:changed` публикуется только при изменении видимых полей (игроки, сквады, карта, следующий слой, режим, очередь) или состояния — иначе частые обновления заставляли бы каждую открытую панель перечитывать список серверов.
+- The roster updates every 2 s (was 5 s); map / next layer / mode / queue / tickrate update every 5 s through a separate lightweight `ShowServerInfo` + `ShowNextMap` poll (previously only in the full tick, every 30 s). The intervals are configured with `RCON_ROSTER_INTERVAL_MS` and `RCON_INFO_INTERVAL_MS`. The full tick with the database, A2S and seeding still runs every 30 s.
+- Right after connecting, the roster and server info are read immediately instead of waiting for the first timer tick.
+- `rcon:status` is written on every update, but `rcon:status:changed` is published only when visible fields (players, squads, map, next layer, mode, queue) or the state change — otherwise the frequent updates would make every open panel re-read the server list.
 
 ### Fixed
 
-- Очередь операторских команд (`XREADGROUP BLOCK 500`) сидела на общем Redis-соединении воркера, и каждая запись статуса, состава и публикация в live-bus ждала за ней до 0,5 с — на каждом сервере по очереди. Теперь у очереди каждого сервера своё соединение. Замер на реальном Redis: подключение → полный статус 521 → 118 мс, строка лога о заходе игрока → `rcon:status:changed` 1127 → 104 мс.
+- The operator command queue (`XREADGROUP BLOCK 500`) sat on the worker's shared Redis connection, and every status write, roster write and live-bus publish waited behind it for up to 0.5 s — on every server in turn. Now each server's queue has its own connection. Measured on a real Redis: connect → full status 521 → 118 ms, a log line about a player joining → `rcon:status:changed` 1127 → 104 ms.
 
 ### Added
 
-- Подсказки на внеочередной опрос: канал Redis `rcon:refresh`. worker-log-ingest публикует его на заход/выход игрока и начало/конец матча, и воркер перечитывает сервер сразу (с повтором через 1,5 с для состава), а не на следующем тике.
+- Hints for an out-of-turn poll: the Redis channel `rcon:refresh`. worker-log-ingest publishes to it on a player join/leave and on match start/end, and the worker re-reads the server immediately (with a repeat after 1.5 s for the roster) instead of on the next tick.
 
-## 2026-09-09 — Опрос `ListPlayers` пишет `player_sessions` (PRES-1)
+## 2026-09-09 — The `ListPlayers` poll writes `player_sessions` (PRES-1)
 
 ### Fixed
 
-- У `player_sessions` не было ни одного писателя в проде: `openPlayerSession` / `closePlayerSession` / `closeCrashedSessions` из `@squad/db` не вызывались ниоткуда, а `player.connected`/`player.disconnected` лог-парсер на боевых серверах не публикует ([#320](https://github.com/breaking-squad/squad-admin-panel/issues/320)). Из-за этого весь онлайн был нулевым: карточка присутствия и праймтайм игрока, `/api/v1/players/online-status`, `player_daily_presence`, `players.total_time_played_seconds`, начисление экономики, сид-награды и клановая активность читали пустую таблицу.
-- Полный тик опроса теперь сверяет `player_sessions` со снимком `ListPlayers`: открывает сессию каждому игроку в ростере, у которого её нет, и закрывает сессии тех, кого в ростере больше нет. Снимок полный на каждом опросе, поэтому потерянная строка лога самовосстанавливается на следующем тике, а не оставляет вечно открытую сессию.
-- `connected_at` берётся из `first_seen_at` ростера (обновляется раз в 5 с) и ограничивается двумя интервалами опроса назад, чтобы переподключение RCON не засчитало офлайн-разрыв как игру.
-- Обрыв RCON или остановка супервизора закрывают открытые сессии сервера моментом последнего успешного опроса — всё, что после него, не наблюдалось.
-- Сессии открываются в режиме `seed`, пока сидинг активен, поэтому существующее разбиение сессий на границе SEED-1 остаётся согласованным.
+- `player_sessions` had no writer in production: `openPlayerSession` / `closePlayerSession` / `closeCrashedSessions` from `@squad/db` were not called from anywhere, and the log parser does not publish `player.connected`/`player.disconnected` on live servers ([#320](https://github.com/breaking-squad/squad-admin-panel/issues/320)). As a result all online data was zero: the presence card and a player's prime time, `/api/v1/players/online-status`, `player_daily_presence`, `players.total_time_played_seconds`, economy accrual, seed rewards and clan activity read an empty table.
+- The full poll tick now reconciles `player_sessions` with the `ListPlayers` snapshot: it opens a session for every player in the roster who has none, and closes the sessions of those no longer in the roster. The snapshot is complete on every poll, so a lost log line heals itself on the next tick instead of leaving a session open forever.
+- `connected_at` is taken from the roster's `first_seen_at` (updated every 5 s) and capped at two poll intervals back, so that an RCON reconnect does not count an offline gap as play time.
+- An RCON drop or a supervisor stop closes the server's open sessions at the moment of the last successful poll — anything after it was not observed.
+- Sessions are opened in `seed` mode while seeding is active, so the existing session split at the SEED-1 boundary stays consistent.
 
-## 2026-09-08 — Ростер обновляется каждые 5 секунд, отдельно от полного опроса
+## 2026-09-08 — The roster updates every 5 seconds, separately from the full poll
 
 ### Added
 
-- Быстрое обновление состава: `ListPlayers` + `ListSquads` каждые `rosterIntervalMs` (по умолчанию 5 с) пишут `rcon:roster:{id}` и `rcon:squads:{id}` и публикуют `rcon.roster`, на котором панель перерисовывает живой список. Полный тик (карта, тикрейт, очередь, A2S, запись игроков и накопление времени в китах) остаётся на 30 с: гонять его в шесть раз чаще значило бы умножить нагрузку на базу ради данных, которые меняются раз в матч. Оба таймера делят один флаг занятости, поэтому команды не встают в очередь друг за другом.
+- Fast roster update: `ListPlayers` + `ListSquads` every `rosterIntervalMs` (5 s by default) write `rcon:roster:{id}` and `rcon:squads:{id}` and publish `rcon.roster`, on which the panel redraws the live list. The full tick (map, tickrate, queue, A2S, player writes and time accumulation in the kits) stays at 30 s: running it six times as often would multiply the load on the database for data that changes once per match. Both timers share one busy flag, so commands do not queue behind each other.
 
 ## 2026-09-07 — Squad's broken probe reply no longer mis-frames the stream
 

@@ -5,7 +5,7 @@
 
 ### Added
 
-- `BridgeClient.pause()` / `resume()` — останавливают и возобновляют чтение сокета bridge для backpressure потоковых вызовов (#291).
+- `BridgeClient.pause()` / `resume()` — pause and resume reading from the bridge socket for backpressure on streaming calls (#291).
 
 ## 2026-09-28 — unused RPC wrappers removed (#45)
 
@@ -49,7 +49,7 @@
 
 ### Fixed
 
-- Routine `panel-host-bridge` restarts (or any single-call socket drop) no longer surface as a `socket closed` error to workers and the API. The previous behaviour caused `worker-config-sync` to publish `state: 'unreachable'` for at least 60 seconds (until the reclaim sweep kicked in) and forced the operator to click "Повторить синхронизацию" manually.
+- Routine `panel-host-bridge` restarts (or any single-call socket drop) no longer surface as a `socket closed` error to workers and the API. The previous behaviour caused `worker-config-sync` to publish `state: 'unreachable'` for at least 60 seconds (until the reclaim sweep kicked in) and forced the operator to click "Повторить синхронизацию" (Retry sync) manually.
 ## 2026-04-29 — `fileReadTail` for bounded last-N-bytes reads
 
 ### Added

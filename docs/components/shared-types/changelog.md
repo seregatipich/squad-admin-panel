@@ -20,7 +20,7 @@
 ## 2026-09-28
 
 ### Security
-- `serverCreateInput.multihome` и `serverSettingsUpdate.multihome` принимают только IP-литерал (`z.string().ip()`): bridge подставляет значение в командную строку сервера Squad (`RCONIP=`/`MULTIHOME=`), и строка с пробелами могла добавить параметры запуска (#52).
+- `serverCreateInput.multihome` and `serverSettingsUpdate.multihome` accept only an IP literal (`z.string().ip()`): the bridge substitutes the value into the Squad server command line (`RCONIP=`/`MULTIHOME=`), and a string containing spaces could add launch parameters (#52).
 
 ## 2026-09-30 — Audit follow-up (#79)
 

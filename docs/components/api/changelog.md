@@ -1,643 +1,643 @@
 # `api` — changelog
 
-## 2026-10-01 — Фракции команд в `GET /api/v1/servers/:id/roster`
+## 2026-10-01 — Team factions in `GET /api/v1/servers/:id/roster`
 
 ### Added
 
-- В ответ добавлено поле `team_factions[]` (`{ team_id, faction }`): фракции сторон из открытого матча сервера. Название отряда из `teams[]` остаётся именем юнита из `ListSquads`.
+- The response now includes a `team_factions[]` field (`{ team_id, faction }`): the factions of the sides from the server's open match. The squad name in `teams[]` remains the unit name from `ListSquads`.
 
-## 2026-09-30 — Ограничения и read-only корень контейнеров (#47, #75)
-
-### Changed
-
-- `docker/compose.yml` и `docker/compose.stand.yml`: контейнер `api` работает с `read_only: true`, `tmpfs: /tmp`, `mem_limit: 1g` и `cpus: 2.0`. Запись идёт только в смонтированные тома (`/run/panel-host-bridge`, `/run/squad-panel/rnsquadjs`, `/var/lib/squad-panel/media`). Лимиты выбраны по замеру на стенде (api около 88 MiB). См. `docs/operations/deployment.md`, раздел «Container hardening».
-
-## 2026-09-30 — Хвосты аудита маршрутов API (#73)
+## 2026-09-30 — Container limits and read-only root filesystem (#47, #75)
 
 ### Changed
 
-- `GET /api/v1/users`: добавлены `limit` (по умолчанию 200, максимум 500) и `cursor`; курсор следующей страницы приходит в заголовке `X-Next-Cursor`, тело остаётся массивом. Страница пользователей подгружает остальное кнопкой «Показать ещё» (#357).
-- `GET /api/v1/analytics/votes`: «серийные скиперы» считаются по скользящему окну `SERIAL_SKIPPER_WINDOW_DAYS` (7 дней) от конца выбранного окна, как в карточке игрока, и ограничены 50 строками; в ответ добавлено `serial_skipper_window_days` (#368).
-- `GET /api/v1/moderation/teamkills`: сначала выбираются топ нарушителей, затем счётчики жертв и модерации берутся `LATERAL`-запросами по индексам; форма ответа прежняя (#355).
-- `PUT /api/v1/settings/economy`: `privilege_costs` (поле пока не читается ни API, ни воркерами) принимает не более 50 записей; ответ и формат не менялись (#349).
+- `docker/compose.yml` and `docker/compose.stand.yml`: the `api` container runs with `read_only: true`, `tmpfs: /tmp`, `mem_limit: 1g` and `cpus: 2.0`. Writes go only to the mounted volumes (`/run/panel-host-bridge`, `/run/squad-panel/rnsquadjs`, `/var/lib/squad-panel/media`). The limits were chosen from a measurement on the stand (api uses about 88 MiB). See `docs/operations/deployment.md`, the "Container hardening" section.
 
-- Новое поле маршрута `config.roleFlags` (`plugins/types.ts`): роль-флаги (`canManageClans`, `panelAccess`, …), которые глобальный хук `plugins/auth.ts` проверяет после `config.permissions`; отказ — `403 { error: 'forbidden', required: '<flag_в_snake_case>' }`. `GET`/`PATCH /api/v1/settings/clan-guard` переведены на него вместо локальных `panelGuard`/`manageGuard` и недостижимой проверки `actorId`; ответы прежние, для `GET` без `panel_access` добавлено `required: 'panel_access'`. Новые permission-ключи не заводились: флаги без ключа в каталоге по-прежнему не делегируются API-токенам (#351).
+## 2026-09-30 — API route audit leftovers (#73)
+
+### Changed
+
+- `GET /api/v1/users`: added `limit` (default 200, maximum 500) and `cursor`; the cursor for the next page arrives in the `X-Next-Cursor` header, and the body stays an array. The users page loads the rest with the «Показать ещё» (Show more) button (#357).
+- `GET /api/v1/analytics/votes`: "serial skippers" are computed over the sliding window `SERIAL_SKIPPER_WINDOW_DAYS` (7 days) ending at the end of the selected window, as in the player card, and are capped at 50 rows; the response gains `serial_skipper_window_days` (#368).
+- `GET /api/v1/moderation/teamkills`: the top offenders are selected first, then the victim and moderation counters are fetched with `LATERAL` queries over indexes; the response shape is unchanged (#355).
+- `PUT /api/v1/settings/economy`: `privilege_costs` (a field not yet read by either the API or the workers) accepts at most 50 entries; the response and format are unchanged (#349).
+
+- New route field `config.roleFlags` (`plugins/types.ts`): role flags (`canManageClans`, `panelAccess`, …) that the global hook `plugins/auth.ts` checks after `config.permissions`; a denial is `403 { error: 'forbidden', required: '<flag_in_snake_case>' }`. `GET`/`PATCH /api/v1/settings/clan-guard` were moved onto it instead of the local `panelGuard`/`manageGuard` and an unreachable `actorId` check; responses are unchanged, and `GET` without `panel_access` now includes `required: 'panel_access'`. No new permission keys were introduced: flags without a key in the catalog are still not delegable to API tokens (#351).
 
 ### Removed
 
-- Плагин `panelBridge` больше не поднимает в режиме `production` сокет `PANEL_BRIDGE_SOCKET`, исполнявший произвольные RCON-команды без аутентификации; потребителей у него не было, хелпер `sidecarSocketPath` удалён (#1347).
+- In `production` mode the `panelBridge` plugin no longer opens the `PANEL_BRIDGE_SOCKET` socket, which executed arbitrary RCON commands without authentication; it had no consumers, and the `sidecarSocketPath` helper was removed (#1347).
 
-## 2026-09-30 — Заметки удалённого автора остаются в истории (#78, 1137)
+## 2026-09-30 — Notes by a deleted author stay in the history (#78, 1137)
 
-- `GET /api/v1/players/:playerId/notes`, `GET /api/v1/notes` и `/api/v1/notes/export`: заметка, чей автор удалён (`player_notes.author_id IS NULL`, миграция 0137), больше не пропадает из выдачи. Контракт ответа не меняется: `author` остаётся объектом, для удалённого автора это `{ id: '', name: 'Удалённый игрок', role_color: null }` (в ленте и `role_name: null`). Править такую заметку никто не может (`403 forbidden`), удалить её может обладатель права удаления чужих заметок.
-- Тест: `test/notes-deleted-author.test.ts`.
+- `GET /api/v1/players/:playerId/notes`, `GET /api/v1/notes` and `/api/v1/notes/export`: a note whose author was deleted (`player_notes.author_id IS NULL`, migration 0137) no longer disappears from the results. The response contract does not change: `author` remains an object, and for a deleted author it is `{ id: '', name: 'Удалённый игрок', role_color: null }` (the feed also gets `role_name: null`); the name is the Russian UI label "Deleted player". Nobody can edit such a note (`403 forbidden`); it can be deleted by the holder of the permission to delete other people's notes.
+- Test: `test/notes-deleted-author.test.ts`.
 
-## 2026-09-30 — Клановый каталог с пагинацией на сервере, шапка клана без ростера, сортировка боевого лога по урону (#83)
-
-### Added
-
-- `GET /api/v1/clans/:id?include=none` отдаёт шапку клана и `priority_count` без списка `members` (без JOIN на `players`). Значение по умолчанию `include=members` сохраняет прежний ответ; неизвестное значение → 400.
-- `GET /api/v1/clans` принимает `q` (имя или тег, без учёта регистра, LIKE-метасимволы экранируются), `sort` (`name`/`members`/`priority`), `order`, `page` и `limit` (1..200). Без `limit` возвращается весь каталог, как раньше. `total` теперь равен числу кланов, подошедших под `q`; счётчики участников считаются одним `LEFT JOIN ... GROUP BY` вместо двух коррелированных подзапросов на строку.
-- `GET /api/v1/combat-events` принимает `sort=damage` и `dir=asc|desc`: сортировка по урону на всём наборе с keyset-курсором `(damage, id)`; в этом режиме попадают только события с заполненным уроном, курсор по времени отклоняется (`400 invalid_cursor`).
-- `GET /api/v1/combat-events` принимает `excludeTeamkills=true`. Фасет «Убийства» в боевом логе использует его (смерти без тимкиллов), «Смерти» остаётся всеми смертями.
-
-### Changed
-
-- Тип ответа `GET /api/v1/analytics/votes` (`VoteAnalytics`) вынесен в `@squad/shared-types` и используется API и панелью дашборда.
-
-## 2026-09-30 — Список разрешённых частных сетей для RCON внешнего сервера (#30, #333)
+## 2026-09-30 — Server-paginated clan catalog, clan header without the roster, combat log sorted by damage (#83)
 
 ### Added
 
-- `EXTERNAL_HOST_PRIVATE_ALLOWLIST` (пусто — прежнее поведение, `none` или список адресов/CIDR). `POST /api/v1/servers/external` и `PUT /api/v1/servers/:id/external-connection` отвечают `400 rcon_host_private_not_allowed` (сообщение на русском), если `rcon_host` — частный адрес вне списка. Неверное значение останавливает API при старте.
+- `GET /api/v1/clans/:id?include=none` returns the clan header and `priority_count` without the `members` list (no JOIN on `players`). The default `include=members` keeps the previous response; an unknown value gives 400.
+- `GET /api/v1/clans` accepts `q` (name or tag, case-insensitive, LIKE metacharacters are escaped), `sort` (`name`/`members`/`priority`), `order`, `page` and `limit` (1..200). Without `limit` the whole catalog is returned, as before. `total` is now the number of clans matching `q`; member counters are computed with a single `LEFT JOIN ... GROUP BY` instead of two correlated subqueries per row.
+- `GET /api/v1/combat-events` accepts `sort=damage` and `dir=asc|desc`: sorting by damage over the whole set with a keyset cursor `(damage, id)`; in this mode only events with a populated damage value are included, and a time-based cursor is rejected (`400 invalid_cursor`).
+- `GET /api/v1/combat-events` accepts `excludeTeamkills=true`. The «Убийства» (Kills) facet in the combat log uses it (deaths without teamkills), while «Смерти» (Deaths) stays all deaths.
 
 ### Changed
 
-- `PUT /api/v1/players/:id/role` и `POST /api/v1/roles/:id/members` не вызывают отдельную проверку потолка прав после проверки иерархии: она строже и уже покрывает те же права, ответы не меняются.
+- The response type of `GET /api/v1/analytics/votes` (`VoteAnalytics`) was moved to `@squad/shared-types` and is used by the API and the dashboard panel.
 
-## 2026-09-30 — Сайдкар RNSquadJS больше не открывает RCON-сокет (#75)
+## 2026-09-30 — Private-network allowlist for external-server RCON (#30, #333)
+
+### Added
+
+- `EXTERNAL_HOST_PRIVATE_ALLOWLIST` (empty — previous behavior, `none`, or a list of addresses/CIDRs). `POST /api/v1/servers/external` and `PUT /api/v1/servers/:id/external-connection` respond `400 rcon_host_private_not_allowed` (message in Russian) if `rcon_host` is a private address outside the list. An invalid value stops the API at startup.
+
+### Changed
+
+- `PUT /api/v1/players/:id/role` and `POST /api/v1/roles/:id/members` no longer run a separate permission-ceiling check after the hierarchy check: the hierarchy check is stricter and already covers the same permissions; responses are unchanged.
+
+## 2026-09-30 — The RNSquadJS sidecar no longer opens an RCON socket (#75)
 
 ### Removed
 
-- Плагин `panelBridge` не поднимает HTTP-прокси RCON на unix-сокете (`RconUnixServer`, `rconExec`): у него не было вызывающих (клиент `app.rcon` удалён в #66), а сам сокет без аутентификации давал полный RCON любому процессу с доступом к каталогу `sock`.
-- `buildSidecarEnv` больше не передаёт `PANEL_BRIDGE_SOCKET`, удалена `sidecarSocketPath`. Мост по-прежнему принимает ключ `PANEL_BRIDGE_SOCKET` в allowlist окружения сайдкара, поэтому откат на прошлый релиз API, который его отправляет, работает.
+- The `panelBridge` plugin no longer starts the RCON HTTP proxy on a unix socket (`RconUnixServer`, `rconExec`): it had no callers (the `app.rcon` client was removed in #66), and the unauthenticated socket itself gave full RCON to any process with access to the `sock` directory.
+- `buildSidecarEnv` no longer passes `PANEL_BRIDGE_SOCKET`, and `sidecarSocketPath` was removed. The bridge still accepts the `PANEL_BRIDGE_SOCKET` key in the sidecar environment allowlist, so rolling back to a previous API release that sends it works.
 
-## 2026-09-30 — Внешний якорь цепочки аудита в verify-chain (#50, #1064)
-
-### Added
-
-- `GET /api/v1/audit/verify-chain` возвращает `head: { id, row_hash } | null` (последняя проверенная строка) и принимает необязательные `anchor_id` + `anchor_hash` (только вместе, иначе 400). Если строки с этим `id` нет или её `row_hash` другой (усечён хвост или цепочка пересоздана целиком), ответ `ok: false`, `reason: "anchor"`, `broken_at` = `anchor_id`. Без якоря поведение прежнее.
-
-## 2026-09-30 — Проверка parser_config источников банов (#92)
-
-- `POST /api/v1/ban-sources` и `PUT /api/v1/ban-sources/:id`: `parser_config` теперь проверяется по схеме, которую читает `worker-ban-sync` (`list_path` — строка, `fields.*` — строки-пути, `csv.delimiter` — ровно один символ, `csv.has_header` — boolean, `csv.columns.*` — число или строка). Неверное значение даёт 400 при сохранении, а не ошибку каждой синхронизации. Неизвестные ключи по-прежнему принимаются.
-
-## 2026-09-30 — Запоздавший снимок балансировщика не вытесняет более новый (#78)
-
-- `POST /api/v1/integrations/balancer/proposals`: снимок с `generated_at` раньше текущего `open` сохраняется сразу как `superseded`, а не вытесняет более новый. Инвариант «один open на `(server_id, mode)`» подкреплён уникальным индексом в БД.
-
-## 2026-09-30 — Лёгкий список источников банов для фильтра реестра (#561)
+## 2026-09-30 — External audit-chain anchor in verify-chain (#50, #1064)
 
 ### Added
 
-- `GET /api/v1/ban-sources/options` (`ban_source:view`) отдаёт только `{ id, name }` без подсчёта записей `external_bans` и без `parser_config`. Фильтр «Источник бана» на странице реестра использует его вместо `GET /api/v1/ban-sources`.
+- `GET /api/v1/audit/verify-chain` returns `head: { id, row_hash } | null` (the last verified row) and accepts optional `anchor_id` + `anchor_hash` (only together, otherwise 400). If there is no row with that `id` or its `row_hash` differs (the tail was truncated or the whole chain was recreated), the response is `ok: false`, `reason: "anchor"`, `broken_at` = `anchor_id`. Without an anchor the behavior is unchanged.
 
-## 2026-09-27 — VIP-тир нельзя привязать к панельной или системной роли (#31)
+## 2026-09-30 — Validation of ban-source parser_config (#92)
+
+- `POST /api/v1/ban-sources` and `PUT /api/v1/ban-sources/:id`: `parser_config` is now validated against the schema that `worker-ban-sync` reads (`list_path` — a string, `fields.*` — path strings, `csv.delimiter` — exactly one character, `csv.has_header` — boolean, `csv.columns.*` — a number or a string). An invalid value yields 400 on save instead of an error on every sync. Unknown keys are still accepted.
+
+## 2026-09-30 — A late balancer snapshot does not displace a newer one (#78)
+
+- `POST /api/v1/integrations/balancer/proposals`: a snapshot whose `generated_at` is earlier than the current `open` one is stored immediately as `superseded` instead of displacing the newer one. The "one open per `(server_id, mode)`" invariant is backed by a unique index in the DB.
+
+## 2026-09-30 — Lightweight ban-source list for the registry filter (#561)
+
+### Added
+
+- `GET /api/v1/ban-sources/options` (`ban_source:view`) returns only `{ id, name }`, without counting `external_bans` records and without `parser_config`. The «Источник бана» (Ban source) filter on the registry page uses it instead of `GET /api/v1/ban-sources`.
+
+## 2026-09-27 — A VIP tier cannot be bound to a panel or system role (#31)
 
 ### Security
 
-- `POST /api/v1/vip-tiers` и `PUT /api/v1/vip-tiers/:id` отвечают `403 role_grants_panel_access`, если `role_id` указывает на роль с `panel_access` или системную роль (включая Owner). Раньше проверялось только существование роли, и держатель `can_edit_roles` без `can_assign_roles` мог перевести тир на такую роль, а воркер продления подписок выдал бы её подписчику.
-- Продление подписки в `worker-role-expirer` повторяет эту проверку перед списанием: для тира с такой ролью подписка завершается с причиной `role_grants_panel_access`, бонусы не списываются и роль не выдаётся.
+- `POST /api/v1/vip-tiers` and `PUT /api/v1/vip-tiers/:id` respond `403 role_grants_panel_access` if `role_id` points to a role with `panel_access` or to a system role (including Owner). Previously only the role's existence was checked, and a holder of `can_edit_roles` without `can_assign_roles` could move a tier to such a role, and the subscription-renewal worker would then grant it to the subscriber.
+- Subscription renewal in `worker-role-expirer` repeats this check before charging: for a tier with such a role the subscription ends with reason `role_grants_panel_access`, no bonuses are charged and the role is not granted.
 
-## 2026-09-27 — Внешний сервер не может указывать на саму панель (#34)
-
-### Security
-
-- `POST /api/v1/servers/external` и `PUT /api/v1/servers/:id/external-connection` возвращают `400`, если `rcon_host` указывает на хост панели: loopback, unspecified и link-local адреса (IPv4, IPv6, IPv4-mapped), `localhost` и `*.localhost`, `*.docker.internal`, `*.containers.internal`, имена без точки (имена docker-сервисов вроде `redis`) и нестандартные числовые формы (`127.1`, `2130706433`). Частные адреса LAN (`10.x`, `192.168.x`, `fd00::/8`) по-прежнему разрешены.
-- Те же маршруты возвращают `400`, если `rcon_password` содержит CR, LF или NUL: пароль уходит в пакет SERVERDATA_AUTH как есть, и перевод строки позволял выполнять команды в Redis хоста без аутентификации.
-
-## 2026-09-27 — Исправления аудита API-библиотек (#36)
+## 2026-09-27 — An external server cannot point at the panel itself (#34)
 
 ### Security
 
-- `panel_access` больше не выдаёт инфраструктурные права. `host:manage`, `server:install`, `server:delete`, `server:force_stop`, `server:update`, `config:edit`, `config:rollback`, `admin_group:edit`, `api_token:create` и `backup:restore` требуют нового флага роли `can_manage_infrastructure` (миграция 0120). Флаг получили роль Admin и роли с `can_edit_roles`, у Moderator его нет. `POST/PUT /api/v1/roles` принимают `can_manage_infrastructure`, `GET /api/v1/roles` его возвращает.
-- Явные строки `role_permissions` проходят те же проверки флагов, что и права из `panel_access`, и больше не обходят их. Миграция 0121 удалила сохранённые legacy-строки.
-- `POST /api/v1/integrations/balancer/proposals` отклоняет `x-balancer-timestamp`, который отличается от часов панели больше чем на 300 с (`401 invalid_signature`), поэтому перехваченный запрос нельзя повторить позже.
+- `POST /api/v1/servers/external` and `PUT /api/v1/servers/:id/external-connection` return `400` if `rcon_host` points at the panel host: loopback, unspecified and link-local addresses (IPv4, IPv6, IPv4-mapped), `localhost` and `*.localhost`, `*.docker.internal`, `*.containers.internal`, dotless names (docker service names such as `redis`) and non-standard numeric forms (`127.1`, `2130706433`). Private LAN addresses (`10.x`, `192.168.x`, `fd00::/8`) are still allowed.
+- The same routes return `400` if `rcon_password` contains CR, LF or NUL: the password goes into the SERVERDATA_AUTH packet as is, and a line break allowed running commands in the host's Redis without authentication.
+
+## 2026-09-27 — API library audit fixes (#36)
+
+### Security
+
+- `panel_access` no longer grants infrastructure permissions. `host:manage`, `server:install`, `server:delete`, `server:force_stop`, `server:update`, `config:edit`, `config:rollback`, `admin_group:edit`, `api_token:create` and `backup:restore` require the new role flag `can_manage_infrastructure` (migration 0120). The Admin role and roles with `can_edit_roles` received the flag; Moderator does not have it. `POST/PUT /api/v1/roles` accept `can_manage_infrastructure`, and `GET /api/v1/roles` returns it.
+- Explicit `role_permissions` rows go through the same flag checks as permissions derived from `panel_access` and no longer bypass them. Migration 0121 deleted the stored legacy rows.
+- `POST /api/v1/integrations/balancer/proposals` rejects an `x-balancer-timestamp` that differs from the panel clock by more than 300 s (`401 invalid_signature`), so an intercepted request cannot be replayed later.
 
 ### Fixed
 
-- Предупреждение ALT-7 и `GET /api/v1/players/:id/alt-candidates` не считают строку `unban` (и `external_ban_kick`) активным баном: учитываются только строки `action_type = 'ban'` без `reverted_at`.
-- `PUT /api/v1/servers/:id/rotation` и календарь ротации отклоняют имя слоя с `//` в любом месте, с управляющими символами и с пробелами по краям. Имя с `//SQUAD-PANEL END` внутри больше не ломает управляемый сегмент `LayerRotation.cfg`.
-- `GET /api/v1/message-templates` больше ничего не вставляет. Встроенные шаблоны засеваются один раз миграцией 0119, поэтому удалённый шаблон не возвращается.
-- `POST /api/v1/media` и `POST /api/v1/public/media` отвечают `413 file_too_large`, если multipart-парсер обрезал файл по лимиту. Раньше файл больше 2 GiB молча сохранялся обрезанным.
-- `GET /api/v1/logs/export`: ошибка Redis или Postgres во время экспорта обрывает ответ и пишется в лог, а не роняет процесс API. Поток `panel:logs` читается один раз, а не по разу на каждую секцию.
-- `GET /api/v1/audit/verify-chain` больше не сообщает о ложном разрыве цепочки при параллельных вставках и при записи из сессии с другим TimeZone (миграция 0122). Таблица читается страницами по 5000 строк из одного снимка, одновременно идёт только одна проверка (`409 verify_in_progress`).
-- `GET /api/v1/servers/:id/configs/:name/blame` сортирует версии по точному `created_at` в SQL и разбирает не больше 200 последних версий. При обрезке истории ответ содержит `truncated: true`.
-- `POST /api/v1/settings/chat-flag-rules/reindex` обходит сообщения по новому индексу `(sent_at, id)` (миграция 0123) и обновляет каждую страницу одним запросом. Одновременно идёт только одна переиндексация (`409 reindex_in_progress`).
-- RCON-команда, по которой API уже ответил таймаутом, больше не выполняется воркером позже: в записи потока есть `deadline_at`, и после этого срока worker-rcon команду не запускает.
+- The ALT-7 warning and `GET /api/v1/players/:id/alt-candidates` no longer count an `unban` row (or `external_ban_kick`) as an active ban: only rows with `action_type = 'ban'` and no `reverted_at` are counted.
+- `PUT /api/v1/servers/:id/rotation` and the rotation calendar reject a layer name with `//` anywhere, with control characters, or with leading/trailing whitespace. A name containing `//SQUAD-PANEL END` no longer breaks the managed segment of `LayerRotation.cfg`.
+- `GET /api/v1/message-templates` no longer inserts anything. The built-in templates are seeded once by migration 0119, so a deleted template does not come back.
+- `POST /api/v1/media` and `POST /api/v1/public/media` respond `413 file_too_large` if the multipart parser truncated the file at the limit. Previously a file larger than 2 GiB was silently saved truncated.
+- `GET /api/v1/logs/export`: a Redis or Postgres error during export aborts the response and is written to the log instead of crashing the API process. The `panel:logs` stream is read once, not once per section.
+- `GET /api/v1/audit/verify-chain` no longer reports a false chain break under concurrent inserts and when writing from a session with a different TimeZone (migration 0122). The table is read in pages of 5000 rows from a single snapshot, and only one verification runs at a time (`409 verify_in_progress`).
+- `GET /api/v1/servers/:id/configs/:name/blame` sorts versions by the exact `created_at` in SQL and analyzes at most the 200 most recent versions. When the history is truncated, the response contains `truncated: true`.
+- `POST /api/v1/settings/chat-flag-rules/reindex` walks messages using the new `(sent_at, id)` index (migration 0123) and updates each page with a single query. Only one reindex runs at a time (`409 reindex_in_progress`).
+- An RCON command for which the API already responded with a timeout is no longer executed later by the worker: the stream record carries `deadline_at`, and after that deadline worker-rcon does not run the command.
 
-## 2026-09-27 — Надёжность плагинов API, апелляций и проверки аудита (#37)
-
-### Fixed
-
-- `DELETE /api/v1/servers/:id` прерывается до любого удаления, если хотя бы один конфиг не удалось прочитать по причине, отличной от «файла нет» (таймаут или транспортная ошибка моста, лимит 10 МБ). Раньше удаление останавливалось, только когда не читался ни один файл, и каталог конфигов удалялся вместе с непрочитанными файлами. «Файла нет» теперь определяется по коду моста `not_found`, а не по тексту ошибки.
-- Истёкшие сессии удаляются раз в час (плагин `session-prune`); `pruneExpired` возвращает реальное число удалённых строк.
-- Ответ 5xx больше не содержит `err.message` (текст SQL-запроса и параметры): тело — `{ statusCode, error: 'internal_error', requestId }`, подробности остаются в diag-событии `http.5xx`. Ответы 4xx не изменились.
-- Необработанный отказ промиса после записи diag-события завершает процесс с кодом 1, и Docker перезапускает API. Слушатель свой у каждого экземпляра приложения и снимается при закрытии.
-- `worker.heartbeat_lost` отслеживается для всех воркеров из `docker/compose.yml` (`MONITORED_WORKERS` в `@squad/shared-config`), а не для шести.
-- Кадры из Redis-канала `live-bus` пересылаются, только если `type` — известный тип LiveEvent, `ts` — строка, `data` — объект; остальные отбрасываются с записью в лог (один раз на тип). `combat.vehicle` добавлен в объединения LiveEvent API и web и, как `combat.event`, доходит только до сокетов с правом combat:view.
-- Команды Redis ждут ответа не дольше 5 с (`commandTimeout`), очередь офлайн-команд сбрасывается после 3 попыток переподключения; `redis.ping.fail` и `redis.reconnect.attempt` пишутся один раз за сбой, а не на каждую попытку.
-- Реконсилер статусов проверяет краш на каждом успешном inspect, в том числе при переходе running → running, когда Docker уже перезапустил контейнер. Раньше краши и crash loop почти не детектировались.
-- `PATCH /api/v1/appeals/:id` захватывает переход сравнением текущего статуса (compare-and-set): из двух одновременных решений выигрывает одно, второе получает `409 appeal_already_decided` (или `409 appeal_status_changed`). Если одобрение не смогло отредактировать `Bans.cfg`, апелляция возвращается в прежний статус.
-- Одобрение апелляции снимает и баны удалённых серверов (`server_id` NULL): они помечаются снятыми в реестре, добавляется строка `unban` без сервера, и игрок пропадает из публичного банлиста.
-- `GET /api/v1/audit/verify-chain` и `pnpm verify:audit-chain` читают `audit_log` страницами по 1000 строк вместо одного запроса на всю таблицу; маршрут ограничен 6 вызовами в минуту.
-
-### Security
-
-- Анонимный запрос, отклонённый с 401/403, больше не пишет строку в `audit_log`. В `context.url` сохраняется путь без query-строки, `url` и `userAgent` обрезаются до 512 символов.
-
-## 2026-09-27 — Аудит маршрутов API (#38)
-
-### Security
-
-- `GET /api/v1/chat/messages[/count]`, `GET /api/v1/automation-rules`, `GET /api/v1/automation-runs`, `GET /api/v1/ban-sources[/:id]` и `GET /api/v1/analytics/dashboard` требуют, помимо `panel_access`, права из каталога: `events:view`, `trigger:view`, нового `ban_source:view` и `server:view` соответственно. API-токен с любым посторонним scope больше их не читает (аудит #89/#101/#114).
-- `url` источника банов (`POST`/`PUT /api/v1/ban-sources`) не может указывать на внутренние адреса: отклоняются схемы кроме http/https, логин в URL, имена без точки (`redis`, `postgres`, `api`), `localhost`/`.local`/`.internal` и непубличные IP (`400`, `url_not_allowed: <причина>`). `worker-ban-sync` повторяет проверку перед каждым запросом и редиректом, не подключается к адресам, в которые резолвится имя, если они непубличные, и не пересылает `Authorization` на другой origin (аудит #100).
-- Мутации `/api/v1/ban-sources` и `/api/v1/banned-names` аудируются декларативно: запись в `audit_log` появляется и при отказе (`403`/`404`/`409`/`422`). CI-гард `audit-coverage.test.ts` собирает маршруты через `registerRoutes()` (аудит #102/#116).
-- Regex-правила забаненных ников с вложенным или альтернативным повторением и с обратными ссылками отклоняются (`422`, `detail: pattern_unsafe_regex`) и не исполняются, даже если сохранены раньше; `GET /api/v1/banned-names/check` принимает ник не длиннее 64 символов (аудит #115).
-- Заместитель клана может менять приоритет только рядовым участникам: для главы, другого заместителя и себя `PUT /api/v1/clans/:id/members/:playerId/priority` отвечает `403` (аудит #125).
-- Все CSV-экспорты обезвреживают формулы: строковая ячейка, начинающаяся с `=`, `+`, `-`, `@`, табуляции или CR, получает префикс `'` и кавычки (аудит #137).
+## 2026-09-27 — Reliability of API plugins, appeals and audit verification (#37)
 
 ### Fixed
 
-- `logout`, `logout-all` и `DELETE /api/v1/me/sessions` удаляют cookie `__Host-sid` с атрибутами `Secure; HttpOnly; SameSite=Lax; Path=/`, без которых браузер игнорировал удаление; так же очищаются `__Host-steam-nonce` и `__Host-discord-state` (аудит #1233).
-- Поиск по нику в чате, журнале событий, голосованиях и боевых событиях выполняется одним подзапросом вместо списка id в `IN (...)`: короткий запрос больше не упирается в лимит 65 535 параметров. Запрос нормализуется как хранимые имена, поэтому ник с клан-тегом (`[TAG] Nick`) находится; миграция `0119` добавляет триграммные GIN-индексы (аудит #117/#118/#138). Фильтр по имени в боевых событиях теперь учитывает и прошлые ники.
-- `GET /api/v1/clans/:id/stats` считает гистограмму праймтайма по всем сессиям окна в Postgres, а не по 5000 самым старым (аудит #126).
-- Колонка онлайна за 60 дней в `GET /api/v1/clans/:id/members` считается только по участникам клана (аудит #127).
-
-## 2026-09-27 — Маршруты игроков, логов и медиа: права и корректность (#40)
-
-### Security
-
-- Апелляция на бан (`POST /api/v1/public/appeals`) принимается только от владельца аккаунта: игрок входит через Steam (`/api/v1/auth/steam/login?return_to=%2Fappeal` возвращает его на страницу апелляции, забаненный игрок без роли получает self-service-сессию), и апелляция подаётся за SteamID64 этого входа. Без сессии — `401`, чужой `steam_id64` в теле — `403 steam_id_mismatch`. Раньше апелляцию за чужой SteamID мог подать кто угодно: он получал её трекинг-токен, блокировал настоящую апелляцию игрока ответом `409` и выжигал его суточный лимит. Аудит `appeal.create` теперь пишется от проверенного игрока (`actor_kind='steam'`). Страница `/appeal` сначала предлагает войти через Steam и показывает SteamID64 входа только для чтения.
-- Метки игроков: `POST /api/v1/players/:playerId/marks` и `DELETE …/marks/:markId` требуют `player:set_flags` (право больше не `unimplemented`), чтение меток, `GET /api/v1/mark-types` и `GET /api/v1/marks/active-summary` — `player:view`. Раньше хватало `panel_access`, и API-токен с любым посторонним scope мог ставить и снимать метки.
-- `GET /api/v1/players/:playerId/compare-online`, `/coplay`, `/ban-alt-warning` и `/dossier` объявляют `player:view`, поэтому scopes API-токена сужают и их.
-- `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats` и `/vehicle-stats` требуют `player:view` и, как `/dossier`, `combat_view` для чужого игрока (свой игрок открыт без него).
-
-### Fixed
-
-- `GET /api/v1/logs` применяет фильтры во время сканирования стрима: читает порциями, пока не наберёт `limit` совпадений или не просканирует 20 000 записей, и возвращает `newest_scanned_id`/`oldest_scanned_id`. Живой хвост в «Логах» продвигает `after` до `newest_scanned_id` даже при пустой выдаче, поэтому длинная серия неподходящих записей больше не останавливает его.
-- `DELETE /api/v1/media/:id/publications/:destination` отвечает `409 publication_in_progress`, если воркер уже загружает публикацию (`status = 'uploading'`), и не удаляет строку.
-- `POST /api/v1/media` и `POST /api/v1/public/media` отвечают `413 file_too_large` на файл больше лимита загрузки и удаляют недописанный файл. Раньше `@fastify/multipart` молча обрезал такой файл по `limits.fileSize`, и обрезанная улика сохранялась с ответом `201`.
-- `GET /api/v1/message-templates` больше не пересоздаёт шаблоны по умолчанию на каждом чтении: удалённый шаблон по умолчанию остаётся удалённым, а чтение больше не пишет в БД. Шаблоны по умолчанию один раз добавляет миграция `0119_message_templates_seed_once`.
-- Разбан (`POST /api/v1/moderation-actions/:id/revert` и одобрение апелляции `PATCH /api/v1/appeals/:id`) отвечает `502 bans_cfg_unavailable`, если bridge не смог прочитать `Bans.cfg` (в том числе при проверочном чтении после записи). Ledger, событие EVT-1 и статус апелляции при этом не меняются. Раньше любая ошибка чтения считалась пустым файлом: панель помечала игрока разбаненным, а строка `Banned:` оставалась в файле. Отсутствующий `Bans.cfg` по-прежнему означает «строк нет».
-- Кандидаты в альты (`GET /api/v1/players/:playerId/alt-candidates`) и предупреждение перед баном (`GET …/ban-alt-warning`) считают активным баном только строку `action_type = 'ban'`, которая не снята и не истекла (срок берётся из `context.ban_length`). Строки `unban` и `external_ban_kick` больше не делают игрока «забаненным», а сигнал «молодой аккаунт» отсчитывается от последнего неснятого бана цели, а не от разбана или кика. Общее правило вынесено в `lib/moderation-ban-state.ts`.
-- `GET /api/v1/players/:playerId/alt-candidates` оценивает не больше 1000 кандидатов (с наибольшим числом общих неигнорируемых IP) и передаёт их id одним параметром-массивом. Раньше цель за CGNAT с десятками тысяч кандидатов упиралась в лимит bind-параметров Postgres и получала `500`. `total` считает оценённых кандидатов.
-- `GET /api/v1/geo-anomalies` загружает историю IP всех кандидатов одним оконным запросом (до 500 последних строк на игрока) вместо отдельного запроса на каждого из до 500 кандидатов.
-- `GET /api/v1/players` принимает `limit` (1–500, по умолчанию 200) и `offset`, а `total` считает всех подходящих игроков, а не размер страницы. На странице «Все игроки» появилась постраничная навигация, и «всего» показывает настоящее число игроков.
-- Поиск игроков по нику: миграция `0126_player_search_and_report_indexes` добавляет GIN-индексы `pg_trgm` на `players.canonical_name_normalized` и `player_name_history.name_normalized`, поэтому `LIKE '%q%'` в списке, поиске и других маршрутах больше не читает таблицы целиком. Точное совпадение по SteamID64 в `/players`, `/players/search`, `/users`, лидербордах, участниках роли и составе клана сравнивает `steam_id64` как `bigint` и не приводит столбец к тексту. В `/players` и `/players/search` символы `%` и `_` в запросе ищутся буквально.
-
-## 2026-09-28 — Роли, репорты, банлист и восстановление из архива (#41)
+- `DELETE /api/v1/servers/:id` aborts before any deletion if at least one config could not be read for a reason other than "file not found" (a timeout or transport error of the bridge, the 10 MB limit). Previously the deletion stopped only when no file could be read at all, and the config directory was deleted together with the unread files. "File not found" is now determined by the bridge code `not_found`, not by the error text.
+- Expired sessions are deleted once an hour (the `session-prune` plugin); `pruneExpired` returns the real number of deleted rows.
+- A 5xx response no longer contains `err.message` (the SQL query text and parameters): the body is `{ statusCode, error: 'internal_error', requestId }`, and the details stay in the `http.5xx` diag event. 4xx responses are unchanged.
+- An unhandled promise rejection after a diag event is written terminates the process with exit code 1, and Docker restarts the API. Each application instance has its own listener, which is removed on close.
+- `worker.heartbeat_lost` is tracked for all workers from `docker/compose.yml` (`MONITORED_WORKERS` in `@squad/shared-config`), not for six.
+- Frames from the `live-bus` Redis channel are forwarded only if `type` is a known LiveEvent type, `ts` is a string and `data` is an object; the rest are dropped with a log entry (once per type). `combat.vehicle` was added to the API and web LiveEvent unions and, like `combat.event`, reaches only sockets with the combat:view permission.
+- Redis commands wait for a reply for at most 5 s (`commandTimeout`), the offline command queue is flushed after 3 reconnect attempts; `redis.ping.fail` and `redis.reconnect.attempt` are written once per failure rather than on every attempt.
+- The status reconciler checks for a crash on every successful inspect, including on a running → running transition when Docker has already restarted the container. Previously crashes and crash loops were barely detected.
+- `PATCH /api/v1/appeals/:id` captures the transition by comparing the current status (compare-and-set): of two simultaneous decisions one wins and the other gets `409 appeal_already_decided` (or `409 appeal_status_changed`). If an approval could not edit `Bans.cfg`, the appeal returns to its previous status.
+- Approving an appeal also lifts bans on deleted servers (`server_id` NULL): they are marked lifted in the registry, an `unban` row without a server is added, and the player disappears from the public ban list.
+- `GET /api/v1/audit/verify-chain` and `pnpm verify:audit-chain` read `audit_log` in pages of 1000 rows instead of a single query over the whole table; the route is limited to 6 calls per minute.
 
 ### Security
 
-- Потолок привилегий: `POST /api/v1/roles/:id/members`, `…/members/import`, `…/members/move` и `PUT /api/v1/players/:playerId/role` отвечают `403 role_exceeds_actor_permissions` (с `capabilities[]`), если назначаемая роль даёт флаг, Squad-право или ключ `role_permissions`, которого нет у самого актора; `POST /api/v1/roles` и `PUT /api/v1/roles/:id` так же отказывают, если правка впервые выдаёт роли такое право. Owner не ограничен.
-- CSV-экспорты `GET /api/v1/analytics/reports?format=csv` и `GET /api/v1/roles/:id/members/export` (а также общий `escapeCsvField` из `analytics.ts`) экранируют ячейки, начинающиеся с `=`, `+`, `-`, `@`, TAB или CR, префиксом `'` (CSV formula injection).
+- An anonymous request rejected with 401/403 no longer writes a row to `audit_log`. `context.url` stores the path without the query string, and `url` and `userAgent` are truncated to 512 characters.
 
-### Fixed
-
-- `GET /api/v1/public/banlist?format=json`: ETag больше не зависит от `generated_at`, поэтому `If-None-Match` возвращает `304`; `If-None-Match` разбирается как список со слабым сравнением (`W/`); порядок записей детерминирован.
-- `POST /api/v1/reports/:id/actions` идёт через общий `enforceModerationAction` (`source: 'report'`): контекст бана содержит `expires_at`, `rcon_request_id`, `target`; при сбое на одной из целей уже применённые действия остаются в журнале и аудите и перечислены в `applied[]` ответа `502`.
-- `POST /api/v1/reports/bulk-resolve` блокирует открытые репорты и обновляет их вместе с аудитом (с `before`) в одной транзакции — репорт, закрытый другим обработчиком, не перезаписывается и не попадает в `resolved_ids`; уведомления репортёров отправляются параллельно.
-- Мутации `/api/v1/roles/:id/members*` публикуют синхронизацию ролей Discord (массовые — один полный reconcile); импорт назначает роль одним `UPDATE … FROM (VALUES …)`, массовые операции отзывают сессии одним запросом.
-- Аудит `role.create`/`role.update`/`role.delete` содержит снимки `before`/`after` (флаги и `squad_permissions`) и `target_id` созданной роли.
-- `POST /api/v1/servers/archive/:id/restore` возвращает `409 port_conflict`, если порты заняты активным контейнерным сервером, и `409 duplicate_ports` для совпадающих портов.
-
-
-## 2026-09-28 — Редактор конфигов, установка, логи и force-stop (#42)
+## 2026-09-27 — API route audit (#38)
 
 ### Security
 
-- Запись `Bans.cfg`/`RemoteBanListHosts.cfg` через редактор конфигов (PUT, restore, drift accept/revert, reset-default) требует ещё и `mod:ban_perm`, а `Admins.cfg`/`RemoteAdminListHosts.cfg` — `user:manage_roles`; без них `403 { error: 'forbidden', required_permission }` (#1236).
-- Запись конфига для неизвестного или удалённого сервера отвечает `404` до любого обращения к bridge; сообщение версии не может начинаться с `deletion-backup-marker` (`400`) (#281).
-- `Password=`/`Port=` в `Rcon.cfg` должны совпадать с `server_credentials`, иначе `422 rcon_credentials_managed`; маска пароля всегда заполняется паролем панели (#280).
-- `WS /api/v1/servers/:id/logs/ws` требует `server:download_logs`, как и файлы логов (#1239).
-- `logs/ws` и `depot/progress/ws`: не больше 4 сокетов на пользователя и 32 на процесс, дальше `{error:'too_many_streams'}` и код закрытия 1013 (#1298).
+- `GET /api/v1/chat/messages[/count]`, `GET /api/v1/automation-rules`, `GET /api/v1/automation-runs`, `GET /api/v1/ban-sources[/:id]` and `GET /api/v1/analytics/dashboard` require, in addition to `panel_access`, a permission from the catalog: `events:view`, `trigger:view`, the new `ban_source:view` and `server:view` respectively. An API token with any unrelated scope no longer reads them (audit #89/#101/#114).
+- The `url` of a ban source (`POST`/`PUT /api/v1/ban-sources`) cannot point to internal addresses: schemes other than http/https, a login in the URL, dotless names (`redis`, `postgres`, `api`), `localhost`/`.local`/`.internal` and non-public IPs are rejected (`400`, `url_not_allowed: <reason>`). `worker-ban-sync` repeats the check before every request and redirect, does not connect to addresses a name resolves to if they are non-public, and does not forward `Authorization` to another origin (audit #100).
+- Mutations of `/api/v1/ban-sources` and `/api/v1/banned-names` are audited declaratively: an `audit_log` entry is written on denial too (`403`/`404`/`409`/`422`). The CI guard `audit-coverage.test.ts` collects routes through `registerRoutes()` (audit #102/#116).
+- Regex rules for banned nicknames with nested or alternation repetition and with backreferences are rejected (`422`, `detail: pattern_unsafe_regex`) and are not executed, even if saved earlier; `GET /api/v1/banned-names/check` accepts a nickname of at most 64 characters (audit #115).
+- A clan deputy can change priority only for rank-and-file members: for the leader, another deputy and themselves `PUT /api/v1/clans/:id/members/:playerId/priority` responds `403` (audit #125).
+- All CSV exports neutralize formulas: a string cell starting with `=`, `+`, `-`, `@`, a tab or CR gets a `'` prefix and quotes (audit #137).
 
 ### Fixed
 
-- Запись конфига идёт в одной транзакции под advisory-блокировкой (server, file): строка истории вставляется до записи на диск, tip в БД всегда описывает байты на диске (#282).
-- `history` считает размер через `octet_length`, `diff` читает только две версии (#284); `diff`, `drift/diff` и `blame` ограничены 2 с и отвечают `422 diff_too_large`, blame берёт последние 100 версий (#283).
-- `configs/drift` читает по одной последней версии на файл (`DISTINCT ON`) (#1335).
-- `POST /servers/:id/install` атомарно переводит сервер в `installing` только из `pending`/`failed` (`409 install_in_progress` / `409 server_not_installable`), во время установки обновляет `updated_at` раз в минуту; установка больше не пишет `.keep` под `saved/`, который отвергает bridge, и сайдкар запускается (#290, #1352).
-- `install/ws` отдаёт `{done:true, final}` и закрывается, если установка уже закончилась до подключения; новая попытка очищает буфер прогресса (#292).
-- Скачивание логов приостанавливает чтение из bridge, пока клиент не заберёт данные, и закрывает соединение с bridge при обрыве (#291).
-- `POST /servers/:id/force-stop` ставит `stop:requested:<id>`, останавливает сайдкар RNSquadJS и не перезаписывает статус, изменившийся за время `container_rm` (`409 server_status_changed`) (#285).
-- Предпросмотр map vote отбрасывает матчи без слоя так же, как scheduler (#301).
+- `logout`, `logout-all` and `DELETE /api/v1/me/sessions` delete the `__Host-sid` cookie with the attributes `Secure; HttpOnly; SameSite=Lax; Path=/`, without which the browser ignored the deletion; `__Host-steam-nonce` and `__Host-discord-state` are cleared the same way (audit #1233).
+- Nickname search in chat, the event log, votes and combat events is done with a single subquery instead of a list of ids in `IN (...)`: a short query no longer hits the 65,535-parameter limit. The query is normalized like stored names, so a nickname with a clan tag (`[TAG] Nick`) is found; migration `0119` adds trigram GIN indexes (audit #117/#118/#138). The name filter in combat events now also takes past nicknames into account.
+- `GET /api/v1/clans/:id/stats` computes the prime-time histogram over all sessions of the window in Postgres rather than over the 5000 oldest (audit #126).
+- The 60-day online column in `GET /api/v1/clans/:id/members` is computed only over clan members (audit #127).
 
-## 2026-09-28 — Исправления маршрутов серверов, расписаний и детекта альтов (#43)
+## 2026-09-27 — Player, log and media routes: permissions and correctness (#40)
 
 ### Security
 
-- `PUT /api/v1/settings/alt-detection`, `POST` и `DELETE /api/v1/settings/alt-detection/ignored-ips` требуют нового права `player:manage_alt_detection` (опасное). Роль получает его только вместе с `can_view_ips` и `can_edit_roles`; одного доступа «История IP» больше недостаточно, чтобы отключить детект мультиаккаунтов. `GET` по-прежнему требует `player:view_ips` и возвращает `can_edit`. Исключения шире `/8` (IPv4) и `/32` (IPv6) отклоняются с `400`.
+- A ban appeal (`POST /api/v1/public/appeals`) is accepted only from the account owner: the player signs in through Steam (`/api/v1/auth/steam/login?return_to=%2Fappeal` returns them to the appeal page, a banned player without a role gets a self-service session), and the appeal is filed for the SteamID64 of that sign-in. Without a session — `401`, a foreign `steam_id64` in the body — `403 steam_id_mismatch`. Previously anyone could file an appeal for someone else's SteamID: they received its tracking token, blocked the player's real appeal with a `409` reply and burned the player's daily limit. The `appeal.create` audit is now written on behalf of the verified player (`actor_kind='steam'`). The `/appeal` page first offers to sign in through Steam and shows the signed-in SteamID64 read-only.
+- Player marks: `POST /api/v1/players/:playerId/marks` and `DELETE …/marks/:markId` require `player:set_flags` (the permission is no longer `unimplemented`); reading marks, `GET /api/v1/mark-types` and `GET /api/v1/marks/active-summary` require `player:view`. Previously `panel_access` was enough, and an API token with any unrelated scope could set and remove marks.
+- `GET /api/v1/players/:playerId/compare-online`, `/coplay`, `/ban-alt-warning` and `/dossier` declare `player:view`, so API token scopes narrow them as well.
+- `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats` and `/vehicle-stats` require `player:view` and, like `/dossier`, `combat_view` for another player (one's own player is open without it).
 
 ### Fixed
 
-- `GET /api/v1/servers/:id/metrics` читает весь диапазон потока и прореживает его до 1000 точек, всегда сохраняя последнюю: окна 6 ч и 24 ч больше не теряют свежие точки.
-- `POST /api/v1/servers/:id/rnsquadjs` (`production`) идемпотентен: повторный запрос во время переключения отвечает `202 switching` без второй задачи, для уже переключённого сервера — `200 {status:'active'}` без пересоздания сайдкара. Переключение, прерванное перезапуском API, API доводит до конца при старте (хеш `rnsquadjs:cutover:pending`).
-- `GET /api/v1/servers/:id/rotation-schedule` возвращает записи только из диапазона `from`..`to`, читает сид-расписание и `depot:updating` один раз на запрос и не считает предупреждения для выполненных записей.
-- `GET` и `PUT /api/v1/servers/:id/rotation` отвечают `502 bridge_read_failed`, если `LayerRotation.cfg` не удалось прочитать по причине, отличной от отсутствия файла; `PUT` при этом ничего не записывает и не теряет строки вне управляемого сегмента.
-- `PATCH` задач планировщика, сид-расписания и `rotation-schedule` сбрасывает курсор `last_executed_at`: у повторяющейся записи при смене времени или включении он переносится на текущую минуту (пропущенные срабатывания не догоняются), у разовой при переносе очищается (выполненная запись сработает в новое время).
-- Ссылка `steam://connect/…` в вызове сидеров указывает на `rcon_host` внешнего сервера, а не на хост панели; `host_info` кэшируется на 60 с. Если публикация события или рассылка падает, двухчасовой кулдаун снимается.
-- `PUT /api/v1/servers/:id/settings` сначала открывает новые порты в UFW, затем сохраняет настройки и только потом закрывает старые. Ошибка открытия откатывает добавленные правила и отвечает `502 ufw_update_failed`, не меняя настроек.
-- Ненулевой код выхода SteamCMD в `POST /api/v1/servers/:id/update`, `POST /api/v1/depot/update` и при заполнении depot во время установки считается ошибкой (`depot:last_update` = `failed`). Блокировка `depot:updating` живёт 2 ч (вдвое дольше таймаута RPC) и снимается только её владельцем.
-- `POST /api/v1/servers` отвечает `409 slug_in_use` на занятый slug вместо `500` с текстом ошибки БД.
-- `POST /api/v1/servers/:id/restart` не скрывает ошибку остановки: если контейнер после неё всё ещё работает, ответ — `502 container_stop_failed` без запуска; удалённый контейнер пересоздаётся через `container_run`, как в `/start`. Маршрут пишет diag-события `server.restart.*` и отвечает `400 server_not_installed` без настроек.
+- `GET /api/v1/logs` applies filters while scanning the stream: it reads in batches until it collects `limit` matches or has scanned 20,000 records, and returns `newest_scanned_id`/`oldest_scanned_id`. The live tail in the Logs view advances `after` to `newest_scanned_id` even when the result is empty, so a long run of non-matching records no longer stalls it.
+- `DELETE /api/v1/media/:id/publications/:destination` responds `409 publication_in_progress` if a worker is already uploading the publication (`status = 'uploading'`), and does not delete the row.
+- `POST /api/v1/media` and `POST /api/v1/public/media` respond `413 file_too_large` for a file larger than the upload limit and delete the partially written file. Previously `@fastify/multipart` silently truncated such a file at `limits.fileSize`, and the truncated evidence was saved with a `201` response.
+- `GET /api/v1/message-templates` no longer recreates the default templates on every read: a deleted default template stays deleted, and reading no longer writes to the DB. The default templates are added once by migration `0119_message_templates_seed_once`.
+- An unban (`POST /api/v1/moderation-actions/:id/revert` and appeal approval `PATCH /api/v1/appeals/:id`) responds `502 bans_cfg_unavailable` if the bridge could not read `Bans.cfg` (including the verification read after a write). The ledger, the EVT-1 event and the appeal status do not change in that case. Previously any read error was treated as an empty file: the panel marked the player unbanned while the `Banned:` line remained in the file. A missing `Bans.cfg` still means "no lines".
+- Alt candidates (`GET /api/v1/players/:playerId/alt-candidates`) and the pre-ban warning (`GET …/ban-alt-warning`) count as an active ban only a row with `action_type = 'ban'` that is neither lifted nor expired (the term is taken from `context.ban_length`). `unban` and `external_ban_kick` rows no longer make a player "banned", and the «молодой аккаунт» (young account) signal is counted from the target's latest unlifted ban, not from an unban or a kick. The common rule was extracted into `lib/moderation-ban-state.ts`.
+- `GET /api/v1/players/:playerId/alt-candidates` evaluates at most 1000 candidates (those with the most shared non-ignored IPs) and passes their ids as a single array parameter. Previously a target behind CGNAT with tens of thousands of candidates hit the Postgres bind-parameter limit and got `500`. `total` counts the evaluated candidates.
+- `GET /api/v1/geo-anomalies` loads the IP history of all candidates with a single window query (up to the 500 most recent rows per player) instead of a separate query for each of up to 500 candidates.
+- `GET /api/v1/players` accepts `limit` (1–500, default 200) and `offset`, and `total` counts all matching players rather than the page size. The «Все игроки» (All players) page gained pagination, and «всего» (total) shows the real number of players.
+- Player search by nickname: migration `0126_player_search_and_report_indexes` adds `pg_trgm` GIN indexes on `players.canonical_name_normalized` and `player_name_history.name_normalized`, so `LIKE '%q%'` in the list, search and other routes no longer reads whole tables. An exact SteamID64 match in `/players`, `/players/search`, `/users`, leaderboards, role members and clan roster compares `steam_id64` as `bigint` and does not cast the column to text. In `/players` and `/players/search` the `%` and `_` characters in the query are searched literally.
+
+## 2026-09-28 — Roles, reports, ban list and restore from archive (#41)
+
+### Security
+
+- Privilege ceiling: `POST /api/v1/roles/:id/members`, `…/members/import`, `…/members/move` and `PUT /api/v1/players/:playerId/role` respond `403 role_exceeds_actor_permissions` (with `capabilities[]`) if the role being assigned grants a flag, Squad permission or `role_permissions` key that the actor does not have; `POST /api/v1/roles` and `PUT /api/v1/roles/:id` likewise refuse if the edit grants the role such a permission for the first time. Owner is not restricted.
+- The CSV exports `GET /api/v1/analytics/reports?format=csv` and `GET /api/v1/roles/:id/members/export` (as well as the shared `escapeCsvField` from `analytics.ts`) escape cells starting with `=`, `+`, `-`, `@`, TAB or CR with a `'` prefix (CSV formula injection).
+
+### Fixed
+
+- `GET /api/v1/public/banlist?format=json`: the ETag no longer depends on `generated_at`, so `If-None-Match` returns `304`; `If-None-Match` is parsed as a list with weak comparison (`W/`); the order of entries is deterministic.
+- `POST /api/v1/reports/:id/actions` goes through the shared `enforceModerationAction` (`source: 'report'`): the ban context contains `expires_at`, `rcon_request_id`, `target`; if one of the targets fails, the actions already applied remain in the journal and the audit and are listed in `applied[]` of the `502` response.
+- `POST /api/v1/reports/bulk-resolve` locks open reports and updates them together with the audit (with `before`) in a single transaction — a report closed by another handler is not overwritten and does not end up in `resolved_ids`; reporter notifications are sent in parallel.
+- Mutations of `/api/v1/roles/:id/members*` publish a Discord role sync (bulk ones — one full reconcile); import assigns the role with a single `UPDATE … FROM (VALUES …)`, bulk operations revoke sessions with a single query.
+- The `role.create`/`role.update`/`role.delete` audit contains `before`/`after` snapshots (flags and `squad_permissions`) and the `target_id` of the created role.
+- `POST /api/v1/servers/archive/:id/restore` returns `409 port_conflict` if the ports are taken by an active container server, and `409 duplicate_ports` for duplicate ports.
+
+
+## 2026-09-28 — Config editor, install, logs and force-stop (#42)
+
+### Security
+
+- Writing `Bans.cfg`/`RemoteBanListHosts.cfg` through the config editor (PUT, restore, drift accept/revert, reset-default) additionally requires `mod:ban_perm`, and `Admins.cfg`/`RemoteAdminListHosts.cfg` require `user:manage_roles`; without them `403 { error: 'forbidden', required_permission }` (#1236).
+- Writing a config for an unknown or deleted server responds `404` before any bridge call; a version message cannot start with `deletion-backup-marker` (`400`) (#281).
+- `Password=`/`Port=` in `Rcon.cfg` must match `server_credentials`, otherwise `422 rcon_credentials_managed`; the password mask is always filled with the panel password (#280).
+- `WS /api/v1/servers/:id/logs/ws` requires `server:download_logs`, like the log files (#1239).
+- `logs/ws` and `depot/progress/ws`: at most 4 sockets per user and 32 per process, beyond that `{error:'too_many_streams'}` and close code 1013 (#1298).
+
+### Fixed
+
+- A config write happens in a single transaction under an advisory lock (server, file): the history row is inserted before the write to disk, so the tip in the DB always describes the bytes on disk (#282).
+- `history` computes the size via `octet_length`, `diff` reads only two versions (#284); `diff`, `drift/diff` and `blame` are limited to 2 s and respond `422 diff_too_large`, blame takes the last 100 versions (#283).
+- `configs/drift` reads one latest version per file (`DISTINCT ON`) (#1335).
+- `POST /servers/:id/install` atomically moves the server to `installing` only from `pending`/`failed` (`409 install_in_progress` / `409 server_not_installable`), and updates `updated_at` once a minute during installation; installation no longer writes a `.keep` under `saved/`, which the bridge rejects, and the sidecar starts (#290, #1352).
+- `install/ws` sends `{done:true, final}` and closes if the installation already finished before the connection; a new attempt clears the progress buffer (#292).
+- Log download pauses reading from the bridge until the client takes the data, and closes the bridge connection on disconnect (#291).
+- `POST /servers/:id/force-stop` sets `stop:requested:<id>`, stops the RNSquadJS sidecar and does not overwrite a status that changed during `container_rm` (`409 server_status_changed`) (#285).
+- The map vote preview drops matches without a layer the same way the scheduler does (#301).
+
+## 2026-09-28 — Fixes to server, schedule and alt-detection routes (#43)
+
+### Security
+
+- `PUT /api/v1/settings/alt-detection`, `POST` and `DELETE /api/v1/settings/alt-detection/ignored-ips` require the new permission `player:manage_alt_detection` (dangerous). A role gets it only together with `can_view_ips` and `can_edit_roles`; access to «История IP» (IP history) alone is no longer enough to disable multi-account detection. `GET` still requires `player:view_ips` and returns `can_edit`. Exceptions wider than `/8` (IPv4) and `/32` (IPv6) are rejected with `400`.
+
+### Fixed
+
+- `GET /api/v1/servers/:id/metrics` reads the whole stream range and thins it to 1000 points, always keeping the latest one: the 6 h and 24 h windows no longer lose fresh points.
+- `POST /api/v1/servers/:id/rnsquadjs` (`production`) is idempotent: a repeated request during a switch responds `202 switching` without a second task, and for an already switched server `200 {status:'active'}` without recreating the sidecar. A switch interrupted by an API restart is completed by the API at startup (the `rnsquadjs:cutover:pending` hash).
+- `GET /api/v1/servers/:id/rotation-schedule` returns only entries from the `from`..`to` range, reads the seed schedule and `depot:updating` once per request, and does not compute warnings for executed entries.
+- `GET` and `PUT /api/v1/servers/:id/rotation` respond `502 bridge_read_failed` if `LayerRotation.cfg` could not be read for a reason other than the file's absence; `PUT` then writes nothing and does not lose lines outside the managed segment.
+- `PATCH` of scheduler tasks, the seed schedule and `rotation-schedule` resets the `last_executed_at` cursor: for a recurring entry, when the time changes or it is enabled, it moves to the current minute (missed firings are not caught up), and for a one-off entry it is cleared on reschedule (an executed entry will fire at the new time).
+- The `steam://connect/…` link in the seeder call points to the external server's `rcon_host`, not to the panel host; `host_info` is cached for 60 s. If publishing the event or the broadcast fails, the two-hour cooldown is released.
+- `PUT /api/v1/servers/:id/settings` first opens the new ports in UFW, then saves the settings, and only then closes the old ones. An open error rolls back the added rules and responds `502 ufw_update_failed` without changing the settings.
+- A non-zero SteamCMD exit code in `POST /api/v1/servers/:id/update`, `POST /api/v1/depot/update` and when filling the depot during installation is treated as an error (`depot:last_update` = `failed`). The `depot:updating` lock lives 2 h (twice the RPC timeout) and is released only by its owner.
+- `POST /api/v1/servers` responds `409 slug_in_use` for a taken slug instead of `500` with the DB error text.
+- `POST /api/v1/servers/:id/restart` does not hide a stop error: if the container is still running after it, the response is `502 container_stop_failed` without a start; a removed container is recreated via `container_run`, as in `/start`. The route writes `server.restart.*` diag events and responds `400 server_not_installed` without settings.
 
 ### Changed
 
-- `extra_args`, `cpu_affinity` и поля лимитов ресурсов в `PUT /api/v1/servers/:id/settings` по-прежнему принимаются и возвращаются, но документированы как не применяемые к контейнеру.
+- `extra_args`, `cpu_affinity` and the resource-limit fields in `PUT /api/v1/servers/:id/settings` are still accepted and returned, but documented as not applied to the container.
 
-## 2026-09-28 — Аудит маршрутов API, группа w3-15 (#44)
+## 2026-09-28 — API route audit, group w3-15 (#44)
 
 ### Security
 
-- Проверка regex-правил флагов чата отклоняет неоднозначную альтернацию под повторением (`(a|a)*b`, `(\w|\d)+$` → `422 ambiguous_alternation`), любой квантификатор внутри повторяемой группы (`nested_quantifier`) и цепочки из трёх и более пересекающихся неограниченных квантификаторов (`\w*\w*\w*!` → `overlapping_quantifiers`). Уже сохранённые правила, не проходящие проверку, не выполняются ни при переиндексации, ни воркерами чата.
-- `POST /api/v1/public/whitelist/applications` принимает заявку только от игрока, вошедшего через Steam: SteamID64 берётся из сессии (`401 steam_login_required`, `403 steam_id_mismatch`). Подать или заблокировать заявку от чужого имени больше нельзя.
-- CSV-экспорты (аналитика голосований, репортов, общая аналитика, статистика, матчи, события, боевые события, заметки, кланы, участники ролей, whitelist, публичная статистика) добавляют `'` перед значением, начинающимся с `=`, `+`, `-`, `@`, табуляции или CR, чтобы ник игрока не выполнялся как формула в Excel/LibreOffice.
-- `POST /api/v1/me/purchases`, `POST /api/v1/me/subscriptions` и `POST /api/v1/players/:playerId/subscriptions` отвечают `409 tier_not_purchasable` для отключённого тира.
+- The validation of chat-flag regex rules rejects ambiguous alternation under repetition (`(a|a)*b`, `(\w|\d)+$` → `422 ambiguous_alternation`), any quantifier inside a repeated group (`nested_quantifier`) and chains of three or more overlapping unbounded quantifiers (`\w*\w*\w*!` → `overlapping_quantifiers`). Already saved rules that fail validation are not executed, either during reindexing or by the chat workers.
+- `POST /api/v1/public/whitelist/applications` accepts an application only from a player signed in through Steam: the SteamID64 is taken from the session (`401 steam_login_required`, `403 steam_id_mismatch`). Submitting or blocking an application on someone else's behalf is no longer possible.
+- CSV exports (vote analytics, reports, general analytics, statistics, matches, events, combat events, notes, clans, role members, whitelist, public statistics) add `'` before a value starting with `=`, `+`, `-`, `@`, a tab or CR, so that a player's nickname is not executed as a formula in Excel/LibreOffice.
+- `POST /api/v1/me/purchases`, `POST /api/v1/me/subscriptions` and `POST /api/v1/players/:playerId/subscriptions` respond `409 tier_not_purchasable` for a disabled tier.
 
 ### Fixed
 
-- `POST /api/v1/settings/chat-flag-rules/reindex` отвечает `409 reindex_in_progress`, пока идёт другая переиндексация (блокировка в Redis), пишет изменения одним `UPDATE` на пакет и отдаёт event loop между пакетами.
-- Удаление, отключение или смена паттерна правила флага снимает пометку с сообщений, которые это правило пометило.
-- `PATCH /api/v1/whitelist/applications/:id`: из двух одновременных решений по одной заявке проходит одно, второе получает `409 application_not_pending`; выдача роли и смена статуса происходят в одной транзакции.
-- `DELETE /api/v1/vip-tiers/:id` для тира с историей подписок отвечает `409 vip_tier_has_subscriptions` вместо `500`.
-- Новая подписка продлевается за 6 часов до истечения выданной роли, поэтому роль не снимается до продления. Миграция 0119 переносит дату продления уже активных подписок.
-- Курсор `GET /api/v1/suspects` хранит `last_seen_at` с точностью до микросекунд: при сортировке по возрастанию страницы больше не повторяют строку, при сортировке по убыванию не теряют строки.
-- `GET /api/v1/votes` и `/api/v1/votes/count` с `initiatorQuery` фильтруют подзапросом и не падают с `500`, когда ник совпадает у десятков тысяч игроков.
-- `POST /api/v1/whitelist/import` ищет игроков одним запросом, делает один пакетный `UPDATE` и ставит одну задачу синхронизации Admins.cfg на сервер. Повторы SteamID64 в файле пропускаются с причиной `duplicate_steam_id64`, комментарии длиннее 512 символов — с `comment_too_long`.
-- Почасовое распределение в `GET /api/v1/statistics` строит часы только внутри выбранного окна и отбирает сессии по индексам.
+- `POST /api/v1/settings/chat-flag-rules/reindex` responds `409 reindex_in_progress` while another reindex is running (a Redis lock), writes changes with one `UPDATE` per batch and yields the event loop between batches.
+- Deleting, disabling or changing the pattern of a flag rule clears the flag from the messages that the rule had flagged.
+- `PATCH /api/v1/whitelist/applications/:id`: of two simultaneous decisions on one application one goes through and the other gets `409 application_not_pending`; granting the role and changing the status happen in a single transaction.
+- `DELETE /api/v1/vip-tiers/:id` for a tier with subscription history responds `409 vip_tier_has_subscriptions` instead of `500`.
+- A new subscription is renewed 6 hours before the granted role expires, so the role is not revoked before renewal. Migration 0119 shifts the renewal date of already active subscriptions.
+- The `GET /api/v1/suspects` cursor stores `last_seen_at` with microsecond precision: with ascending sort the pages no longer repeat a row, and with descending sort they no longer lose rows.
+- `GET /api/v1/votes` and `/api/v1/votes/count` with `initiatorQuery` filter with a subquery and no longer fail with `500` when a nickname matches tens of thousands of players.
+- `POST /api/v1/whitelist/import` looks up players with a single query, performs one batch `UPDATE` and enqueues one Admins.cfg sync task per server. SteamID64 duplicates in the file are skipped with the reason `duplicate_steam_id64`, and comments longer than 512 characters with `comment_too_long`.
+- The hourly distribution in `GET /api/v1/statistics` builds hours only inside the selected window and selects sessions via indexes.
 
 ### Database
 
-- Миграции `0126_player_search_and_report_indexes`, `0128_list_query_indexes` и `0129_vip_subscription_renewal_lead`: частичный индекс `chat_messages (matched_rule_id)`, `player_sessions (server_id, disconnected_at)` для закрытых сессий, trigram-индексы на `players.canonical_name_normalized` и `player_name_history.name_normalized`, перенос `next_renewal_at` активных подписок.
+- Migrations `0126_player_search_and_report_indexes`, `0128_list_query_indexes` and `0129_vip_subscription_renewal_lead`: a partial index on `chat_messages (matched_rule_id)`, `player_sessions (server_id, disconnected_at)` for closed sessions, trigram indexes on `players.canonical_name_normalized` and `player_name_history.name_normalized`, and a shift of `next_renewal_at` for active subscriptions.
 
-## 2026-09-28 — Подтверждённые заявки whitelist, статистика и ReDoS (#52)
-
-### Security
-
-- `POST /api/v1/public/whitelist/applications`: заявка, отправленная после входа через Steam (в том числе с сессией `self_service`), подаётся на SteamID64 из сессии и помечается `verified: true`; чужой SteamID64 — `403 steam_id_mismatch`, анонимная заявка без `steam_id64` — `400 steam_id_required`. Анонимная заявка на чужой SteamID больше не блокирует подтверждённую заявку владельца. В ответах заявок появилось поле `verified`.
-- Правила запрещённых ников с катастрофическим backtracking отклоняются `422 invalid_pattern` (`detail`: `nested_quantifier` и др.).
-- `multihome` при создании сервера и в настройках принимает только IP-адрес.
-
-### Changed
-
-- `GET /api/v1/statistics`: почасовое распределение онлайна учитывает все подключённые сессии (`online`, `boost`, `seed`), как и дневная сводка.
-
-## 2026-09-28 — Настройки, которые не применялись, и проверки автоматизаций (#53)
-
-### Fixed
-
-- `POST /api/v1/servers` и `PUT /api/v1/servers/:id/settings`: лимиты ресурсов (`cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight`) и `extra_args`/`launch_args_override` никогда не передавались в `docker run`. Теперь значение отличное от `null`/`''` отклоняется с `400`, а сохранённые столбцы больше не пишутся. Раздел «Ресурсы» убран со страницы настроек сервера.
-- `multihome` принимает только IP-адрес (`400` иначе); мост дополнительно проверяет его перед формированием `RCONIP=`/`MULTIHOME=`.
-- `POST/PUT /api/v1/automation-rules`: `400` для `kick` без причины, для `rcon_command` с неверным числом аргументов и для `time_of_day` с неизвестным часовым поясом.
-- Вход через Steam: запрос профиля к Steam Web API ограничен 3 с, зависший Steam больше не задерживает вход на минуты.
-
-## 2026-09-28 — Аудит модулей `apps/api/src/lib` (#66)
+## 2026-09-28 — Confirmed whitelist applications, statistics and ReDoS (#52)
 
 ### Security
 
-- Мутирующие запросы и WebSocket-рукопожатия с cookie `__Host-sid` принимаются только с `Origin` панели (`PANEL_PUBLIC_URL` или совпадающий с `Host`) либо, без `Origin`, с `Sec-Fetch-Site: same-origin`; иначе `403 cross_site_request_forbidden` (`plugins/csrf.ts`). Защищает от соседнего поддомена, для которого `SameSite=Lax` не срабатывает.
-- `license_id`/`license_key` в `PATCH /api/v1/servers/:id` не принимают управляющие символы и переводы строк (`400`); `syncLicenseCfg` отказывается записать такой ключ в `License.cfg`.
-- URL Discord-вебхука принимается только по `https://` (API и форма в веб-интерфейсе).
-- Запросы `GET /api/v1/auth/discord/callback` (с `code`/`state`) больше не пишутся в журнал запросов.
-- Восстановление конфигов из архива и маршруты `/api/v1/servers/archive/*` берут только строки резервной копии, записанные при удалении (по `servers.deletion_backup_marker_id`), а не любые версии с сообщением `deletion-backup-marker…`.
-
-### Fixed
-
-- `rconSendOnce` отвергает пакеты с размером вне `[10, 1 МиБ]` (`rcon malformed packet`) вместо бесконечного цикла или падения процесса.
-- Бан с `ban_length`, выходящим за диапазон дат (например `300000y`), считается перманентным и остаётся в федеративном банлисте.
-- `enforceModerationAction` записывает строку `moderation_actions` и событие `events` в одной транзакции; сбой XADD после применённого RCON-действия логируется и больше не превращается в `500` (то же для `POST /api/v1/reports/:id/actions`).
-- Пересчёт статистики репортёра выставляет `spam_flagged_at` и создаёт алерт атомарно: алерт поднимается один раз при гонке и не теряется при ошибке; недопустимая `severity` правила заменяется на `warning`.
-- Предупреждение ALT-7 перед баном считает кандидатов напрямую (`lib/alt-candidates.ts`), а не через внутренний `app.inject`, который при любом не-`200` молча возвращал пустой список.
-- `sendRconCommandViaWorker` и `notifyReporter` превращают сбои Redis/БД в исход (`worker_unavailable`, `timeout`, `lookup_failed`) вместо исключения.
-- Список игнорируемых IP (`POST /api/v1/settings/alt-detection/ignored-ips`) отвергает IPv6 zone id и IPv4-mapped адреса и сохраняет обрезанное значение (`400` вместо `500` от БД).
-- Кэш ростера с неожиданной структурой или некорректным SteamID64 больше не роняет `GET /api/v1/servers/:id/roster`.
-- Повреждённый зашифрованный blob даёт понятную ошибку `invalid encrypted blob`.
-- Запросы к Discord OAuth ограничены таймаутом 10 с.
-- Периодическая очистка сирот удаляет и сайдкары `rnsquadjs-<uuid>` вместе с каталогом `/run/squad-panel/rnsquadjs/<uuid>` (там пароль RCON) для серверов без строки в БД.
-- Буферы реплея чата и боевых событий забывают удалённый сервер.
-- Кэш прав RBAC ограничен 5000 записями и вытесняет просроченные.
-- Ошибка `UNLINK` при удалении сервера попадает в `errors`, а не маскируется повтором через `DEL`.
+- `POST /api/v1/public/whitelist/applications`: an application submitted after signing in through Steam (including with a `self_service` session) is filed for the SteamID64 from the session and marked `verified: true`; a foreign SteamID64 gets `403 steam_id_mismatch`, an anonymous application without `steam_id64` gets `400 steam_id_required`. An anonymous application for someone else's SteamID no longer blocks the owner's confirmed application. Application responses gained the `verified` field.
+- Banned-nickname rules with catastrophic backtracking are rejected with `422 invalid_pattern` (`detail`: `nested_quantifier` and others).
+- `multihome` on server creation and in settings accepts only an IP address.
 
 ### Changed
 
-- `config.audit` мутирующего маршрута — `{ action, resource }`, `'manual'` (обработчик сам вызывает `writeAuditEntry`) или `false` только для allowlist машинных интеграций; `audit-coverage.test.ts` проверяет все маршруты из `registerRoutes()`. Маршруты `issues.ts` получили `config.audit`.
-- Удалены неиспользуемые `COOKIE_SECURE` (строка `false` разбиралась как `true`) и `GLITCHTIP_DSN`, клиент `app.rcon`, реэкспорт `lib/rcon-host.ts`, `ensureAdminsCfgSyncGroup`, `readSentinelHint`; `rotation-segment.ts` использует общие функции из `@squad/shared-config/admins-config`.
+- `GET /api/v1/statistics`: the hourly online distribution counts all connected sessions (`online`, `boost`, `seed`), like the daily summary.
 
-## 2026-09-28 — Аудит плагинов API (#67)
+## 2026-09-28 — Settings that were not applied and automation validation (#53)
 
 ### Fixed
 
-- Сессия, продлённая в Postgres, больше не удаляется из-за устаревшего `expiresAt` в Redis-кэше: `resolveSession` перечитывает строку, а продление сбрасывает кэш. `revokeAllForPlayer` удаляет сессии одним `DELETE … RETURNING`, поэтому сессия параллельного входа не остаётся в кэше.
-- Проверка друзей Steam кэширует `private_profile` только когда закрыты оба списка (401), читает список второго игрока, если первый закрыт, а сбой, таймаут (5 с) или не-JSON ответ Steam отдаёт как `reason: 'steam_unavailable'` без кэширования. Проверка OpenID при входе ограничена 10 с.
-- `DELETE /api/v1/servers/:id` пишет в `errors[]` причины неудачи удаления sidecar-контейнера (`sidecar_rm`) и его каталога с RCON-паролем (`sidecar_dir_delete`).
-- Реконсилер больше не записывает PID в `servers.container_id`; `servers_in_transient` в `/api/v1/health/reconciler` считает строки в `starting`/`stopping`, а `stuck_servers` не включает внешние серверы.
-- `/ready` отдаёт по каждой проверке только `ok`/`fail` (причина — в логе API), каждая проверка ограничена 3 с.
-- Анонимные запросы и запросы с поддельными учётными данными ограничиваются по IP (3000/мин) до обращения к Redis/Postgres.
-- `GET /api/v1/admins-cfg/drift` и `/drift/all` показывают `unknown` для повреждённого статуса вместо 500; `/drift/all` читает статусы одним `MGET`. `x-request-id` очищается в `genReqId`, событие принудительной синхронизации несёт тот же id, что и ответ.
-- Буфер прогресса установки сбрасывается при новой установке и удалении сервера и очищается через 15 минут после завершения.
-- Кадры live-bus из Redis проверяются схемой, битые отбрасываются; исключение в одном подписчике не мешает остальным. Живая лента событий повторяет неудавшийся `LISTEN` с экспоненциальной задержкой. Пул Postgres закрывается при остановке API.
-- `bridge.rtt.outlier` учитывает только `ping`, содержит `method` и выдаётся не чаще раза в минуту.
-- `HOST_ORPHAN_SWEEP_INTERVAL_MS` и `HOST_DOCKER_PRUNE_INTERVAL_MS` проверяются при старте (целое ≥ 60000, пусто — значение по умолчанию).
+- `POST /api/v1/servers` and `PUT /api/v1/servers/:id/settings`: the resource limits (`cpu_affinity`, `cpu_weight`, `niceness`, `memory_high_mb`, `memory_max_mb`, `io_weight`) and `extra_args`/`launch_args_override` were never passed to `docker run`. Now a value other than `null`/`''` is rejected with `400`, and the stored columns are no longer written. The «Ресурсы» (Resources) section was removed from the server settings page.
+- `multihome` accepts only an IP address (otherwise `400`); the bridge additionally validates it before building `RCONIP=`/`MULTIHOME=`.
+- `POST/PUT /api/v1/automation-rules`: `400` for `kick` without a reason, for `rcon_command` with the wrong number of arguments and for `time_of_day` with an unknown time zone.
+- Steam sign-in: the profile request to the Steam Web API is limited to 3 s, and a hung Steam no longer delays sign-in for minutes.
+
+## 2026-09-28 — Audit of the `apps/api/src/lib` modules (#66)
+
+### Security
+
+- Mutating requests and WebSocket handshakes with the `__Host-sid` cookie are accepted only with the panel's `Origin` (`PANEL_PUBLIC_URL` or one matching `Host`) or, without `Origin`, with `Sec-Fetch-Site: same-origin`; otherwise `403 cross_site_request_forbidden` (`plugins/csrf.ts`). This protects against a neighboring subdomain, for which `SameSite=Lax` does not apply.
+- `license_id`/`license_key` in `PATCH /api/v1/servers/:id` do not accept control characters and line breaks (`400`); `syncLicenseCfg` refuses to write such a key to `License.cfg`.
+- A Discord webhook URL is accepted only over `https://` (the API and the form in the web interface).
+- `GET /api/v1/auth/discord/callback` requests (with `code`/`state`) are no longer written to the request log.
+- Restoring configs from the archive and the `/api/v1/servers/archive/*` routes take only the backup rows written at deletion time (by `servers.deletion_backup_marker_id`), not any versions with a `deletion-backup-marker…` message.
+
+### Fixed
+
+- `rconSendOnce` rejects packets whose size is outside `[10, 1 MiB]` (`rcon malformed packet`) instead of looping forever or crashing the process.
+- A ban with a `ban_length` outside the date range (for example `300000y`) is treated as permanent and stays in the federated ban list.
+- `enforceModerationAction` writes the `moderation_actions` row and the `events` event in a single transaction; an XADD failure after an applied RCON action is logged and no longer turns into a `500` (the same for `POST /api/v1/reports/:id/actions`).
+- The reporter statistics recalculation sets `spam_flagged_at` and creates the alert atomically: the alert is raised once under a race and is not lost on error; an invalid rule `severity` is replaced with `warning`.
+- The pre-ban ALT-7 warning computes candidates directly (`lib/alt-candidates.ts`) rather than through an internal `app.inject`, which silently returned an empty list on any non-`200`.
+- `sendRconCommandViaWorker` and `notifyReporter` turn Redis/DB failures into an outcome (`worker_unavailable`, `timeout`, `lookup_failed`) instead of an exception.
+- The ignored-IP list (`POST /api/v1/settings/alt-detection/ignored-ips`) rejects IPv6 zone ids and IPv4-mapped addresses and stores the trimmed value (`400` instead of a `500` from the DB).
+- A roster cache with an unexpected structure or an invalid SteamID64 no longer crashes `GET /api/v1/servers/:id/roster`.
+- A corrupted encrypted blob yields a clear `invalid encrypted blob` error.
+- Discord OAuth requests are limited by a 10 s timeout.
+- The periodic orphan sweep also removes `rnsquadjs-<uuid>` sidecars together with the `/run/squad-panel/rnsquadjs/<uuid>` directory (which holds the RCON password) for servers with no DB row.
+- The chat and combat-event replay buffers forget a deleted server.
+- The RBAC permission cache is limited to 5000 entries and evicts expired ones.
+- An `UNLINK` error when deleting a server goes into `errors` instead of being masked by a retry via `DEL`.
+
+### Changed
+
+- The `config.audit` of a mutating route is `{ action, resource }`, `'manual'` (the handler calls `writeAuditEntry` itself) or `false` only for the allowlist of machine integrations; `audit-coverage.test.ts` checks all routes from `registerRoutes()`. The `issues.ts` routes received `config.audit`.
+- Removed the unused `COOKIE_SECURE` (the string `false` was parsed as `true`) and `GLITCHTIP_DSN`, the `app.rcon` client, the `lib/rcon-host.ts` re-export, `ensureAdminsCfgSyncGroup` and `readSentinelHint`; `rotation-segment.ts` uses the shared functions from `@squad/shared-config/admins-config`.
+
+## 2026-09-28 — API plugin audit (#67)
+
+### Fixed
+
+- A session extended in Postgres is no longer deleted because of a stale `expiresAt` in the Redis cache: `resolveSession` rereads the row, and extension flushes the cache. `revokeAllForPlayer` deletes sessions with a single `DELETE … RETURNING`, so a session from a concurrent sign-in does not remain in the cache.
+- The Steam friends check caches `private_profile` only when both lists are closed (401), reads the second player's list if the first is closed, and reports a Steam failure, timeout (5 s) or non-JSON response as `reason: 'steam_unavailable'` without caching. The OpenID check at sign-in is limited to 10 s.
+- `DELETE /api/v1/servers/:id` writes to `errors[]` the reasons why deleting the sidecar container (`sidecar_rm`) and its directory with the RCON password (`sidecar_dir_delete`) failed.
+- The reconciler no longer writes a PID to `servers.container_id`; `servers_in_transient` in `/api/v1/health/reconciler` counts rows in `starting`/`stopping`, and `stuck_servers` does not include external servers.
+- `/ready` returns only `ok`/`fail` for each check (the reason is in the API log), and each check is limited to 3 s.
+- Anonymous requests and requests with forged credentials are rate-limited by IP (3000/min) before any access to Redis/Postgres.
+- `GET /api/v1/admins-cfg/drift` and `/drift/all` show `unknown` for a corrupted status instead of 500; `/drift/all` reads statuses with a single `MGET`. `x-request-id` is sanitized in `genReqId`, and the forced-sync event carries the same id as the response.
+- The installation progress buffer is reset on a new installation and on server deletion, and is cleared 15 minutes after completion.
+- Live-bus frames from Redis are validated against a schema and broken ones are dropped; an exception in one subscriber does not affect the others. The live event feed retries a failed `LISTEN` with exponential backoff. The Postgres pool is closed when the API stops.
+- `bridge.rtt.outlier` counts only `ping`, contains `method` and is emitted at most once a minute.
+- `HOST_ORPHAN_SWEEP_INTERVAL_MS` and `HOST_DOCKER_PRUNE_INTERVAL_MS` are validated at startup (an integer ≥ 60000; empty — the default value).
 
 ### Removed
 
-- Неиспользуемые зависимости `@fastify/cors`, `@node-rs/argon2`, `@oslojs/*`, `arctic`, `@types/diff`; метрики `events_consumer_total` и `bridge_calls_total`, которые никогда не увеличивались; вариант `worker.heartbeat` в `LiveEvent`; `vitest.security.config.ts`; прокладки `lib/steam-{bans,profile,owned-games}.ts`.
+- Unused dependencies `@fastify/cors`, `@node-rs/argon2`, `@oslojs/*`, `arctic`, `@types/diff`; the metrics `events_consumer_total` and `bridge_calls_total`, which were never incremented; the `worker.heartbeat` variant in `LiveEvent`; `vitest.security.config.ts`; the shims `lib/steam-{bans,profile,owned-games}.ts`.
 
 ### Changed
 
-- `fastify` обновлён до 5.12.5. `pnpm --filter @squad/api typecheck` теперь проверяет и `test/` (`tsconfig.test.json`).
+- `fastify` was upgraded to 5.12.5. `pnpm --filter @squad/api typecheck` now also checks `test/` (`tsconfig.test.json`).
 
-## 2026-09-28 — Аудит маршрутов API: права, гонки, валидация (#68)
+## 2026-09-28 — API route audit: permissions, races, validation (#68)
 
 ### Security
 
-- Правила автоматизации (`/api/v1/automation-rules`) закрыты ключами `trigger:view` (чтение) и `trigger:edit` (изменение, dry-run) вместо `panel_access`/`role:edit`. `trigger:edit` выводится только для ролей с правом редактировать роли или выдаётся явно; кроме того, создать или изменить правило можно, только имея право на само действие: `mod:kick`/`mod:warn` для `kick`/`warn`, для `rcon_command` — `mod:ban_perm`, `mod:kick`, `mod:warn` или Squad-право `chat`/`changemap`/`manageserver`, иначе `403 { error: 'forbidden', required }`. PUT и DELETE пишут снимки before/after в аудит.
-- `POST /api/v1/integrations/discord/interactions` отклоняет запрос с `X-Signature-Timestamp` старше 5 минут (`401 stale_timestamp`).
-- Источники банов: URL фида с логином/паролем отклоняется (`400`), query-параметры URL в ответах API и снимках аудита заменяются на `***`; `discord_url` принимает только `https:`.
-- Экспорт ростера клана в CSV экранирует значения, начинающиеся с `=`, `+`, `-`, `@`, табуляции или CR, апострофом.
+- Automation rules (`/api/v1/automation-rules`) are gated by the keys `trigger:view` (read) and `trigger:edit` (modify, dry-run) instead of `panel_access`/`role:edit`. `trigger:edit` is derived only for roles with the permission to edit roles or is granted explicitly; in addition, a rule can be created or changed only by someone holding the permission for the action itself: `mod:kick`/`mod:warn` for `kick`/`warn`, and for `rcon_command` — `mod:ban_perm`, `mod:kick`, `mod:warn` or the Squad permission `chat`/`changemap`/`manageserver`, otherwise `403 { error: 'forbidden', required }`. PUT and DELETE write before/after snapshots to the audit.
+- `POST /api/v1/integrations/discord/interactions` rejects a request with an `X-Signature-Timestamp` older than 5 minutes (`401 stale_timestamp`).
+- Ban sources: a feed URL with a login/password is rejected (`400`), URL query parameters in API responses and audit snapshots are replaced with `***`; `discord_url` accepts only `https:`.
+- The clan roster CSV export escapes values starting with `=`, `+`, `-`, `@`, a tab or CR with an apostrophe.
 
 ### Fixed
 
-- `PUT /api/v1/alert-rules/:id` проверяет `config` по типу правила и отвечает `400 invalid_config` вместо молчаливого отключения правила.
-- `GET /api/v1/audit` возвращает в `total` число всех записей, а не размер страницы.
-- `PATCH /api/v1/appeals/:id`: при `bans_cfg_conflict` на одном из серверов ответ `409` содержит `partial_revert` с уже снятыми банами, а в аудит пишется `appeal.unban_partial`.
-- Привязка Discord: `state` расходуется атомарно (`GETDEL`), гонка двух привязок одного игрока даёт `409 already_linked_self`.
-- Steam-колбэк проверяет querystring схемой: повторяющийся параметр `openid.*` — `400`.
-- `automation-rules`: несуществующий `server_id` — `404 server_not_found` вместо `500`.
-- Решение по `superseded`-снапшоту балансировщика — `409 proposal_superseded`, статус не затирается.
-- `record_count` источника банов считает только неотозванные записи; повторный ручной sync источника в течение 60 с — `409 sync_already_queued`.
-- Поиск в `banned-names` и ростере клана экранирует `%`, `_`, `\`; PATCH правила, удалённого параллельно, — `404 rule_not_found`.
-- Чат: 18–20-значный `playerQuery` и курсор с id вне `bigint` больше не дают `500`.
-- Кланы: аудит пишется в той же транзакции, что и изменение; параллельные передачи лидерства и включение приоритета при уменьшенном лимите отвечают `200`/`409` вместо `500`; курсор матчей с неверным временем — `400 invalid_cursor`.
-- `combat-events`: `approxTotal` считается только для первой страницы, на страницах с курсором — `null`.
-- Обновление depot: ошибки остановки и перезапуска серверов логируются и попадают в `depot:progress` строкой stderr; сервер без настроек для перезапуска остаётся `stopped`.
+- `PUT /api/v1/alert-rules/:id` validates `config` by the rule type and responds `400 invalid_config` instead of silently disabling the rule.
+- `GET /api/v1/audit` returns in `total` the number of all records, not the page size.
+- `PATCH /api/v1/appeals/:id`: on `bans_cfg_conflict` on one of the servers the `409` response contains `partial_revert` with the bans already lifted, and `appeal.unban_partial` is written to the audit.
+- Discord linking: `state` is consumed atomically (`GETDEL`), and a race of two linkings by the same player yields `409 already_linked_self`.
+- The Steam callback validates the querystring with a schema: a repeated `openid.*` parameter gives `400`.
+- `automation-rules`: a nonexistent `server_id` gives `404 server_not_found` instead of `500`.
+- A decision on a `superseded` balancer snapshot gives `409 proposal_superseded`, and the status is not overwritten.
+- A ban source's `record_count` counts only non-revoked records; a repeated manual sync of a source within 60 s gives `409 sync_already_queued`.
+- Search in `banned-names` and in the clan roster escapes `%`, `_`, `\`; a PATCH of a rule deleted in parallel gives `404 rule_not_found`.
+- Chat: an 18–20-digit `playerQuery` and a cursor with an id outside `bigint` no longer produce `500`.
+- Clans: the audit is written in the same transaction as the change; parallel leadership transfers and enabling priority with a reduced limit respond `200`/`409` instead of `500`; a match cursor with an invalid time gives `400 invalid_cursor`.
+- `combat-events`: `approxTotal` is computed only for the first page, and is `null` on pages with a cursor.
+- Depot update: server stop and restart errors are logged and end up in `depot:progress` as a stderr line; a server without settings for restart stays `stopped`.
 
 ### Changed
 
-- Миграция `0128_list_query_indexes`: индекс `balancer_proposals (generated_at DESC, id DESC)` и частичный индекс активных записей `external_bans (source_id) WHERE revoked_at IS NULL`. Приём нового снапшота балансировщика удаляет `superseded`/`dismissed` снапшоты этого сервера, полученные более 30 дней назад.
+- Migration `0128_list_query_indexes`: the index `balancer_proposals (generated_at DESC, id DESC)` and a partial index of active records `external_bans (source_id) WHERE revoked_at IS NULL`. Receiving a new balancer snapshot deletes this server's `superseded`/`dismissed` snapshots received more than 30 days ago.
 
-## 2026-09-28 — Аудит маршрутов API: права, аудит, валидация ввода (#69)
+## 2026-09-28 — API route audit: permissions, audit, input validation (#69)
 
 ### Security
 
-- Discord-команды (`POST /api/v1/integrations/discord/interactions`) проверяют доступ через `loadUserPermissions`: роль с истёкшим `role_expires_at` больше не даёт ответов `/status`, `/player`, `/online-admins`, а `/online-admins` не показывает админами игроков с истёкшей ролью.
-- `POST /api/v1/players/:playerId/bonus-purchases` отвечает `409 tier_not_purchasable` для отключённого (`is_active = false`) тарифа.
-- `POST /api/v1/integrations/balancer/proposals` отклоняет подпись с `x-balancer-timestamp` вне окна ±5 минут (`401 stale_timestamp`; ISO-8601 или unix-секунды), отвечает `404 server_not_found` для мягко удалённого сервера, при повторной доставке меняет только `received_at` открытого снимка и отвечает `409 snapshot_identity_mismatch`, если изменились `server_id`/`mode`; доставки для пары `(server_id, mode)` сериализуются advisory-блокировкой.
-- `POST /api/v1/issues/:id/links` разрешён только автору тикета или держателю `can_manage_issues` (`403 { error: 'forbidden', required: 'can_manage_issues' }`), как `PATCH /api/v1/issues/:id`.
-- `POST /api/v1/host/backups/:id/restore` проверяет id снимка (`latest` или 8/64 hex) и тело на границе API (400).
-- `GET /api/v1/ws/live`: периодическая перепроверка сокета с API-токеном сужает права по scopes токена — токен больше не получает `combat.event` и уведомления о ролях по флагам роли владельца. Чат, бой, ростер и события воркеров без потребителя приходят только после подписки (`subscribe`), см. `docs/components/live-bus/changelog.md`.
+- Discord commands (`POST /api/v1/integrations/discord/interactions`) check access through `loadUserPermissions`: a role with an expired `role_expires_at` no longer yields `/status`, `/player`, `/online-admins` responses, and `/online-admins` does not show players with an expired role as admins.
+- `POST /api/v1/players/:playerId/bonus-purchases` responds `409 tier_not_purchasable` for a disabled (`is_active = false`) tier.
+- `POST /api/v1/integrations/balancer/proposals` rejects a signature with an `x-balancer-timestamp` outside the ±5 minute window (`401 stale_timestamp`; ISO-8601 or unix seconds), responds `404 server_not_found` for a soft-deleted server, on redelivery changes only the open snapshot's `received_at` and responds `409 snapshot_identity_mismatch` if `server_id`/`mode` changed; deliveries for a `(server_id, mode)` pair are serialized with an advisory lock.
+- `POST /api/v1/issues/:id/links` is allowed only for the ticket author or a holder of `can_manage_issues` (`403 { error: 'forbidden', required: 'can_manage_issues' }`), like `PATCH /api/v1/issues/:id`.
+- `POST /api/v1/host/backups/:id/restore` validates the snapshot id (`latest` or 8/64 hex) and the body at the API boundary (400).
+- `GET /api/v1/ws/live`: the periodic recheck of a socket with an API token narrows permissions by the token's scopes — a token no longer receives `combat.event` and role notifications based on the owner's role flags. Chat, combat, roster and worker events without a consumer arrive only after subscribing (`subscribe`), see `docs/components/live-bus/changelog.md`.
 
 ### Changed
 
-- Мутации `integrations-discord.ts`, `integrations-geoip.ts` и `issues.ts` перешли на декларативный `config.audit` с `req.auditSnapshots`: аудируются и отказы (401/403), и ошибки (400/404); маршруты добавлены в `test/audit-coverage.test.ts`. `POST /api/v1/integrations/discord/templates/:eventType/preview` теперь тоже пишет строку аудита (`integration.discord.template.preview`).
-- Маппинги ролей Discord пишут снимки before/after (роль панели ↔ `discord_role_id`) при создании, изменении и удалении.
-- `POST /api/v1/players/:playerId/bonus-adjustments` пишет аудит в той же транзакции, что и изменение баланса.
-- `PUT /api/v1/integrations/discord` и `PUT /api/v1/integrations/geoip` делают upsert + `SELECT … FOR UPDATE` в транзакции: одновременные первые сохранения не дают 500 и не теряют поля.
-- Шаблон Discord из БД проверяется схемой; невалидный заменяется шаблоном по умолчанию.
-- `GET /api/v1/players/:playerId/issues`: `open_count` считает все открытые тикеты, а не только 50 выведенных.
-- `GET /api/v1/events/export` отдаёт CSV потоком страницами по 1000 строк вместо сборки до 50 000 строк в памяти.
+- Mutations of `integrations-discord.ts`, `integrations-geoip.ts` and `issues.ts` moved to the declarative `config.audit` with `req.auditSnapshots`: both denials (401/403) and errors (400/404) are audited; the routes were added to `test/audit-coverage.test.ts`. `POST /api/v1/integrations/discord/templates/:eventType/preview` now also writes an audit row (`integration.discord.template.preview`).
+- Discord role mappings write before/after snapshots (panel role ↔ `discord_role_id`) on create, update and delete.
+- `POST /api/v1/players/:playerId/bonus-adjustments` writes the audit in the same transaction as the balance change.
+- `PUT /api/v1/integrations/discord` and `PUT /api/v1/integrations/geoip` do an upsert + `SELECT … FOR UPDATE` in a transaction: simultaneous first saves no longer produce a 500 or lose fields.
+- A Discord template from the DB is validated against a schema; an invalid one is replaced with the default template.
+- `GET /api/v1/players/:playerId/issues`: `open_count` counts all open tickets, not only the 50 returned.
+- `GET /api/v1/events/export` streams the CSV in pages of 1000 rows instead of assembling up to 50,000 rows in memory.
 
 ### Fixed
 
-- `GET /api/v1/events?cursor=` с не-UUID идентификатором отвечает `400 invalid_cursor`, а не 500.
-- Поиск `GET /api/v1/external-bans?q=`, `GET /api/v1/leaderboards?search=` и Discord-команда `/player` экранируют `%`, `_` и `\` (общий `lib/sql-like.ts`); `total` реестра внешних банов верен и при `offset` за концом выборки.
-- `GET /api/v1/host/disk-usage?refresh=false` (и `=0`) больше не запускает полный пересчёт; допустимы только `true/false/1/0`. `GET /api/v1/host/metrics/history` пропускает сэмплы, не являющиеся массивом чисел.
-- `GET /api/v1/leaderboards`: несуществующая дата в `period_start` и слишком большие `page`/`offset` дают 400, а не 500; счётчик ограничения поиска всегда получает TTL (`INCR` + `EXPIRE NX` в одном `MULTI`); ошибки запросов лидербордов (и `/leaderboards/bonuses`) логируются.
-- Тестовая отправка вебхука Discord освобождает тело ответа.
+- `GET /api/v1/events?cursor=` with a non-UUID identifier responds `400 invalid_cursor`, not 500.
+- The search in `GET /api/v1/external-bans?q=`, `GET /api/v1/leaderboards?search=` and the Discord `/player` command escape `%`, `_` and `\` (shared `lib/sql-like.ts`); the external bans registry `total` is also correct when `offset` is past the end of the result set.
+- `GET /api/v1/host/disk-usage?refresh=false` (and `=0`) no longer starts a full recalculation; only `true/false/1/0` are accepted. `GET /api/v1/host/metrics/history` skips samples that are not an array of numbers.
+- `GET /api/v1/leaderboards`: a nonexistent date in `period_start` and too large `page`/`offset` give 400, not 500; the search rate-limit counter always gets a TTL (`INCR` + `EXPIRE NX` in a single `MULTI`); leaderboard query errors (and `/leaderboards/bonuses`) are logged.
+- The Discord webhook test send releases the response body.
 
 ### Migration notes
 
-- Миграция `0126_player_search_and_report_indexes` добавляет GIN-индексы pg_trgm для поиска по именам игроков; совместима с предыдущим релизом.
+- Migration `0126_player_search_and_report_indexes` adds pg_trgm GIN indexes for searching player names; compatible with the previous release.
 
-## 2026-09-28 — Аудит маршрутов API: безопасность, гонки, типы (#70)
+## 2026-09-28 — API route audit: security, races, types (#70)
 
 ### Security
 
-- WebSocket: кадр клиента ограничен 4 КиБ (`plugins/websocket.ts`, иначе закрытие 1009), апгрейд с `Origin`, отличным от `PANEL_PUBLIC_URL`, получает `403 forbidden_origin`; `/api/v1/ws/live` закрывает сокет с 1008 при более чем 20 кадрах за интервал пинга.
-- `GET /api/v1/logs/export` требует `host:view` + `host:metrics` + `audit:view` + `server:download_logs` — по ключу на каждую секцию бандла.
-- CSV-экспорты (матчи, заметки, события, боевые события, whitelist, участники роли, состав клана) нейтрализуют ячейки, начинающиеся с `=`, `+`, `-`, `@`, TAB, CR (`lib/csv.ts`).
-- `external_url` медиа принимает только `http:`/`https:`.
-- Шаблоны сообщений управляются новым ключом `message_template:manage` вместо `role:edit`; роли с правом редактировать роли получают его как раньше, остальным он выдаётся явно без управления ролями.
+- WebSocket: a client frame is limited to 4 KiB (`plugins/websocket.ts`, otherwise close code 1009), an upgrade with an `Origin` different from `PANEL_PUBLIC_URL` gets `403 forbidden_origin`; `/api/v1/ws/live` closes the socket with 1008 on more than 20 frames per ping interval.
+- `GET /api/v1/logs/export` requires `host:view` + `host:metrics` + `audit:view` + `server:download_logs` — one key per bundle section.
+- CSV exports (matches, notes, events, combat events, whitelist, role members, clan roster) neutralize cells starting with `=`, `+`, `-`, `@`, TAB, CR (`lib/csv.ts`).
+- The media `external_url` accepts only `http:`/`https:`.
+- Message templates are managed by the new key `message_template:manage` instead of `role:edit`; roles with the permission to edit roles get it as before, and others are granted it explicitly without role management.
 
 ### Fixed
 
-- `POST /api/v1/mark-types`: параллельные создания больше не получают ложный `409 slug_already_exists`; новые типы нумеруются выше диапазона сидов (1..100).
-- `DELETE /api/v1/players/:id/marks/:markId`: повторное параллельное снятие получает `409 mark_already_cleared`, а не перезаписывает `cleared_by`.
-- `POST /api/v1/moderation-actions/:id/revert`: повторный откат — `409 already_reverted`, `reverted_at`/`reverted_by` не перезаписываются, дубль unban не создаётся; запись аудита ссылается на игрока. `POST .../moderation-actions` пишет в аудит `after`.
-- Массовая модерация: исключение по одной цели даёт `failed/internal_error`, остальные цели и итоговый аудит обрабатываются.
-- Подделанный курсор `/api/v1/matches` — `400 invalid_cursor` вместо 500; лента заметок не теряет заметки из той же миллисекунды.
-- Даты `YYYY-MM-DD` в compare-online, presence и leaderboards проверяются как календарные (400 вместо 500 или сдвига).
-- compare-online сравнивает UUID без учёта регистра (`422 same_player`).
-- Лимит 25 активных API-токенов соблюдается под блокировкой; список токенов отдаёт все активные и 50 последних отозванных.
-- Медиа: частичный файл удаляется при обрыве загрузки и при ошибке вставки; `DELETE /api/v1/media/:id` освобождает файл, если на него больше не ссылается ни одна активная строка; дедупликация, удаление и release в worker-media-publisher берут общую advisory-блокировку по `storage_path`.
-- Лента гео-аномалий берёт кандидатов от недавних к старым и сообщает `truncated`.
-- `evidence_snapshot` связи игроков ограничен 16 КиБ JSON; в аудит пишется его SHA-256.
+- `POST /api/v1/mark-types`: parallel creations no longer get a false `409 slug_already_exists`; new types are numbered above the seed range (1..100).
+- `DELETE /api/v1/players/:id/marks/:markId`: a repeated parallel clearing gets `409 mark_already_cleared` rather than overwriting `cleared_by`.
+- `POST /api/v1/moderation-actions/:id/revert`: a repeated revert gives `409 already_reverted`, `reverted_at`/`reverted_by` are not overwritten and no duplicate unban is created; the audit entry references the player. `POST .../moderation-actions` writes `after` to the audit.
+- Bulk moderation: an exception on one target yields `failed/internal_error`, while the remaining targets and the final audit are processed.
+- A forged `/api/v1/matches` cursor gives `400 invalid_cursor` instead of 500; the notes feed does not lose notes from the same millisecond.
+- `YYYY-MM-DD` dates in compare-online, presence and leaderboards are validated as calendar dates (400 instead of 500 or a shift).
+- compare-online compares UUIDs case-insensitively (`422 same_player`).
+- The limit of 25 active API tokens is enforced under a lock; the token list returns all active tokens and the 50 most recent revoked ones.
+- Media: a partial file is deleted when an upload is interrupted and when the insert fails; `DELETE /api/v1/media/:id` releases the file if no active row references it any longer; deduplication, deletion and release in worker-media-publisher take a shared advisory lock on `storage_path`.
+- The geo-anomaly feed takes candidates from recent to old and reports `truncated`.
+- The player-link `evidence_snapshot` is limited to 16 KiB of JSON; its SHA-256 is written to the audit.
 
 ### Removed (breaking)
 
-- `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats`, `/vehicle-stats` — веб-клиент использует только `/dossier`, а эти маршруты расходились с ним (считали сид-матчи, не проверяли `combat:view`). Внешним интеграциям — перейти на `/dossier`.
+- `GET /api/v1/players/:playerId/combat-summary`, `/weapon-stats`, `/vehicle-stats` — the web client uses only `/dossier`, and these routes diverged from it (they counted seed matches and did not check `combat:view`). External integrations should switch to `/dossier`.
 
 ### Changed
 
-- `/dossier` выполняет запросы секций параллельно; `vehicles` и `vehicle_kills` — не более 100 строк.
-- `GET /api/v1/players/:playerId/media` — один запрос, новые ссылки первыми, не более 500.
+- `/dossier` runs the section queries in parallel; `vehicles` and `vehicle_kills` return at most 100 rows.
+- `GET /api/v1/players/:playerId/media` — a single query, new links first, at most 500.
 
-## 2026-09-28 — Аудит маршрутов игроков, репортов, ролей и архива (#71)
+## 2026-09-28 — Audit of player, report, role and archive routes (#71)
 
 ### Security
 
-- Строка «incoming request» и логи ошибок больше не содержат одноразовый токен загрузки (`?token=` в `POST /api/v1/public/media`) и токен отслеживания апелляции (`/api/v1/public/appeals/:token`): сериализатор `req` логгера API заменяет их на `[redacted]` (`redactSensitiveUrl` в `lib/logger.ts`), поэтому токены не попадают в поток логов панели и в `/api/v1/logs/export`.
-- `GET /api/v1/analytics/reports` требует `panel_access` вместе с `can_handle_reports`, как остальные маршруты репортов.
-- Маршруты заметок (`/api/v1/players/:playerId/notes`, `/api/v1/notes/:noteId`) и присутствия (`/presence`, `/presence/daily`, `/primetime`, `/api/v1/players/online-status`) проверяют право `player:view` через `config.permissions`, а не собственный `panelGuard`; API-токен без scope `player:view` получает `403 { error: 'forbidden', required: ['player:view'] }`.
-- `POST /api/v1/players/:playerId/steam-refresh` ограничен 20 запросами в минуту на пользователя (`429`), чтобы перебор игроков не выжигал дневную квоту Steam Web API.
+- The "incoming request" line and error logs no longer contain the one-time upload token (`?token=` in `POST /api/v1/public/media`) or the appeal tracking token (`/api/v1/public/appeals/:token`): the API logger's `req` serializer replaces them with `[redacted]` (`redactSensitiveUrl` in `lib/logger.ts`), so the tokens do not end up in the panel's log stream or in `/api/v1/logs/export`.
+- `GET /api/v1/analytics/reports` requires `panel_access` together with `can_handle_reports`, like the other report routes.
+- The notes routes (`/api/v1/players/:playerId/notes`, `/api/v1/notes/:noteId`) and the presence routes (`/presence`, `/presence/daily`, `/primetime`, `/api/v1/players/online-status`) check the `player:view` permission through `config.permissions` rather than their own `panelGuard`; an API token without the `player:view` scope gets `403 { error: 'forbidden', required: ['player:view'] }`.
+- `POST /api/v1/players/:playerId/steam-refresh` is limited to 20 requests per minute per user (`429`), so that enumerating players does not burn the daily Steam Web API quota.
 
 ### Fixed
 
-- Заметки: курсор пагинации теперь `<created_at с микросекундами, UTC>_<id>` (например `2026-01-01T00:00:00.000900Z_<uuid>`), и заметки из той же миллисекунды, что и последняя на странице, больше не пропадают; старый курсор в миллисекундах отвечает `400 invalid_cursor`. `PATCH`/`DELETE` блокируют строку заметки и пишут аудит в той же транзакции: правка или повторное удаление уже удалённой заметки отвечает `404`, а сбой записи аудита откатывает изменение.
-- `POST`/`PATCH /api/v1/players/:playerId/links` и `/api/v1/player-links/:linkId` пишут связь и аудит в одной транзакции. `GET /api/v1/players/:playerId/links` возвращает не больше 500 связей (новые первыми) и поле `truncated`.
-- `?end=` в `/presence` и `/presence/daily` проверяется как реальная дата: `2024-13-45` или `2023-02-29` дают `400`, а не `500` или сдвинутое окно.
-- Поиск игроков (`GET /api/v1/players?q=`, `/api/v1/players/search`) и участников роли (`GET /api/v1/roles/:id/members?q=`) экранирует `%`, `_` и `\`; SteamID64 в поиске участников сравнивается как число.
-- `POST /api/v1/public/media`: погашение токена, запись `media_files`/`media_links` и аудит выполняются одной транзакцией; при сбое токен остаётся действительным, а загруженный файл удаляется.
-- `GET /api/v1/public/banlist` отбрасывает истёкшие временные баны уже в SQL.
-- `GET /api/v1/analytics/reports`: `top_reporters` считается по репортам выбранного `server_id` и окна `from`/`to`; `confirmed`, `accuracy`, `trusted`, `spam_flagged` остаются общей репутацией из `reporter_stats`.
-- `POST /api/v1/reports` создаёт репорт и его вложения одной транзакцией. `PATCH /api/v1/reports/:id` при возврате в `pending` сбрасывает `resolved_at` и `claimed_at`, при возврате в `in_review` — `resolved_at`. Сбой пересчёта статистики репортёра или уведомления пишется в лог, а в контексте аудита появляется `notify_failed`.
-- `GET /api/v1/role-assignments` принимает `limit` (по умолчанию и максимум 1000) и `offset`, общее число строк отдаёт в заголовке `x-total-count`; `expiring_soon=true` больше не включает уже истёкшие выдачи.
-- `POST /api/v1/roles/:id/members/import` принимает тело до 6 MiB, поэтому CSV на 5000 строк больше 1 MiB доходит до проверки, а лишние строки получают `413 too_many_rows`.
-- `POST`/`PUT /api/v1/roles`: повторяющиеся ключи `squad_permissions` схлопываются, а `409 role_name_taken` возвращается только при конфликте имени. `PUT` ставит синхронизацию Admins.cfg в очередь, только если изменились имя или `squad_permissions`.
-- `PATCH /api/v1/seasons/:id` отвечает `422 season_finalized`, если сезон финализировали параллельно, и не переоткрывает его.
-- `POST /api/v1/servers/archive/:id/restore` отвечает `409 slug_in_use`, а не `500`, если slug заняли параллельно. `POST /api/v1/servers/:id/restore-configs` отклоняет внешний сервер (`409 external_server`).
-## 2026-09-28 — Карточка игрока: доказательства, заметки, напарники, связи (#81)
+- Notes: the pagination cursor is now `<created_at with microseconds, UTC>_<id>` (for example `2026-01-01T00:00:00.000900Z_<uuid>`), and notes from the same millisecond as the last one on the page no longer disappear; the old millisecond cursor responds `400 invalid_cursor`. `PATCH`/`DELETE` lock the note row and write the audit in the same transaction: editing or repeatedly deleting an already deleted note responds `404`, and an audit write failure rolls the change back.
+- `POST`/`PATCH /api/v1/players/:playerId/links` and `/api/v1/player-links/:linkId` write the link and the audit in a single transaction. `GET /api/v1/players/:playerId/links` returns at most 500 links (new first) and the `truncated` field.
+- `?end=` in `/presence` and `/presence/daily` is validated as a real date: `2024-13-45` or `2023-02-29` give `400`, not `500` or a shifted window.
+- Searching players (`GET /api/v1/players?q=`, `/api/v1/players/search`) and role members (`GET /api/v1/roles/:id/members?q=`) escapes `%`, `_` and `\`; a SteamID64 in the member search is compared as a number.
+- `POST /api/v1/public/media`: redeeming the token, writing `media_files`/`media_links` and the audit are done in a single transaction; on failure the token stays valid and the uploaded file is deleted.
+- `GET /api/v1/public/banlist` drops expired temporary bans already in SQL.
+- `GET /api/v1/analytics/reports`: `top_reporters` is computed over the reports of the selected `server_id` and the `from`/`to` window; `confirmed`, `accuracy`, `trusted`, `spam_flagged` remain the overall reputation from `reporter_stats`.
+- `POST /api/v1/reports` creates the report and its attachments in a single transaction. `PATCH /api/v1/reports/:id` resets `resolved_at` and `claimed_at` on a return to `pending`, and `resolved_at` on a return to `in_review`. A failure of the reporter statistics recalculation or of the notification is written to the log, and `notify_failed` appears in the audit context.
+- `GET /api/v1/role-assignments` accepts `limit` (default and maximum 1000) and `offset`, and returns the total row count in the `x-total-count` header; `expiring_soon=true` no longer includes already expired assignments.
+- `POST /api/v1/roles/:id/members/import` accepts a body of up to 6 MiB, so a 5000-row CSV larger than 1 MiB reaches validation, and the extra rows get `413 too_many_rows`.
+- `POST`/`PUT /api/v1/roles`: duplicate `squad_permissions` keys are collapsed, and `409 role_name_taken` is returned only on a name conflict. `PUT` enqueues the Admins.cfg sync only if the name or `squad_permissions` changed.
+- `PATCH /api/v1/seasons/:id` responds `422 season_finalized` if the season was finalized in parallel, and does not reopen it.
+- `POST /api/v1/servers/archive/:id/restore` responds `409 slug_in_use` rather than `500` if the slug was taken in parallel. `POST /api/v1/servers/:id/restore-configs` rejects an external server (`409 external_server`).
+## 2026-09-28 — Player card: evidence, notes, co-players, links (#81)
 
 ### Security
 
-- `POST /api/v1/players/:playerId/links` больше не принимает `evidence_snapshot` от клиента: поле игнорируется, а в `player_links.evidence_snapshot` записывается снимок, который сервер сам вычисляет движком ALT-1 для пары в момент решения (`score`, `confidence`, `shared_ip_count`, `signals`), или `null`, если пара не является кандидатом (#461). Движок вынесен в `src/lib/alt-candidates.ts` и общий для `GET /alt-candidates` и создания связи.
+- `POST /api/v1/players/:playerId/links` no longer accepts `evidence_snapshot` from the client: the field is ignored, and `player_links.evidence_snapshot` stores a snapshot the server itself computes with the ALT-1 engine for the pair at the moment of the decision (`score`, `confidence`, `shared_ip_count`, `signals`), or `null` if the pair is not a candidate (#461). The engine was moved to `src/lib/alt-candidates.ts` and is shared by `GET /alt-candidates` and link creation.
 
 ### Changed
 
-- `GET /api/v1/players/:playerId/media` добавляет к каждому элементу `publications[]` (строки `media_publications`), а к ответу — `can_manage_media` вызывающего; `GET /api/v1/media/:id/publications` тоже отдаёт `can_manage_media` (#440, #444).
-- `GET /api/v1/players/:playerId/coplay` принимает `?limit=1..20` (по умолчанию 20) и считает разбивку по серверам (`by_server`) только для `?include=by_server`; без него поля `by_server` в ответе нет (#453).
-- `PATCH /api/v1/notes/:noteId` и `DELETE /api/v1/notes/:noteId` публикуют live-события `note.updated` (`{ player_id, note }`) и `note.deleted` (`{ player_id, note_id }`) (#449).
+- `GET /api/v1/players/:playerId/media` adds `publications[]` (rows of `media_publications`) to each item and the caller's `can_manage_media` to the response; `GET /api/v1/media/:id/publications` also returns `can_manage_media` (#440, #444).
+- `GET /api/v1/players/:playerId/coplay` accepts `?limit=1..20` (default 20) and computes the per-server breakdown (`by_server`) only for `?include=by_server`; without it the response has no `by_server` field (#453).
+- `PATCH /api/v1/notes/:noteId` and `DELETE /api/v1/notes/:noteId` publish the live events `note.updated` (`{ player_id, note }`) and `note.deleted` (`{ player_id, note_id }`) (#449).
 
-## 2026-09-28 — Боевые события привязаны к матчу, проверка цепочки аудита v2 (#50)
+## 2026-09-28 — Combat events tied to a match, audit-chain verification v2 (#50)
 
 ### Changed
 
-- `GET /api/v1/combat-events` и `/export`: фильтр `matchId` теперь uuid матча (`matches.id`), а не bigint; нечисловой uuid → 400. Поле `matchId` в строках и колонка `match_id` в CSV содержат uuid матча (раньше всегда `null`, потому что `combat_events.match_id` имел тип bigint и никогда не заполнялся). Данные берутся из новой колонки `combat_events.match_uuid` (миграция 0131); старые строки остаются без матча.
-- `GET /api/v1/audit/verify-chain` проверяет строки v2 (миграция 0132): хэш покрывает все колонки, включая актора, IP, снапшоты и код ответа. Новое значение `reason: "hash_version"` означает неизвестную версию формы или строку v1 после строки v2.
+- `GET /api/v1/combat-events` and `/export`: the `matchId` filter is now the match uuid (`matches.id`), not a bigint; a non-numeric uuid → 400. The `matchId` field in rows and the `match_id` column in the CSV contain the match uuid (previously always `null`, because `combat_events.match_id` was of type bigint and was never populated). The data comes from the new column `combat_events.match_uuid` (migration 0131); old rows stay without a match.
+- `GET /api/v1/audit/verify-chain` verifies v2 rows (migration 0132): the hash covers all columns, including the actor, IP, snapshots and response code. The new value `reason: "hash_version"` means an unknown form version or a v1 row after a v2 row.
 
-## 2026-09-27 — Whitelist и награда за сид не выдают и не снимают чужие роли (#8)
+## 2026-09-27 — Whitelist and seed reward do not grant or revoke other people's roles (#8)
 
 ### Security
 
-- `PATCH /api/v1/whitelist/applications/:id` больше не выдаёт роль Owner (`403 owner_assignment_forbidden`) и не меняет роль заявителя-владельца (`409 owner_role_protected`). Без `user:manage_roles` одобрение выдаёт только настроенную роль whitelist и только заявителю без другой роли, иначе `403 role_assignment_forbidden`.
-- `POST /api/v1/whitelist/members` не заменяет роль владельца (`409 owner_role_protected`), а без `user:manage_roles` не заменяет никакую другую роль (`403 role_assignment_forbidden`). `POST /api/v1/whitelist/import` пропускает такие строки с теми же причинами в `skipped[].reason`.
-- `PUT /api/v1/whitelist/settings`: сменить роль whitelist на другую можно только с `user:manage_roles` (`403 role_assignment_forbidden`); сбросить её в `null` по-прежнему можно с `whitelist:edit`.
-- `PUT /api/v1/settings/economy` отвечает `422 seed_reward_threshold_required`, если запрос правит награду за сид и роль награды задана при пороге 0 часов.
+- `PATCH /api/v1/whitelist/applications/:id` no longer grants the Owner role (`403 owner_assignment_forbidden`) and does not change the role of an owner applicant (`409 owner_role_protected`). Without `user:manage_roles`, an approval grants only the configured whitelist role and only to an applicant with no other role, otherwise `403 role_assignment_forbidden`.
+- `POST /api/v1/whitelist/members` does not replace an owner's role (`409 owner_role_protected`), and without `user:manage_roles` does not replace any other role (`403 role_assignment_forbidden`). `POST /api/v1/whitelist/import` skips such rows with the same reasons in `skipped[].reason`.
+- `PUT /api/v1/whitelist/settings`: changing the whitelist role to another one is possible only with `user:manage_roles` (`403 role_assignment_forbidden`); resetting it to `null` is still possible with `whitelist:edit`.
+- `PUT /api/v1/settings/economy` responds `422 seed_reward_threshold_required` if the request edits the seed reward and the reward role is set with a threshold of 0 hours.
 
-## 2026-09-27 — Проверка значений, попадающих в Admins.cfg (#11)
+## 2026-09-27 — Validation of values that end up in Admins.cfg (#11)
 
 ### Fixed
 
-- `POST /api/v1/roles` и `PUT /api/v1/roles/:id` возвращают `400`, если имя роли пустое или содержит управляющие символы, переводы строк, `:`, `,` или `/` (`role_name_invalid`).
-- `PUT /api/v1/players/:playerId/role` и `POST /api/v1/roles/:id/members` возвращают `400` для комментария с управляющими символами или переводом строки (`comment_not_single_line`); `POST /api/v1/clans` и `PATCH /api/v1/clans/:id` — для такого же названия клана (`name_not_single_line`).
+- `POST /api/v1/roles` and `PUT /api/v1/roles/:id` return `400` if the role name is empty or contains control characters, line breaks, `:`, `,` or `/` (`role_name_invalid`).
+- `PUT /api/v1/players/:playerId/role` and `POST /api/v1/roles/:id/members` return `400` for a comment with control characters or a line break (`comment_not_single_line`); `POST /api/v1/clans` and `PATCH /api/v1/clans/:id` — for a clan name with the same problem (`name_not_single_line`).
 
-## 2026-09-27 — Обновление depot не трогает запущенные серверы
+## 2026-09-27 — Depot update does not touch running servers
 
 ### Fixed
 
-- `POST /api/v1/servers/:id/update` проверял только, что остановлен сервер `:id`, хотя SteamCMD переписывает общий том `squad-depot`, смонтированный во все Squad-контейнеры хоста. Теперь маршрут возвращает `409 { error: 'servers_running', server_ids }`, пока любой другой неудалённый container-сервер находится в `installing`/`starting`/`running`/`stopping` (#20). `installing` учитывается потому, что установка заканчивается запуском контейнера с тем же depot.
-- `POST /api/v1/servers/:id/start` и `POST /api/v1/servers/:id/restart` возвращают `409 depot_update_in_progress`, пока удерживается блокировка `depot:updating`: сервер больше нельзя поднять на наполовину обновлённом depot.
-- `POST /api/v1/servers/:id/install` по той же причине возвращает `409 depot_update_in_progress`, пока удерживается `depot:updating`. Если обновление началось уже после запроса, установка перед `container_run` снова проверяет блокировку и завершается ошибкой `depot_update_in_progress` (сервер получает статус `failed`), а не запускает контейнер.
+- `POST /api/v1/servers/:id/update` only checked that server `:id` was stopped, although SteamCMD rewrites the shared `squad-depot` volume mounted into all Squad containers of the host. Now the route returns `409 { error: 'servers_running', server_ids }` while any other non-deleted container server is in `installing`/`starting`/`running`/`stopping` (#20). `installing` is counted because an installation ends with starting a container with the same depot.
+- `POST /api/v1/servers/:id/start` and `POST /api/v1/servers/:id/restart` return `409 depot_update_in_progress` while the `depot:updating` lock is held: a server can no longer be brought up on a half-updated depot.
+- `POST /api/v1/servers/:id/install` returns `409 depot_update_in_progress` for the same reason while `depot:updating` is held. If the update started after the request, the installation rechecks the lock before `container_run` and fails with `depot_update_in_progress` (the server gets status `failed`) instead of starting the container.
 
 ### Changed
 
-- Право `server:update` помечено как опасное (`dangerous: true`): действие затрагивает все серверы хоста, как и `POST /api/v1/depot/update` под `server:install`.
+- The `server:update` permission is marked dangerous (`dangerous: true`): the action affects all servers of the host, like `POST /api/v1/depot/update` under `server:install`.
 
-## 2026-09-27 — Проверка major brand для video/mp4
+## 2026-09-27 — Major brand check for video/mp4
 
 ### Security
 
-- `matchesMagicBytes` для `video/mp4` проверяет не только бокс `ftyp`, но и major brand: файлы HEIF/AVIF (`avif`, `heic`, `mif1` и родственные бренды) отклоняются с `400 magic_byte_mismatch` и в `POST /api/v1/media`, и в `POST /api/v1/public/media`. См. #22.
+- `matchesMagicBytes` for `video/mp4` checks not only the `ftyp` box but also the major brand: HEIF/AVIF files (`avif`, `heic`, `mif1` and related brands) are rejected with `400 magic_byte_mismatch` in both `POST /api/v1/media` and `POST /api/v1/public/media`. See #22.
 
-## 2026-09-16 — Вход через Steam, интеграция bss.games удалена
+## 2026-09-16 — Sign-in through Steam, bss.games integration removed
 
 ### Removed
 
-- SSO bss.games: `GET /api/v1/auth/bss/login`, `GET /api/v1/auth/bss/callback`, `POST /api/v1/auth/bss/logout-all`, переменные `BSS_SITE_URL` и `BSS_SSO_CLIENT_*`, утилита `revoke-sessions-for-sso-cutover`.
-- VIP-webhook магазина: `POST /api/v1/integrations/vip/{tier-role,preflight,lifecycle,status}`, `VIP_LIFECYCLE_WEBHOOK_SECRET`, `VIP_LIFECYCLE_REQUIRE_REVISION`, строгий режим ревизий и утилита `audit:vip-lifecycle-ownership`. Маршруты ролей, whitelist и `mint-owner-session` больше не возвращают `409 vip_lifecycle_owned`, а обработчик ошибок — `site_vip_binding_protected`.
-- `GET/POST /api/v1/servers/:id/sidecar` и движок SquadJS2: состояние сайдкара читается и переключается только через `/api/v1/servers/:id/rnsquadjs`.
+- bss.games SSO: `GET /api/v1/auth/bss/login`, `GET /api/v1/auth/bss/callback`, `POST /api/v1/auth/bss/logout-all`, the variables `BSS_SITE_URL` and `BSS_SSO_CLIENT_*`, the `revoke-sessions-for-sso-cutover` utility.
+- The store's VIP webhook: `POST /api/v1/integrations/vip/{tier-role,preflight,lifecycle,status}`, `VIP_LIFECYCLE_WEBHOOK_SECRET`, `VIP_LIFECYCLE_REQUIRE_REVISION`, the strict revision mode and the `audit:vip-lifecycle-ownership` utility. The role, whitelist and `mint-owner-session` routes no longer return `409 vip_lifecycle_owned`, and the error handler no longer returns `site_vip_binding_protected`.
+- `GET/POST /api/v1/servers/:id/sidecar` and the SquadJS2 engine: the sidecar state is read and switched only through `/api/v1/servers/:id/rnsquadjs`.
 
 ### Changed
 
-- Вход снова выполняется через Steam OpenID: `GET /api/v1/auth/steam/login` и `GET /api/v1/auth/steam/callback`. Строка запроса callback не попадает в автоматический журнал запросов.
-- `POST /api/v1/auth/logout-all` завершает только сессии панели и возвращает `{ ok: true }`.
-- В production API не стартует, если `PANEL_PUBLIC_URL` не является HTTPS-origin.
+- Sign-in is again done through Steam OpenID: `GET /api/v1/auth/steam/login` and `GET /api/v1/auth/steam/callback`. The callback query string does not end up in the automatic request log.
+- `POST /api/v1/auth/logout-all` ends only panel sessions and returns `{ ok: true }`.
+- In production the API does not start if `PANEL_PUBLIC_URL` is not an HTTPS origin.
 
-## 2026-09-14 — Время на сиде в присутствии игрока
+## 2026-09-14 — Seed time in player presence
 
 ### Fixed
 
-- `GET /api/v1/players/:playerId/presence` возвращает `seed_seconds` в `totals` и в каждой строке `by_server`, а `GET …/presence/daily` — в каждой точке `series`. Колонка `player_daily_presence.seed_seconds` заполнялась, но в ответ не попадала, поэтому игрок, игравший только пока сервер сидился, видел на карточке присутствия «Онлайн 0м» при часах в игре. Формула бонуса (`online + 2×boost`) не меняется: за сид начисляет отдельный трек SEED-2.
+- `GET /api/v1/players/:playerId/presence` returns `seed_seconds` in `totals` and in each `by_server` row, and `GET …/presence/daily` — in each `series` point. The `player_daily_presence.seed_seconds` column was populated but did not make it into the response, so a player who played only while the server was seeding saw «Онлайн 0м» (Online 0m) on the presence card despite having hours in the game. The bonus formula (`online + 2×boost`) does not change: seeding is rewarded by the separate SEED-2 track.
 
-## 2026-09-08 — История изменений автовыбора карты
-
-### Added
-
-- Каждое сохранение на `/map-vote` (правила и пул кандидатов) пишет версию в `config_versions` под именем `map-vote.json` — та же таблица, цепочка `parent_version_id`, автор, IP, сообщение и sha256, что и у редактора конфигов. Сохранение без изменений новой записи не создаёт. Имя намеренно вне `ALLOWED_CONFIG_FILES`: раздел `/configs` его не показывает и не сверяет с диском, потому что файла на сервере нет — выбор применяется по RCON.
-- `GET /api/v1/servers/:serverId/map-vote/versions`, `GET …/versions/:versionId` и `POST …/versions/:versionId/restore`. Откат восстанавливает правила и пул, сам становится новой версией и пишет аудит `server.map_vote.restore`; если слой исчез из каталога — 409 `unknown_layers_in_version` со списком, повтор с `drop_unknown_layers` восстанавливает остальное.
-
-## 2026-09-07 — Ростер с названиями команд и отрядов
+## 2026-09-08 — Map vote change history
 
 ### Added
 
-- `GET /api/v1/servers/:id/roster` отдаёт рядом с игроками `teams[]` (`team_id`, название фракции из `ListSquads`) и `squads[]` (`team_id`, `squad_id`, имя, размер, замок, признак командирского отряда) из кэша `rcon:squads:{id}`, который worker-rcon уже писал, но никто не читал. Ключ живёт 90 с после удачного опроса, поэтому оба списка могут быть пустыми при живом `players` — клиент обязан рисовать ростер и без них. Личность создателя отряда наружу не выходит.
+- Every save on `/map-vote` (rules and candidate pool) writes a version to `config_versions` under the name `map-vote.json` — the same table, `parent_version_id` chain, author, IP, message and sha256 as the config editor. A save without changes does not create a new entry. The name is intentionally outside `ALLOWED_CONFIG_FILES`: the `/configs` section does not show it and does not compare it with the disk, because there is no such file on the server — the choice is applied over RCON.
+- `GET /api/v1/servers/:serverId/map-vote/versions`, `GET …/versions/:versionId` and `POST …/versions/:versionId/restore`. A rollback restores the rules and the pool, itself becomes a new version and writes the `server.map_vote.restore` audit; if a layer has disappeared from the catalog — 409 `unknown_layers_in_version` with a list, and a retry with `drop_unknown_layers` restores the rest.
 
-## 2026-09-07 — Логи внешнего сервера по SSH
-
-### Added
-
-- `GET/PUT/DELETE /api/v1/servers/:id/log-source` — источник `SquadGame.log` для внешнего сервера: хост, порт и пользователь SSH, путь к логу и флаг включения. Панель сама генерирует RSA-3072 ключ, хранит приватную часть зашифрованной `APP_ENCRYPTION_KEY` и отдаёт строку для `authorized_keys`; отпечаток host key закрепляется worker-ом при первом подключении. Только для `runtime='external'`.
-
-## 2026-09-05 — Внешние серверы: подключение по RCON без установки
+## 2026-09-07 — Roster with team and squad names
 
 ### Added
 
-- `POST /api/v1/servers/external` регистрирует Squad-сервер, который панель не размещает (`servers.runtime='external'`): сохраняет `rcon_host`, порт и зашифрованный пароль RCON, порты A2S/игры, и сразу создаёт строку в `running` — worker-rcon подхватывает её на ближайшем reconcile и начинает опрос игроков, отрядов, карты и очереди. Установка, bridge и проверка коллизий портов не выполняются.
-- `PUT /api/v1/servers/:id/external-connection` меняет адрес, порты и пароль внешнего сервера; пропущенный пароль сохраняет прежний. Для контейнерного сервера — 409 `not_external_server`.
-- В ответе `GET /api/v1/servers/:id` для внешнего сервера появилось поле `connection: { rcon_host, rcon_port }`; `host.address` равен адресу RCON, `container` всегда `null`.
+- `GET /api/v1/servers/:id/roster` returns, next to the players, `teams[]` (`team_id`, the faction name from `ListSquads`) and `squads[]` (`team_id`, `squad_id`, name, size, lock, squad-leader-squad flag) from the `rcon:squads:{id}` cache, which worker-rcon already wrote but nobody read. The key lives 90 s after a successful poll, so both lists can be empty while `players` is live — the client must render the roster without them. The identity of the squad creator is not exposed.
+
+## 2026-09-07 — External server logs over SSH
+
+### Added
+
+- `GET/PUT/DELETE /api/v1/servers/:id/log-source` — the `SquadGame.log` source for an external server: SSH host, port and user, the log path and an enable flag. The panel generates an RSA-3072 key itself, stores the private part encrypted with `APP_ENCRYPTION_KEY` and returns a line for `authorized_keys`; the host key fingerprint is pinned by the worker on the first connection. Only for `runtime='external'`.
+
+## 2026-09-05 — External servers: RCON connection without installation
+
+### Added
+
+- `POST /api/v1/servers/external` registers a Squad server that the panel does not host (`servers.runtime='external'`): it saves `rcon_host`, the port and the encrypted RCON password, the A2S/game ports, and immediately creates a row in `running` — worker-rcon picks it up on the next reconcile and starts polling players, squads, the map and the queue. Installation, the bridge and the port-collision check are not performed.
+- `PUT /api/v1/servers/:id/external-connection` changes the address, ports and password of an external server; an omitted password keeps the previous one. For a container server — 409 `not_external_server`.
+- The `GET /api/v1/servers/:id` response for an external server gained the field `connection: { rcon_host, rcon_port }`; `host.address` equals the RCON address, and `container` is always `null`.
 
 ### Changed
 
-- Маршруты, которым нужен контейнер, дерево конфигов или bridge (`start`/`stop`/`restart`/`force-stop`/`install`/`update`/`reconcile`, `/configs/*`, `/rotation`, `/metrics`, `/logs/files`, `/rnsquadjs`, смена портов через `PUT /settings`), отвечают 409 `external_server` до любого обращения к bridge. `DELETE` внешнего сервера — обычный soft-delete без резервной копии конфигов.
-- Status-reconciler, worker-log-ingest, worker-config-sync, разнос outbox `Admins.cfg` и профили ротации планировщика игнорируют `runtime='external'`: у такого сервера нет `squad-<id>`, и без фильтра reconciler переводил бы его в `stopped` через 4 секунды после создания, а config-sync поднимал бы вечный `unreachable`.
-- Проверка коллизий портов при создании контейнерного сервера больше не учитывает внешние строки — они живут на другом хосте.
-- VIP lifecycle (`preflight`/`lifecycle`) считает целями доставки только контейнерные серверы: внешний сервер не входит в `servers_total` и не получает строк outbox. Восстановление внешнего сервера из архива (`POST /servers/archive/:id/restore`) отвечает 409 `external_server` — его заново подключают через `POST /servers/external`.
+- Routes that need a container, the config tree or the bridge (`start`/`stop`/`restart`/`force-stop`/`install`/`update`/`reconcile`, `/configs/*`, `/rotation`, `/metrics`, `/logs/files`, `/rnsquadjs`, changing ports via `PUT /settings`) respond 409 `external_server` before any bridge call. `DELETE` of an external server is an ordinary soft-delete without a config backup.
+- The status reconciler, worker-log-ingest, worker-config-sync, the `Admins.cfg` outbox relay and the scheduler's rotation profiles ignore `runtime='external'`: such a server has no `squad-<id>`, and without the filter the reconciler would move it to `stopped` 4 seconds after creation, and config-sync would raise a permanent `unreachable`.
+- The port-collision check when creating a container server no longer takes external rows into account — they live on another host.
+- VIP lifecycle (`preflight`/`lifecycle`) counts only container servers as delivery targets: an external server is not part of `servers_total` and gets no outbox rows. Restoring an external server from the archive (`POST /servers/archive/:id/restore`) responds 409 `external_server` — it is reconnected through `POST /servers/external`.
 
-## 2026-09-03 — Плановый docker prune молчит, пока bridge недоступен
+## 2026-09-03 — Scheduled docker prune stays silent while the bridge is unavailable
 
 ### Changed
 
-- Плагин `orphan-sweep` перед плановым `docker system prune` (через 30 с после старта и раз в сутки) сначала делает `ping` моста. Если мост не отвечает, prune пропускается с предупреждением в логе и **без** записи в `audit_log`: раньше каждый запуск API при лежащем мосте оставлял строку `host.docker_prune` со статусом 502, которая на дашборде выглядела как критическое событие, хотя сам сбой моста уже виден через его heartbeat. Ручной prune из `host-actions` по-прежнему пишет аудит при любом исходе.
+- Before the scheduled `docker system prune` (30 s after startup and once a day), the `orphan-sweep` plugin first `ping`s the bridge. If the bridge does not respond, the prune is skipped with a warning in the log and **without** writing to `audit_log`: previously every API start while the bridge was down left a `host.docker_prune` row with status 502, which looked like a critical event on the dashboard even though the bridge failure itself is already visible via its heartbeat. A manual prune from `host-actions` still writes the audit regardless of the outcome.
 
-## 2026-09-03 — Durable-ограждение владельца VIP и точный tier mapping
+## 2026-09-03 — Durable VIP-owner fence and exact tier mapping
 
 ### Added
 
-- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC возвращает авторитетный `vip_tiers.id` по `role_id` без игрока, записи и блокировки; необязательный переданный `tier` дополнительно проверяет точную UUID-пару. Preflight, lifecycle и status возвращают тот же `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
-- `audit-vip-lifecycle-ownership` проверяет все доказуемые lifecycle-проекции через `findVipLifecycleOwner`, не усыновляет ручные роли и не выводит идентификаторы игроков. Потерянный marker находится даже после удаления tier mapping; superseded, неоднозначный или небезопасный mapping считается конфликтом.
+- A read-only `POST /api/v1/integrations/vip/tier-role` under the same HMAC returns the authoritative `vip_tiers.id` by `role_id` without a player, writes or locking; an optional supplied `tier` additionally verifies the exact UUID pair. Preflight, lifecycle and status return the same `tier_code`; strict mode rejects a mismatch as `409 tier_role_mismatch`.
+- `audit-vip-lifecycle-ownership` checks all provable lifecycle projections through `findVipLifecycleOwner`, does not adopt manual roles and does not output player identifiers. A lost marker is found even after the tier mapping was deleted; a superseded, ambiguous or unsafe mapping counts as a conflict.
 
 ### Changed
 
-- Пустой подписанный запрос к `tier-role` теперь возвращает единственную активную безопасную связку роли и уровня для первичной настройки producer; ноль или несколько подходящих связок закрываются с `409 vip_binding_not_unique` без записи в БД.
-- `vip-revision-cutover` под одним advisory lock атомарно выполняет аудит и включает durable-флаг PostgreSQL до смены env и перезапуска. Обычный запуск с relaxed env не снимает уже включённое ограждение; отключение доступно только отдельной rollback-команде после остановки API.
-- Startup и cutover сверяют точный SHA-256/метаданные DB-функций и полные trigger definitions; удалённое, выключенное, перепривязанное или изменённое ограждение блокирует HTTP-startup fail-closed.
-- Все обычные API/worker/raw-SQL пути назначения роли используют CAS по lifecycle marker. DB-trigger запрещает назначение роли из `vip_tiers`, прямое снятие/замену внешней проекции и заранее подготовленное событие из другой транзакции. Изменение tier/role-семантики, которое сделало бы действующего владельца неснимаемым, также блокируется.
-- Все writer-пути панели для `Admins.cfg` сериализованы общим PostgreSQL lock до точного RCON-подтверждения и durable `applied_at`; replay использует новый RCON `request_id`. В strict-режиме редактор и restore сохраняют только неуправляемую часть файла, а канонический `Admin=`/`Group=` блок всегда восстанавливается из БД. Cutover ждёт уже начатый relaxed writer. Внешние writer-ы вроде `squadbot2` должны быть отключены или ограждены отдельно до открытия продаж.
+- An empty signed request to `tier-role` now returns the single active safe role-and-tier binding for initial producer setup; zero or several matching bindings are closed with `409 vip_binding_not_unique` without any DB write.
+- `vip-revision-cutover` atomically performs the audit and enables the durable PostgreSQL flag under a single advisory lock, before the env change and restart. An ordinary start with a relaxed env does not remove an already enabled fence; disabling is available only through a separate rollback command after the API is stopped.
+- Startup and cutover verify the exact SHA-256/metadata of the DB functions and the full trigger definitions; a deleted, disabled, rebound or modified fence blocks HTTP startup fail-closed.
+- All ordinary API/worker/raw-SQL role-assignment paths use CAS on the lifecycle marker. A DB trigger forbids assigning a role from `vip_tiers`, directly removing or replacing an external projection, and an event prepared in advance from another transaction. A change of tier/role semantics that would make the current owner unremovable is also blocked.
+- All panel writer paths for `Admins.cfg` are serialized by a shared PostgreSQL lock until the exact RCON confirmation and the durable `applied_at`; a replay uses a new RCON `request_id`. In strict mode the editor and restore save only the unmanaged part of the file, and the canonical `Admin=`/`Group=` block is always restored from the DB. The cutover waits for an already started relaxed writer. External writers such as `squadbot2` must be disabled or fenced separately before sales are opened.
 
-## 2026-09-02 — Строгая post-commit доставка Admins.cfg
+## 2026-09-02 — Strict post-commit delivery of Admins.cfg
 
 ### Changed
 
-- API и mutation-workers больше не выполняют прямой `XADD`: доменное изменение и outbox фиксируются одной PostgreSQL-транзакцией, а single-flight relay публикует только после commit, без `MAXLEN`, с ограниченным ожиданием и устойчивым `_outbox_id`.
-- Удаление сервера теперь завершает все unapplied строки терминальным успешным исходом `server_removed`, сохраняя уже записанные `relayed_at`/`stream_id`. Это заменяет описанный ниже исторический контракт SYNC-5, где строки только помечались relayed, а stream ограничивался `MAXLEN ~ 500`.
+- The API and mutation workers no longer perform a direct `XADD`: the domain change and the outbox are committed in a single PostgreSQL transaction, and a single-flight relay publishes only after commit, without `MAXLEN`, with a bounded wait and a stable `_outbox_id`.
+- Deleting a server now completes all unapplied rows with the terminal successful outcome `server_removed`, preserving the already recorded `relayed_at`/`stream_id`. This replaces the historical SYNC-5 contract described below, where rows were only marked relayed and the stream was capped at `MAXLEN ~ 500`.
 
-## 2026-09-01 — Единый вход с bss.games (#299)
+## 2026-09-01 — Single sign-on with bss.games (#299)
 
 ### Added
 
-- Панель стала доверенным клиентом `bss.games`: одноразовый код с PKCE, сроком 60 секунд и точным callback обменивается только сервер-сервер. Состояние входа одноразовое и хранится в Redis 300 секунд.
-- После обмена панель заново проверяет собственную роль игрока и выдаёт обычный либо ограниченный `self_service`-сеанс; утверждения сайта не заменяют RBAC панели.
-- Добавлены локальный и глобальный выход. Глобальный выход всегда отзывает все локальные сеансы, даже если сайт временно недоступен, и безопасно сообщает о частичном результате.
-- Добавлен доверенный идемпотентный отзыв всех сеансов панели со стороны сайта и одноразовая команда отзыва старых сеансов при первом выпуске.
+- The panel became a trusted client of `bss.games`: a one-time code with PKCE, a 60-second lifetime and an exact callback is exchanged server-to-server only. The sign-in state is one-time and is kept in Redis for 300 seconds.
+- After the exchange the panel rechecks the player's own role and issues either a regular or a restricted `self_service` session; the site's assertions do not replace the panel's RBAC.
+- Local and global sign-out were added. Global sign-out always revokes all local sessions, even if the site is temporarily unavailable, and safely reports a partial result.
+- A trusted idempotent revocation of all panel sessions from the site side and a one-off command to revoke old sessions on first release were added.
 
 ### Changed
 
-- После успешной боевой приёмки удалены прямые маршруты Steam OpenID панели и их отдельная реализация. Единственная пользовательская точка входа теперь проходит через `bss.games`; `/api/v1/auth/steam/login` и callback возвращают 404.
+- After successful production acceptance the panel's direct Steam OpenID routes and their separate implementation were removed. The only user entry point to sign-in now goes through `bss.games`; `/api/v1/auth/steam/login` and the callback return 404.
 
 ### Security
 
-- Общий секрет остаётся только в API, поддерживает текущий и следующий ключ для ротации. Callback не журналирует код, состояние или Steam ID; обмен ограничен по размеру и времени, перенаправления внешнего клиента запрещены.
-- На вход, callback и отзыв действуют отдельные ограничения частоты. Повтор разрешён один раз только для идемпотентного отзыва при сетевом/5xx сбое; код входа автоматически не повторяется.
+- The shared secret stays only in the API and supports the current and the next key for rotation. The callback does not log the code, the state or the Steam ID; the exchange is limited in size and time, and redirects of the external client are forbidden.
+- Sign-in, the callback and revocation each have separate rate limits. A retry is allowed once, only for the idempotent revocation on a network/5xx failure; the sign-in code is not retried automatically.
 
-## 2026-08-30 — Сидовые матчи вне игровой статистики
+## 2026-08-30 — Seed matches excluded from game statistics
 
 ### Changed
 
-- `GET /api/v1/players/:playerId/dossier` больше не считает сидовые матчи (`matches.is_seed`) игровой статистикой: разогрев на пустом сервере не то же самое, что бой, и K/D с винрейтом он искажает. Фильтр стоит в `skill` — убийства, смерти, тимкиллы, поднятия, матчи, победы, поражения, ничьи.
-- `kd_trend` считается по тем же матчам, сгруппированным по месяцам, а не по материализованным строкам `player_stat_periods`. Те не отделяют сидовые матчи, и после фильтра график расходился бы с цифрами прямо над ним. Побочно исчезло условие `matches_played > 0`: месяцы без матчей группировка не создаёт сама.
-- `skill.online_seconds` остаётся единственной величиной из `player_stat_periods` — это время на серверах, а не боевой агрегат, и месяц на сидинге считается в нём полностью.
+- `GET /api/v1/players/:playerId/dossier` no longer counts seed matches (`matches.is_seed`) as game statistics: warming up on an empty server is not the same as combat, and it distorts K/D and win rate. The filter is applied in `skill` — kills, deaths, teamkills, revives, matches, wins, losses, draws.
+- `kd_trend` is computed over the same matches, grouped by month, rather than over the materialized `player_stat_periods` rows. Those do not separate seed matches, and after the filter the chart would diverge from the numbers right above it. As a side effect the `matches_played > 0` condition disappeared: the grouping does not create months without matches by itself.
+- `skill.online_seconds` remains the only value from `player_stat_periods` — it is time on servers, not a combat aggregate, and a month spent seeding is counted in it in full.
 
-## 2026-08-25 — Своё досье без `combat:view`, «Онлайн» в скилле, живой выбор периода
+## 2026-08-25 — Own dossier without `combat:view`, "Online" in skill, live period selection
 
 ### Fixed
 
-- `GET /api/v1/players/:playerId/dossier` отвечал 500 на любой `?from=` или `?to=`. Границы окна приходят через `z.coerce.date()`, а дальше уходили в шаблон `sql` объектами `Date` — postgres.js отказывается их сериализовать (`ERR_INVALID_ARG_TYPE: Received an instance of Date`), и падал самый первый агрегат по `match_players`. Практически это значило, что в блоке «Досье» на карточке игрока работал только период «Всё время»: «3 мес», «6 мес» и «12 мес» показывали полосу ошибки. Границы теперь уходят строками ISO с явным приведением типа, а `period_start` сравнивается с `::date`, а не с `::timestamptz` — иначе полуночный `from` на сервере с отрицательным смещением уезжал в предыдущий месяц. Покрыто `test/integration/player-dossier.test.ts` (окно по `from`, окно по `from`+`to`).
+- `GET /api/v1/players/:playerId/dossier` answered 500 for any `?from=` or `?to=`. The window bounds arrive through `z.coerce.date()` and then went into the `sql` template as `Date` objects — postgres.js refuses to serialize them (`ERR_INVALID_ARG_TYPE: Received an instance of Date`), and the very first aggregate over `match_players` failed. In practice this meant that in the «Досье» (Dossier) block on the player card only the «Всё время» (All time) period worked: «3 мес», «6 мес» and «12 мес» (3, 6 and 12 months) showed an error strip. The bounds are now sent as ISO strings with an explicit type cast, and `period_start` is compared with `::date` rather than `::timestamptz` — otherwise a midnight `from` on a server with a negative offset slipped into the previous month. Covered by `test/integration/player-dossier.test.ts` (a window by `from`, a window by `from`+`to`).
 
 ### Changed
 
-- Тот же маршрут пропускает владельца сессии к его собственному досье без роли с `combat:view`: право закрывает чужие боевые цифры, а не свои, и на этом стоит блок «Игровая статистика» на странице «Аккаунт». Чужое досье по-прежнему требует `combat:view` — оба случая закреплены тестом. Послаблением нельзя воспользоваться из self-service-сессии: маршрут не помечен `selfService`, и `test/security/self-service-session.test.ts` проверяет, что такая сессия получает 401 даже на своё досье.
+- The same route lets the session owner through to their own dossier without a role with `combat:view`: the permission protects other people's combat numbers, not one's own, and the «Игровая статистика» (Game statistics) block on the «Аккаунт» (Account) page relies on this. Another player's dossier still requires `combat:view` — both cases are pinned by a test. The relaxation cannot be used from a self-service session: the route is not marked `selfService`, and `test/security/self-service-session.test.ts` checks that such a session gets 401 even for its own dossier.
 
 ### Added
 
-- `skill.online_seconds` в ответе досье — время на серверах за то же окно: сумма `online_seconds` месячных строк `player_stat_periods` **без** фильтра `matches_played > 0`, который применяется к графику K/D. Месяц, целиком проведённый на сидинге, в график не попадает, но временем игрока не обделяет.
+- `skill.online_seconds` in the dossier response — time on servers for the same window: the sum of `online_seconds` of the monthly `player_stat_periods` rows **without** the `matches_played > 0` filter that is applied to the K/D chart. A month spent entirely seeding does not appear on the chart, but does not shortchange the player's time.
 
 ## 2026-08-24 — Session list stops showing dead sessions; own names exposed
 
 ### Fixed
 
-- `GET /api/v1/me/sessions` (`routes/auth.ts`) selected every `sessions` row of the caller with no `expires_at` filter, so the panel's «Активные сессии» card — which promises «устройства, с которых сейчас открыта панель» — listed sessions that had expired days earlier, each with a live «Завершить» button next to it. The query now filters on `expires_at > now()`.
+- `GET /api/v1/me/sessions` (`routes/auth.ts`) selected every `sessions` row of the caller with no `expires_at` filter, so the panel's «Активные сессии» (Active sessions) card — which promises «устройства, с которых сейчас открыта панель» (devices the panel is currently open on) — listed sessions that had expired days earlier, each with a live «Завершить» (End) button next to it. The query now filters on `expires_at > now()`.
 - The same query had no `ORDER BY`, leaving row order to the planner; the caller's own session routinely landed in the middle of the list, which is the one row an operator must find to avoid revoking the session they are looking through. Results are now ordered by `last_activity_at` descending with the current session hoisted to the front.
 
 ### Added
@@ -648,8 +648,8 @@
 
 ### Fixed
 
-- `POST /api/v1/servers/:id/update` (`routes/server-update.ts`) wrote its SteamCMD output to a `server:update:{id}` Redis Stream that nothing ever read — the panel's "Обновить игру" button showed a spinner for the instant the fire-and-forget POST took to return, then silently reverted with zero indication that a multi-minute update was still running in the background. The endpoint now publishes into the same shared `depot:progress` stream `POST /api/v1/depot/update` already used (both ultimately call the same `bridge.depot_update`, guarded by the same `depot:updating` lock — there is only ever one depot update running at a time), so it's watchable through the existing `GET /api/v1/depot/progress/ws`.
-- That WS route never carried a completion signal, so even the fleet-wide "Обновить Squad" dashboard flow had the identical silent-progress gap despite the route already existing. New shared helper [`lib/depot-progress.ts`](../../../apps/api/src/lib/depot-progress.ts) (`publishDepotProgressLine`/`publishDepotProgressDone`) writes a terminal `stream:'event'` entry (`{done:true, final:'done'|'error', error?}`) from both routes' background jobs' `finally` blocks. The WS route forwards it, sends a `{backfill_complete:true}` marker between history replay and live tail so a stale/historical `done` (a prior, already-finished run) is never mistaken for the current one, and synthesizes an immediate done frame from `depot:last_update` for a client that connects after the run it triggered has already finished.
+- `POST /api/v1/servers/:id/update` (`routes/server-update.ts`) wrote its SteamCMD output to a `server:update:{id}` Redis Stream that nothing ever read — the panel's "Обновить игру" (Update game) button showed a spinner for the instant the fire-and-forget POST took to return, then silently reverted with zero indication that a multi-minute update was still running in the background. The endpoint now publishes into the same shared `depot:progress` stream `POST /api/v1/depot/update` already used (both ultimately call the same `bridge.depot_update`, guarded by the same `depot:updating` lock — there is only ever one depot update running at a time), so it's watchable through the existing `GET /api/v1/depot/progress/ws`.
+- That WS route never carried a completion signal, so even the fleet-wide "Обновить Squad" (Update Squad) dashboard flow had the identical silent-progress gap despite the route already existing. New shared helper [`lib/depot-progress.ts`](../../../apps/api/src/lib/depot-progress.ts) (`publishDepotProgressLine`/`publishDepotProgressDone`) writes a terminal `stream:'event'` entry (`{done:true, final:'done'|'error', error?}`) from both routes' background jobs' `finally` blocks. The WS route forwards it, sends a `{backfill_complete:true}` marker between history replay and live tail so a stale/historical `done` (a prior, already-finished run) is never mistaken for the current one, and synthesizes an immediate done frame from `depot:last_update` for a client that connects after the run it triggered has already finished.
 - Fixed a latent self-inflicted stall this change would otherwise have activated: the WS route's blocking `XREAD` ran on the shared `app.redis` singleton, which would queue every other route's Redis command behind it for up to 5 s at a time for as long as any tab had the progress view open — invisible until now because nothing actually connected to this route before. It now runs on a per-connection `app.redis.duplicate()`, matching the existing pattern in `plugins/live-bus.ts`.
 - New web component `UpdateProgressModal` (mirrors the existing install-wizard's WS-into-`LogConsole` pattern) is wired into both the per-server update button and the fleet dashboard's depot-update flow.
 - Also fixed while touching the dashboard's depot-update call site: it posted `{stop_server_ids: serverIds}` to `POST /api/v1/depot/update`, but the route's Zod schema reads `server_ids` — the "select servers to stop first" checkboxes in `DepotUpdateModal` never actually took effect.
@@ -684,7 +684,7 @@
 
 - `test/integration/global-setup.ts`'s `dropTestDatabases()` no longer sweeps every `sqtest_*`/`sqtmpl_*`/`sqworker_*` database in the cluster — `pg_database`/`DROP DATABASE` are cluster-wide, so that unscoped sweep let one local session's `globalSetup`/teardown destroy a concurrently-running session's still-live template and worker databases. `global-setup.ts` now generates a random `runId` once per invocation (`randomBytes(4).toString('hex')`), threads it to workers via the new `'squadRunId'` Vitest `provide`/`inject` key (mirroring the existing `'squadTemplateDb'` key), and `isolated-db.ts`'s new `useRunId`/`currentRunId` embed it into every constructed database name (`sqtmpl_<runId>_shared_*`, `sqtmpl_<runId>_<pid>_*`, `sqtest_<runId>_*`, `sqworker_<runId>_<pid>_*`). `dropTestDatabases(runId)` is now exported and scopes its `WHERE` clause to `<prefix>_<runId>_%`, so a sweep only ever drops its own run's leftovers.
 
-## 2026-07-27 — DISCORD-5 роль-синк: роль панели → роль Discord (#152)
+## 2026-07-27 — DISCORD-5 role sync: panel role → Discord role (#152)
 
 ### Added
 
@@ -703,7 +703,7 @@
 
 - `GET /api/v1/me` is unchanged — no capability boolean was added. The UI gates by self-hiding on `403`.
 - `isUniqueViolation` here walks the `err.cause` chain: drizzle-orm 0.45 wraps the driver error, so the flat `err.code === '23505'` check used in `routes/marks.ts` does not match.
-## 2026-07-27 — LEAD-7 сезоны лидербордов (#178)
+## 2026-07-27 — LEAD-7 leaderboard seasons (#178)
 
 ### Added
 
@@ -716,7 +716,7 @@
 
 - `GET /api/v1/leaderboards` no longer fails for `period=season`. `resolvePeriodStart` used to throw when `period_start` was omitted; the route now resolves the **active** season (`400 no_active_season` when there is none), looks up the named season when `period_start` *is* supplied (the archive view), and reports it as a new `season` payload field (`null` for every other period). `period_start` is derived as the season's start day in **UTC**, matching the day convention the aggregator materialises rows under.
 - [`plugins/audit.ts`](../../../apps/api/src/plugins/audit.ts) gains an opt-in `req.auditSnapshots = { before?, after?, targetId? }` channel. The declarative `config.audit` hook previously wrote no before/after, so a route needing them had to opt out with `audit: false` — which `test/audit-coverage.test.ts` allows for only three allowlisted URLs. Routes that do not set the field behave exactly as before.
-## 2026-07-27 — VIDEO-4 внешняя публикация медиа (#160)
+## 2026-07-27 — VIDEO-4 external media publication (#160)
 
 ### Added
 
@@ -732,14 +732,14 @@
 
 - `worker-media-publisher` added to both compose files, and `api` now shares a persistent `media_data` volume with it at `/var/lib/squad-panel/media` (`MEDIA_STORAGE_DIR`). The two containers have different WORKDIRs, so the previous relative `./media` default resolved to two separate ephemeral directories — the publisher would have found nothing to upload.
 
-## 2026-07-27 — MOD-4 массовые операции модерации (#61)
+## 2026-07-27 — MOD-4 bulk moderation operations (#61)
 
 ### Added
 
 - `POST /api/v1/moderation-actions/bulk` ([`routes/moderation-bulk.ts`](../../../apps/api/src/routes/moderation-bulk.ts)): applies one warn/kick/ban to up to 50 players in a single request, enforcing each target through MOD-2's [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts). Body `{ server_id, action_type, player_ids, reason, ban_length?, confirm_bulk: true }`; `confirm_bulk` must be the literal `true` (server half of the UI's double confirmation) and repeated ids are deduplicated. **The operation is deliberately non-transactional**: each target's ledger row is written immediately after its RCON command is confirmed, a failure is reported in `results[]` and the loop continues, and the response stays `200` — see the "Bulk moderation" section of [`api.md`](./api.md) for the full semantics, the per-target error codes, and the 25 s time budget. RBAC uses the existing catalog keys only (`mod:warn`/`mod:kick`/`mod:ban_temp`/`mod:ban_perm`, themselves gated on the role's Squad `kick`/`ban` permission by `derivePanelPermissions`); no new permission key was introduced. New audit action `moderation.bulk_action` — one row per target reached through RCON (`target_type='player'`) plus a summary row naming every target (`target_type='server'`), all sharing the request's `bulk_group` in `context`. No migration: the grouping lives in `moderation_actions.context`.
 - Web: `apps/web/src/components/BulkModerationModal.tsx` (two-step confirmation — a form, then a target list where a ban additionally requires typing the target count back — plus an `applied`/`failed` result screen with per-target reasons) and multi-select in the live-roster table (`servers/[id]/live-players.tsx`), gated on the caller's `mod:*` keys from `GET /api/v1/me`.
 
-## 2026-07-27 — MOD-3 доказательства для действий модерации (#60)
+## 2026-07-27 — MOD-3 evidence for moderation actions (#60)
 
 ### Added
 
@@ -753,7 +753,7 @@
 - A `media_links` row pointing at a soft-deleted `media_files` row is omitted from `evidence[]` but is **not** deleted — detaching stays an explicit operator action through `DELETE /api/v1/media/:id/links` (VIDEO-2, #158), and restoring the file restores its evidence.
 
 Route gating, error codes and audit configuration are unchanged: `panel_access` plus the live-Squad `kick`/`ban` permission on the write path, `config: { audit: false }` on the history read.
-## 2026-07-27 — ISSUE-3 связь тикетов с сущностями панели (#156)
+## 2026-07-27 — ISSUE-3 linking tickets to panel entities (#156)
 
 All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/routes/issues.ts) and inherit that module's gate — authentication only, no `config.permissions` — except the player-card endpoint, which is hand-guarded on `panel_access` because every other section of the player card is. Audit rows are written manually with `writeAuditEntry`, as everywhere else in the module.
 
@@ -767,9 +767,9 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 
 ### Changed
 
-- `GET /api/v1/issues/:id` gains a `links[]` field: `{ id, issue_id, entity_type, entity_id, label, ref, exists, created_by, created_at }`. `label` is the target's human name (player canonical name, server display name, `<action_type> · <YYYY-MM-DD>`, media title or original filename) and `ref` is where a click goes (`/players/:id`, `/servers/:id`, the offender's card for a moderation action, `/api/v1/media/:id/stream`). A target whose row is gone reads back as `exists: false`, `label: "Удалённый объект"`, `ref: null` — `entity_id` carries no foreign key, so that is a normal state. Soft-deleted servers and media files count as gone (both `GET /api/v1/servers/:id` and the media stream route 404 for them), on read and when validating a new link. No `schema.response` was added to the route, so every pre-existing field is untouched.
+- `GET /api/v1/issues/:id` gains a `links[]` field: `{ id, issue_id, entity_type, entity_id, label, ref, exists, created_by, created_at }`. `label` is the target's human name (player canonical name, server display name, `<action_type> · <YYYY-MM-DD>`, media title or original filename) and `ref` is where a click goes (`/players/:id`, `/servers/:id`, the offender's card for a moderation action, `/api/v1/media/:id/stream`). A target whose row is gone reads back as `exists: false`, `label: "Удалённый объект" (Deleted object)`, `ref: null` — `entity_id` carries no foreign key, so that is a normal state. Soft-deleted servers and media files count as gone (both `GET /api/v1/servers/:id` and the media stream route 404 for them), on read and when validating a new link. No `schema.response` was added to the route, so every pre-existing field is untouched.
 - `POST /api/v1/issues` and `GET /api/v1/issues/:id` responses are supersets of their previous shapes; the `issue.created`/`issue.updated` live-bus payloads are unchanged (no new event types).
-## 2026-07-27 — LEAD-5 серверный стат-дашборд (#176)
+## 2026-07-27 — LEAD-5 server-side stats dashboard (#176)
 
 ### Added
 
@@ -780,7 +780,7 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 - Gate: the file-local `panelGuard` copied from `analytics.ts` — `401 { error: 'unauthenticated' }` without a session, `403 { error: 'forbidden' }` without the `panel_access` role capability. Read-only, so `config: { audit: false }` and no `audit-coverage` entry. No `schema.response` is declared (that would enable Zod serialization and strip undeclared fields), matching every other analytics route.
 - Measured on a seeded window of 180 rollup rows and 36 000 sessions, 30 days × 6 servers responds in **137 ms median** (min 137 / max 142 over five samples after one warm-up) — inside the 500 ms acceptance criterion.
 
-## 2026-07-27 — MOD-2 действия модерации (#59)
+## 2026-07-27 — MOD-2 moderation actions (#59)
 
 ### Added
 
@@ -789,7 +789,7 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 - `POST /api/v1/moderation-actions/:id/revert`: unbans a player — removes their `Banned:` line(s) from the panel's `Bans.cfg` copy via the new pure [`lib/bans-cfg.ts`](../../../apps/api/src/lib/bans-cfg.ts) (`removeBanLines`, read-verify-write retried up to 3 times against a racing edit before `409 bans_cfg_conflict`), marks every active ban row for that player+server reverted, and inserts an `unban` ledger row. Audit action `moderation.revert` (target type `player`).
 - `GET /api/v1/players/:playerId/moderation-actions` querystring gains `action_type`, `server_id`, and `cursor` filters alongside the existing `limit`; the response shape is unchanged.
 
-## 2026-07-27 — VIDEO-3 делегированная загрузка по одноразовому токену (#159)
+## 2026-07-27 — VIDEO-3 delegated upload via a one-time token (#159)
 
 ### Added
 
@@ -805,7 +805,7 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 - `entityExists` in [`routes/media-links.ts`](../../../apps/api/src/routes/media-links.ts) is exported so the mint route can validate a pre-bound target through the same code path as `POST /api/v1/media/:id/links`.
 - New table `media_upload_tokens` and column `media_files.upload_token_id` — see `docs/components/db/changelog.md` (migration 0096).
 
-## 2026-07-27 — VIDEO-2 привязка медиа к сущностям (#158)
+## 2026-07-27 — VIDEO-2 binding media to entities (#158)
 
 ### Added
 
@@ -885,14 +885,14 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 - `flows.md` gained a dedicated **Config edit (`PUT /api/v1/servers/:id/configs/:name`)** section: full step ordering (sha-match short-circuit → atomic disk write → `config_versions` INSERT → best-effort RCON `AdminReloadServerConfig`), the bind-mount + `rename(2)` instantaneity guarantee, the three behavior classes (`hot_reload`, `rotation`, `requires_restart`) and what each does after the file lands on disk, and per-step failure modes (orphan-on-disk after a DB blip is benign and self-heals on the next save).
 - `api.md` config-route table: corrected permission keys to match `apps/api/src/routes/server-configs.ts` (`config:edit` for write, `config:view` for history/diff/blame/versions, `config:rollback` for restore — the previous `server:config:write` / `server:config:history` keys did not exist in the registry). PUT row now also notes the bind-mount instantaneity, RCON reload outcome shape, and audit-content semantics (sha-only).
 
-## 2026-05-02 — Эпик 2 Phase 2 follow-up: spec compliance round 2
+## 2026-05-02 — Epic 2 Phase 2 follow-up: spec compliance round 2
 
 ### Added
 
 - Explicit `DELETE /api/v1/players/:steamId/role` endpoint (audit `player.role.unassign`). The legacy `PUT { role_id: null }` is preserved for back-compat.
 - `GET /api/v1/users` accepts `q` (nickname/SteamID search) and `role_id` (filter) querystring params.
 - Owner is excluded from the player-card role dropdown and the /users assign modal client-side. Backend continues to reject Owner via `owner_assignment_forbidden` 403.
-- The /users page now renders a "Снять" button per row (gated by `user:manage_roles`).
+- The /users page now renders a "Снять" (Remove) button per row (gated by `user:manage_roles`).
 - Player card role widget renders for **all** viewers (read-only when no `user:manage_roles`), instead of being hidden entirely.
 
 ### Changed
@@ -901,7 +901,7 @@ All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/
 - `POST /api/v1/servers/:id/install` enqueues an initial sync event after install completes (spec §2.7.7 — fresh server gets its `Admins.cfg` written before Squad first boots).
 - The structural type `AdminsCfgSyncDb = Pick<DatabaseClient, 'select'>` lets the publish helper accept either a top-level client or a transaction handle.
 
-## 2026-05-01 — Эпик 2 Phase 2: roles + access flags + admins-cfg sync trigger
+## 2026-05-01 — Epic 2 Phase 2: roles + access flags + admins-cfg sync trigger
 
 ### Added
 
@@ -1134,7 +1134,7 @@ No DB or runtime configuration changes. No new env vars. Existing routes are unc
 
 ### Added
 
-- `STALE_INSTALL_AFTER_MS` watchdog (30 min) inside the reconciler tick. Rows in `status='installing'` whose `updated_at` is older than the threshold get auto-flipped to `'failed'` with a `server.status` LiveEvent. Prevents indefinite "Установка" rows after an api crash mid-install.
+- `STALE_INSTALL_AFTER_MS` watchdog (30 min) inside the reconciler tick. Rows in `status='installing'` whose `updated_at` is older than the threshold get auto-flipped to `'failed'` with a `server.status` LiveEvent. Prevents indefinite "Установка" (Installing) rows after an api crash mid-install.
 - `TICK_BUDGET_MS` (12 s) overall tick deadline. The tick races `Promise.allSettled` against a budget timer; servers that don't finish before budget retry on the next interval. Surfaced as `last_tick_budget_exceeded` in `/api/v1/health/reconciler`.
 - Boot-time recovery log: on `onReady` the reconciler logs at info level `'reconciler: ready — running initial recovery tick' rows=N intervalMs=4000` so an api restart announces what it's about to converge.
 - `stale_installs_failed` counter in the reconciler stats payload (cumulative across the process lifetime).
@@ -1158,7 +1158,7 @@ No DB or runtime configuration changes. No new env vars. Existing routes are unc
 
 ### Fixed
 
-- `apps/bridge/internal/runner/docker.go` — `Inspect` previously matched only `"No such object"` (capital N) when classifying a missing container as `state: "not_found"`. Docker on this host writes `"no such object"` lowercase, so the matcher missed it and the bridge returned a `runtime_error` to callers (the status reconciler swallowed the throw and the DB row stayed in `stopping` indefinitely — root cause of the "Server stuck on Остановка for 2 hours" incident). Fix: lowercase the message before substring-checking. Same latent bug fixed proactively in `Stop` and `Rm` (which also matched `"No such container"` capitalized).
+- `apps/bridge/internal/runner/docker.go` — `Inspect` previously matched only `"No such object"` (capital N) when classifying a missing container as `state: "not_found"`. Docker on this host writes `"no such object"` lowercase, so the matcher missed it and the bridge returned a `runtime_error` to callers (the status reconciler swallowed the throw and the DB row stayed in `stopping` indefinitely — root cause of the "Server stuck on Остановка (Stopping) for 2 hours" incident). Fix: lowercase the message before substring-checking. Same latent bug fixed proactively in `Stop` and `Rm` (which also matched `"No such container"` capitalized).
 - `apps/bridge/internal/runner/docker_test.go` — added 4 regression tests: lowercase `no such object` on `Inspect`, lowercase `no such container` on `Stop`/`Rm`, and a re-affirmed uppercase `No such object` test.
 
 ## 2026-04-26 — Status reconciler hardening + manual reconcile + health visibility
@@ -1182,7 +1182,7 @@ No DB or runtime configuration changes. No new env vars. Existing routes are unc
 
 - The new `LiveEvent` source values are additive; the WS frame schema accepts them without UI changes (the dashboard ignores the source field today). Worker components that re-publish `server.status` are unaffected.
 - The DB schema is unchanged; no migration required.
-- Operations: when a server is stuck in `Остановка`/`Запускается`/`Установка`, `curl /api/v1/health/reconciler` first, then `POST /api/v1/servers/:id/reconcile` to force a resolution.
+- Operations: when a server is stuck in `Остановка`/`Запускается`/`Установка` (Stopping/Starting/Installing), `curl /api/v1/health/reconciler` first, then `POST /api/v1/servers/:id/reconcile` to force a resolution.
 
 ## 2026-04-26 — Bundles C+D: server soft-delete with config backup, archive, restore-configs
 

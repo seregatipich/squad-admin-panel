@@ -6,7 +6,7 @@
 
 - [#78](https://github.com/seregatipich/squad-admin-panel/issues/78) (finding 1110):
   `seasons.ends_at` is now one thing everywhere, an **exclusive instant**
-  (the UI already labels it "не включительно"). `loadActiveSeasonTarget`
+  (the UI already labels it "не включительно" (not inclusive)). `loadActiveSeasonTarget`
   derives `toDay` from `ends_at - 1 ms`, so a midnight `ends_at` no longer
   counts a day the season is already frozen for. The finalizer waits
   `SEASON_FINALIZE_GRACE_MS` (15 min) after `ends_at` so presence-daily can

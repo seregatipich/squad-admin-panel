@@ -1,10 +1,10 @@
 # `shared-config` — changelog
 
-## 2026-09-30 — Проверка формы шаблона Discord (#78)
+## 2026-09-30 — Discord template shape validation (#78)
 
 ### Added
 
-- `isDiscordEmbedTemplate(value)` в `discord-template.ts`: структурная проверка jsonb-значения шаблона для потребителей без zod (воркер discord). Тест: `test/discord-template.test.ts`.
+- `isDiscordEmbedTemplate(value)` in `discord-template.ts`: a structural check of a template's jsonb value for consumers without zod (the discord worker). Test: `test/discord-template.test.ts`.
 
 ## 2026-09-30
 
@@ -12,24 +12,24 @@
 
 - `stryker.config.json` (#79, finding 1164): `thresholds.break` is `70` instead of `0`, so the mutation job fails on a score regression. Measured score of the full run: 72.32%.
 
-## 2026-09-27 — Аудит маршрутов API (#38)
+## 2026-09-27 — API route audit (#38)
 
 ### Added
 
-- `outbound-url.ts`: `checkOutboundUrl()` и `isPublicUnicastAddress()` — политика исходящих запросов для URL источников банов (аудит #100). API проверяет URL при записи, `worker-ban-sync` — перед каждым запросом, каждым редиректом и при каждом подключении.
-- Право `ban_source:view` (категория `moderation`) для чтения `/api/v1/ban-sources`.
-- `isSafeBannedNameRegex()` и `BANNED_NAME_NICK_MAX = 64` (аудит #115): `validateBannedNamePattern` отклоняет regex с повторяемой группой, внутри которой есть квантификатор или `|`, и с обратными ссылками (`pattern_unsafe_regex`); `matchBannedName` и матчер `worker-log-ingest` не исполняют такие правила, даже если они сохранены раньше.
+- `outbound-url.ts`: `checkOutboundUrl()` and `isPublicUnicastAddress()` — the outbound request policy for ban source URLs (audit #100). The API checks the URL on write; `worker-ban-sync` checks it before every request, every redirect and on every connection.
+- The `ban_source:view` permission (category `moderation`) for reading `/api/v1/ban-sources`.
+- `isSafeBannedNameRegex()` and `BANNED_NAME_NICK_MAX = 64` (audit #115): `validateBannedNamePattern` rejects a regex with a repeatable group that contains a quantifier or `|`, and regexes with backreferences (`pattern_unsafe_regex`); `matchBannedName` and the `worker-log-ingest` matcher do not execute such rules even if they were saved earlier.
 
 ### Changed
 
-- `trigger:view` больше не помечено `unimplemented`: им защищены `GET /api/v1/automation-rules` и `GET /api/v1/automation-runs`.
+- `trigger:view` is no longer marked `unimplemented`: it now protects `GET /api/v1/automation-rules` and `GET /api/v1/automation-runs`.
 
 
 ## 2026-09-28
 
 ### Fixed
 
-- `selectNextLayer` сортирует кандидатов по слою перед взвешенным выбором: выбор при одном seed больше не зависит от порядка кандидатов, и предпросмотр совпадает с тиком scheduler (#301).
+- `selectNextLayer` sorts candidates by layer before the weighted pick: for a given seed the pick no longer depends on candidate order, and the preview matches the scheduler tick (#301).
 
 ## 2026-09-28
 
@@ -41,19 +41,19 @@
 
 ### Security
 
-- Новый `regex-safety.ts`: `detectDangerousRegex(pattern)` отклоняет вложенные квантификаторы переменной длины (`(a+)+`, `(.*a){20}`, `(a{1,100}){1,100}`), повторяемую альтернацию с пересекающимися ветвями (`(a|aa)+`, `(\w|\d)+`; допускается только альтернация литералов без общих префиксов вроде `(bad|worse)+`) и повторы больше 100. Коды ошибок: `nested_quantifier`, `alternation_under_quantifier`, `repeat_too_large`.
-- `validateBannedNamePattern` теперь проверяет regex-правила ников этим сканером (раньше — только компиляцию), `validateChatFlagPattern` использует общий сканер. `matchBannedName` и `compileChatFlagRule` не исполняют опасный шаблон, сохранённый до проверки.
+- New `regex-safety.ts`: `detectDangerousRegex(pattern)` rejects variable-length nested quantifiers (`(a+)+`, `(.*a){20}`, `(a{1,100}){1,100}`), repeated alternation with overlapping branches (`(a|aa)+`, `(\w|\d)+`; only alternation of literals without common prefixes such as `(bad|worse)+` is allowed) and repeats above 100. Error codes: `nested_quantifier`, `alternation_under_quantifier`, `repeat_too_large`.
+- `validateBannedNamePattern` now checks nickname regex rules with this scanner (previously only compilation), and `validateChatFlagPattern` uses the shared scanner. `matchBannedName` and `compileChatFlagRule` do not execute a dangerous pattern that was saved before the check.
 
 ### Fixed
 
-- `renderDiscordTemplate`: значения берутся только из собственных строковых свойств контекста — `{constructor}`, `{__proto__}` и т. п. считаются отсутствующими и больше не роняют рендер. Пустые имя или значение поля заменяются на `—` (`DISCORD_EMPTY_FIELD_VALUE`), текст обрезается до лимитов Discord (`DISCORD_EMBED_LIMITS`, суммарно 6000 символов), чтобы Discord не отвечал 400.
+- `renderDiscordTemplate`: values are taken only from the context's own string properties — `{constructor}`, `{__proto__}` and the like are treated as missing and no longer crash the render. An empty field name or value is replaced with `—` (`DISCORD_EMPTY_FIELD_VALUE`), and the text is truncated to the Discord limits (`DISCORD_EMBED_LIMITS`, 6000 characters in total) so that Discord does not answer 400.
 
 ## 2026-07-27
 
 ### Added
 
-- `createGracefulShutdownController()` для работников: ранний сигнал сохраняется до завершения запуска, повторный сигнал присоединяется к уже начатой очистке, ошибка очистки приводит к коду `1`.
-- Регрессионные тесты раннего и повторного сигнала, а также ошибки очистки.
+- `createGracefulShutdownController()` for workers: an early signal is kept until startup completes, a repeated signal joins the cleanup that has already started, and a cleanup error results in exit code `1`.
+- Regression tests for an early signal, a repeated signal and a cleanup error.
 
 ## 2026-07-07
 

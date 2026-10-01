@@ -30,7 +30,7 @@ Written by `PerServerSupervisor.writeStatus()` after every state transition and 
 Fields `player_count`, `last_poll_at`, `tickrate_rt`, `current_map`, `next_level`, `next_layer`, `game_mode`, and `squad_count` are present only when `state = "connected"`.
 Fields `backoffMs` and `reason` are present only when `state = "connecting"`.
 
-The API returns `{ state: "not_polled" }` when the key is absent. The UI renders `"— (сервер не запущен)"`.
+The API returns `{ state: "not_polled" }` when the key is absent. The UI renders `"— (сервер не запущен)"` ("— (server is not running)").
 
 ## Redis key: `rcon:squads:{serverId}`
 

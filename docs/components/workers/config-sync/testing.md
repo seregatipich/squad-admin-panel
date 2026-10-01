@@ -34,28 +34,28 @@ Covers the deterministic generator, parser, and splicer in `src/segment.ts`:
 
 ### `rcon-reload.test.ts` — unit (pure, fake Redis)
 
-Покрывает старый `requestAdminsCfgReload` и новый
-`confirmAdminsCfgReload` в изоляции:
+Covers the old `requestAdminsCfgReload` and the new
+`confirmAdminsCfgReload` in isolation:
 
 | Test | What it verifies |
 |---|---|
 | connected RCON | exactly one `XADD` to `rcon:commands:<id>` whose `request` parses to `command: 'AdminReloadServerConfig', args: []`; returns `enqueued` |
 | status absent / `connecting` / `disconnected` / malformed JSON | no `XADD`, returns `skipped_rcon_disconnected`, never throws |
 | `xadd` rejects | returns `failed`, never throws, logs one warn |
-| correlated request | детерминированный `admins-cfg-sync:<outbox_id>` и только точный валидный `ok=true` |
-| mismatched/rejected/timeout | безопасные `invalid_result`, `rejected`, `timeout` без сырых ответов |
+| correlated request | deterministic `admins-cfg-sync:<outbox_id>` and only an exact valid `ok=true` |
+| mismatched/rejected/timeout | safe `invalid_result`, `rejected`, `timeout` without raw responses |
 
-### `delivery.test.ts` и `delivery.integration.test.ts`
+### `delivery.test.ts` and `delivery.integration.test.ts`
 
-- переходы `stopped -> running` и `running -> stopped` проверяют два свежих
-  чтения состояния и обязательную RCON-ветку для живого итога;
-- crash/reclaim до результата, до `applied_at` и после `applied_at` не повторяет
-  уже подтверждённый файловый/RCON эффект;
-- настоящий PostgreSQL+Redis подтверждает порядок durable DB → атомарные
-  `XACK`/точный `XDEL`, сохранение failed/unacked записи и детерминированный
+- `stopped -> running` and `running -> stopped` transitions check two fresh
+  state reads and the mandatory RCON branch for a live outcome;
+- a crash/reclaim before the result, before `applied_at` and after `applied_at` does not repeat
+  an already confirmed file/RCON effect;
+- a real PostgreSQL+Redis confirms the order durable DB → atomic
+  `XACK`/exact `XDEL`, retention of a failed/unacked entry and a deterministic
   RCON round-trip;
-- `superseded`, `server_removed`, старые и повреждённые сообщения очищаются без
-  бесконечного ACKed-хвоста; failed/unacked никогда не удаляется.
+- `superseded`, `server_removed`, old and corrupted messages are cleaned up without
+  an endless ACKed tail; failed/unacked is never deleted.
 
 ### `syncer.test.ts` — unit (fake Redis/DB/bridge)
 
@@ -90,10 +90,10 @@ Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; ve
 
 ## Live e2e (run-deferred, tier-3)
 
-`apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` выполняет force-sync живого
-сервера и требует устойчивый outbox-итог `reload_outcome=confirmed` с
-`applied_at`; длина RCON stream остаётся лишь вспомогательным сигналом. Тест
-run-deferred и требует настоящие panel, config-sync, worker-rcon и Squad.
+`apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` performs a force-sync of a live
+server and requires a durable outbox outcome `reload_outcome=confirmed` with
+`applied_at`; the RCON stream length remains only an auxiliary signal. The test is
+run-deferred and requires a real panel, config-sync, worker-rcon and Squad.
 
 ## Integration coverage from API side
 

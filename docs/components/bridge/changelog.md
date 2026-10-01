@@ -7,11 +7,11 @@
 - `file_read`, `file_read_stream` and `file_read_tail` answer a missing file or directory with the new `not_found` error code instead of `runtime_error`; the message is unchanged. Callers no longer have to match the OS "no such file or directory" text to tell an absent file from a failed read — `DELETE /api/v1/servers/:id` relies on it to abort when a config file exists but cannot be backed up.
 
 
-## 2026-09-28 — Лимит одновременных `container_logs_follow` (#42)
+## 2026-09-28 — Limit on concurrent `container_logs_follow` calls (#42)
 
 ### Changed
 
-- Не больше 64 одновременных `container_logs_follow` на процесс bridge; сверх лимита `runtime_error` `too many concurrent log follows (limit 64)` (#1298).
+- At most 64 concurrent `container_logs_follow` calls per bridge process; beyond the limit, a `runtime_error` `too many concurrent log follows (limit 64)` (#1298).
 
 ## 2026-09-28 — audit hardening (#45)
 
@@ -36,11 +36,11 @@
 - Re-run `scripts/install-host-bridge.sh` on the host to install the new unit (capability change); a binary-only redeploy leaves `container_run_rnsquadjs` failing with `EPERM`.
 - Images built before this change have no `panel.preserve` label, so the release that is live when this ships stays exposed to `docker_prune` until it is rebuilt or superseded; avoid running "clean up Docker" before the next release is deployed.
 
-## 2026-09-28 — `container_run` проверяет multihome (#52)
+## 2026-09-28 — `container_run` validates multihome (#52)
 
 ### Security
 
-- `validate.Multihome`: адрес привязки должен разбираться `net.ParseIP`. Он подставляется в командную строку сервера Squad (`RCONIP=%s`, `MULTIHOME=%s`), и значение с пробелами могло добавить параметры запуска. `DockerRunner.Run` отклоняет такое значение с `ErrInvalidArgs`, не вызывая docker.
+- `validate.Multihome`: the bind address must parse with `net.ParseIP`. It is substituted into the Squad server command line (`RCONIP=%s`, `MULTIHOME=%s`), and a value containing spaces could add launch parameters. `DockerRunner.Run` rejects such a value with `ErrInvalidArgs` without calling docker.
 
 ## 2026-09-28 — `container_run` validates `multihome`, drops `extra_args` (#53)
 
@@ -173,7 +173,7 @@
 
 ### Notes
 
-- This is the bridge half of the dashboard's "обновить" button on `<DiskBreakdownModal>`; the API exposes it as `GET /api/v1/host/disk-usage?refresh=1`.
+- This is the bridge half of the dashboard's "Обновить" (Refresh) button on `<DiskBreakdownModal>`; the API exposes it as `GET /api/v1/host/disk-usage?refresh=1`.
 
 ## 2026-04-28 — `panel_disk_usage` E2E coverage
 

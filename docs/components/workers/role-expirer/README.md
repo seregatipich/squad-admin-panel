@@ -21,7 +21,7 @@ before the main tick removes them. Each reminder tick:
    most once; renewing a grant re-arms the windows because `expires_at` is
    part of the unique key.
 4. On a successful claim, inserts one broadcast `role_expiring` `alert_events`
-   row (rule `Истечение VIP`, seeded by migration 0092) and publishes the
+   row (rule `Истечение VIP` (VIP expiry), seeded by migration 0092) and publishes the
    matching `alert.triggered` live-bus frame — visible only to admins with
    `can_assign_roles`.
 5. Records a pending `player` row that worker-log-ingest turns into a one-shot

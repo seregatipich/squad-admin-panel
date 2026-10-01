@@ -31,26 +31,26 @@
         └──────────┘               └──────────────────┘               └──────────────┘
 ```
 
-Для каждого нового outbox-сообщения worker подтверждает не только файл, но и
-его применение с учётом свежего состояния сервера. Старый режим прямого
-best-effort RCON сохранён только для сообщений без `_outbox_id`.
+For each new outbox message, the worker confirms not only the file but also
+its application, taking the server's fresh state into account. The old direct
+best-effort RCON mode is kept only for messages without `_outbox_id`.
 
 Step-by-step:
 
 1. The API or a mutation worker records the domain change and one `admins_cfg_sync_outbox` row per active-server snapshot in the same PostgreSQL transaction. Force-sync inserts one single-server row; server installation commits its final `running` transition and row atomically.
 2. A single-flight relay sees rows only after commit, performs bounded `XADD` calls with stable `_outbox_id`, then records `relayed_at`/`stream_id`. Failure leaves the row pending. The relay does not use `MAXLEN`; cleanup is allowed only after durable apply/`XACK`.
-3. Worker создаёт новые consumer group с `0`, поэтому запись, опубликованная до создания группы, остаётся видимой. `XREADGROUP` возвращает `_outbox_id` вместе с исходным payload.
-4. `syncServerAdminsCfg(ctx, serverId, opts)` сверяет свежий снимок БД с файлом. Для нового outbox он не запускает старый best-effort RCON:
+3. The worker creates new consumer groups with `0`, so an entry published before the group was created stays visible. `XREADGROUP` returns `_outbox_id` together with the original payload.
+4. `syncServerAdminsCfg(ctx, serverId, opts)` compares the fresh DB snapshot with the file. For a new outbox it does not run the old best-effort RCON:
    - Publish `state: 'syncing'` to `admins-cfg:status:<server_id>`.
    - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
    - `buildManagedSegment(snapshot)` produces the deterministic byte body + sha256.
    - `bridge.fileRead({ path })` reads the current file; `findManagedSegment` extracts the existing managed slice.
-   - Если хеши совпали и `forceWrite=false`, запись файла пропускается, но подтверждение RCON для живого сервера всё равно обязательно.
+   - If the hashes match and `forceWrite=false`, the file write is skipped, but RCON confirmation for a live server is still mandatory.
    - Otherwise `bridge.fileAtomicWrite({ path, content })` with the spliced body.
    - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
    - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
-5. После файловой операции worker дважды читает `servers.status`. Стабильно неживой сервер получает `file_ready_for_restart`. Для `running|starting` отправляется `AdminReloadServerConfig` с `request_id=admins-cfg-sync:<outbox_id>` и принимается только точный валидный `ok=true` результат. Переход `stopped -> running` включает RCON-ветку, а `running -> stopped` завершается как готовый файл.
-6. Успешный итог сначала сохраняется в PostgreSQL (`applied_at` и allowlisted `reload_outcome`). Затем Lua-скрипт атомарно выполняет `XACK` и точный `XDEL`. Уже applied replay пропускает файл/RCON и выполняет только очистку. Ошибка сохраняет безопасный код и оставляет запись в PEL без `XDEL`.
+5. After the file operation, the worker reads `servers.status` twice. A server that is stably not live gets `file_ready_for_restart`. For `running|starting`, `AdminReloadServerConfig` is sent with `request_id=admins-cfg-sync:<outbox_id>` and only an exact, valid `ok=true` result is accepted. A `stopped -> running` transition enables the RCON branch, and `running -> stopped` ends as a ready file.
+6. A successful outcome is first saved to PostgreSQL (`applied_at` and an allowlisted `reload_outcome`). Then a Lua script atomically performs `XACK` and an exact `XDEL`. A replay that is already applied skips the file/RCON and performs only cleanup. An error saves a safe code and leaves the entry in the PEL without `XDEL`.
 
 ## Drift detection flow (every 5 min)
 
@@ -72,7 +72,7 @@ CFG-2 (#64) adds a second, independent sweep (`src/config-drift.ts`, `setInterva
 2. Reads the file via `bridge.fileRead` and hashes the on-disk bytes.
 3. Publishes per-file state to `config-drift:status:<server_id>` (TTL 24h): `in_sync` | `drift` (shas differ — e.g. hand-edited over SSH) | `missing` (file absent) | `unreachable` (bridge read failed) | `unknown` (file never versioned).
 
-Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker only publishes status. Resolution is operator-driven on the config editor page (`/servers/:id/configs`): the drift banner offers «Принять» (`POST .../configs/:name/drift/accept` — records the disk bytes as a new version), «Откатить» (`POST .../configs/:name/drift/revert` — repairs the disk byte-for-byte back to the DB tip, no duplicate history row) and a unified diff (`GET .../configs/:name/drift/diff`). The API's `GET .../configs/drift` reads live via the bridge, so the UI works even before the first sweep.
+Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker only publishes status. Resolution is operator-driven on the config editor page (`/servers/:id/configs`): the drift banner offers «Принять» (Accept; `POST .../configs/:name/drift/accept` — records the disk bytes as a new version), «Откатить» (Revert; `POST .../configs/:name/drift/revert` — repairs the disk byte-for-byte back to the DB tip, no duplicate history row) and a unified diff (`GET .../configs/:name/drift/diff`). The API's `GET .../configs/drift` reads live via the bridge, so the UI works even before the first sweep.
 
 ## Error / retry flow
 
@@ -88,7 +88,7 @@ Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker on
 
 ## Pending-message reclaim (XAUTOCLAIM)
 
-Spec §2.7.7 mandates that "при временной недоступности сервера … worker retry'ит with exponential backoff". Two layers cooperate:
+Spec §2.7.7 mandates that "on temporary server unavailability … the worker retries with exponential backoff". Two layers cooperate:
 
 1. **In-flight retry inside the consumer**: when a message returns `state: 'unreachable'`, the worker logs the failure, records audit, and explicitly DOES NOT call `XACK`. The message stays in the current consumer's PEL.
 2. **Cross-consumer reclaim**: every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (default 30 s), and once at boot, the worker runs `XAUTOCLAIM <stream> config-sync <self> MIN-IDLE-TIME=60000 0-0 COUNT 50` against every active server's stream. Any pending message older than 60 s — whether owned by a defunct consumer (process restart) or by the same consumer (still-unreachable) — is reclaimed by the calling consumer and replayed.
@@ -96,7 +96,7 @@ Spec §2.7.7 mandates that "при временной недоступности
 Together they guarantee:
 - A persistently-unreachable server's messages keep retrying every reclaim cycle until the bridge recovers.
 - A consumer that crashed mid-handle does not orphan messages; the next process picks them up at boot.
-- Неприменённый backlog не обрезается и может расти, пока сервер недоступен. После устойчивого успеха consumer атомарно делает `XACK` + точный `XDEL`; failed/unacked запись никогда не удаляется. Операторский контроль долгого PEL остаётся необходимым.
+- An unapplied backlog is not trimmed and may grow while the server is unavailable. After a durable success the consumer atomically does `XACK` + an exact `XDEL`; a failed/unacked entry is never deleted. Operator monitoring of a long PEL remains necessary.
 
 ## Per-server lifecycle
 

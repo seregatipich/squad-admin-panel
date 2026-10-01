@@ -10,7 +10,7 @@
   - 403 bodies carry `missing: string[]` (`can_view_ips`, `permission:role:edit`, `squad:ban`, …). An Owner bypasses every check.
 - `buildRolePermissionContext` / `loadRolePermissions` (`rbac.ts`) expose the role → permission derivation `loadUserPermissions` already used, so a proposed role is evaluated exactly like a held one.
 
-## 2026-05-01 — Эпик 2 Phase 2: roles unified with Squad in-game permissions
+## 2026-05-01 — Epic 2 Phase 2: roles unified with Squad in-game permissions
 
 ### Added
 
@@ -48,10 +48,10 @@
 - **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta` and an advisory lock to assign the Owner role to the very first Steam login on a fresh panel.
 - **Cache invalidation** — `invalidatePermissionCache(steamId64)` and `invalidatePermissionCacheForRole(db, roleId)` in `apps/api/src/lib/rbac.ts`.
 - **Web — `/roles`** — list with color dot, user count, edit/delete. `is_system_role` badge for Owner.
-- **Web — `/roles/new` and `/roles/:id`** — role editor: name, 16-swatch color picker, optional description, permission grid with search, category grouping, `⚠` and "в разработке" styling.
+- **Web — `/roles/new` and `/roles/:id`** — role editor: name, 16-swatch color picker, optional description, permission grid with search, category grouping, `⚠` and "in development" styling.
 - **Web — `/users`** — table of players with roles, assign-role modal with typeahead player search, Owner confirm dialog.
 - **Web — `PanelAccessSection` on `/players/:id`** — simplified from M:N list to single-role display with inline assign/remove.
-- **Sidebar nav** — "Роли" (gated by `role:view`) and "Пользователи" (gated by `user:view`).
+- **Sidebar nav** — "Роли" (Roles, gated by `role:view`) and "Пользователи" (Users, gated by `user:view`).
 - **Tests** — `permissions.test.ts`, `role-colors.test.ts` (unit); `permissions-list.test.ts`, `roles-crud.test.ts`, `player-role-assign.test.ts`, `users-list.test.ts`, `first-owner.test.ts`, `setup-removed.test.ts`, `permission-rename-coverage.test.ts` (integration); `panel-rbac.e2e.test.ts` (e2e).
 
 ### Changed

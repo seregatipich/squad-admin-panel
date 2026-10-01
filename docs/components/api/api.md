@@ -297,7 +297,7 @@ Every save is additionally versioned into **`config_versions` under the filename
 | GET | `/api/v1/servers/:serverId/map-vote/versions/:versionId` | One version: raw `content` plus the parsed `snapshot` (`null` when unreadable). 404 `version_not_found` for another server's or another file's id. | `panelAccess` |
 | POST | `/api/v1/servers/:serverId/map-vote/versions/:versionId/restore` | Restores settings + pool from that version and records the rollback as a new version. 409 `unknown_layers_in_version` (with `layers`) when a candidate left the layer catalog; repeat with `{ drop_unknown_layers: true }` to restore the rest. 422 `version_unreadable`. Audit: `server.map_vote.restore`. | Squad `changemap` |
 
-The screen's own behaviour and what each field changes is documented in [web flows](../web/flows.md#автовыбор-карты-serversidmap-vote).
+The screen's own behaviour and what each field changes is documented in [web flows](../web/flows.md#map-auto-vote-serversidmap-vote).
 
 ## Bulk moderation
 

@@ -18,7 +18,7 @@ The `(me)` route group requires a session cookie but **not** panel access — it
 
 | Route | File | What it does |
 |---|---|---|
-| `/me` | `app/(me)/me/page.tsx` | «Мой VIP». Landing for a Steam login whose role has no `panel_access` (including a player with no role): the callback issues a `self_service`-scoped session and redirects here. Sections: Баланс (bonus balance + VIP expiry), Подписка (active subscription, «Отменить подписку»), Тарифы («Купить разово» / «Подписаться»), История бонусов (cursor-paginated, «Показать ещё»). Every call goes to `/api/v1/me/*`, which take no player id — the subject is always the session's own player. |
+| `/me` | `app/(me)/me/page.tsx` | «Мой VIP» (My VIP). Landing for a Steam login whose role has no `panel_access` (including a player with no role): the callback issues a `self_service`-scoped session and redirects here. Sections: Баланс (Balance: bonus balance + VIP expiry), Подписка (Subscription: active subscription, «Отменить подписку» (Cancel subscription)), Тарифы (Tariffs: «Купить разово» (Buy once) / «Подписаться» (Subscribe)), История бонусов (Bonus history: cursor-paginated, «Показать ещё» (Show more)). Every call goes to `/api/v1/me/*`, which take no player id — the subject is always the session's own player. |
 
 ### Dashboard pages
 
@@ -26,7 +26,7 @@ All require a valid session. Permission gating is noted where applicable.
 
 | Route | File | Required permission(s) | What it displays |
 |---|---|---|---|
-| `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal` for CPU / RAM / Network. The disk card has its own click handler that opens `DiskBreakdownModal` instead of the metric-history modal — its outer `<button>` carries `data-testid="disk-card"` for the Playwright suite. The disk card splits the used portion of its bar into two sub-segments — `Панель` (deeper purple) and `Прочее` (lighter purple) — driven by `panel_pct` / `other_pct` from `GET /api/v1/host/disk-usage` (polled every 30 s, independent of the 4 s host-metrics poll). A swatch legend below the bar shows both percentages with one-decimal precision. While the breakdown payload is loading or failed, the bar falls back to the single-segment threshold-tinted rendering (emerald/amber/red) and the legend is hidden. The two sub-segments are clamped so they never visually exceed the total used % shown in the card title — if the bridge's `panel_disk_usage` and `host_metrics` samples drift, the panel sub-segment is the source of truth and `other = max(0, used_pct - panel_pct)` absorbs the rounding gap. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
+| `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal` for CPU / RAM / Network. The disk card has its own click handler that opens `DiskBreakdownModal` instead of the metric-history modal — its outer `<button>` carries `data-testid="disk-card"` for the Playwright suite. The disk card splits the used portion of its bar into two sub-segments — `Панель` (Panel, deeper purple) and `Прочее` (Other, lighter purple) — driven by `panel_pct` / `other_pct` from `GET /api/v1/host/disk-usage` (polled every 30 s, independent of the 4 s host-metrics poll). A swatch legend below the bar shows both percentages with one-decimal precision. While the breakdown payload is loading or failed, the bar falls back to the single-segment threshold-tinted rendering (emerald/amber/red) and the legend is hidden. The two sub-segments are clamped so they never visually exceed the total used % shown in the card title — if the bridge's `panel_disk_usage` and `host_metrics` samples drift, the panel sub-segment is the source of truth and `other = max(0, used_pct - panel_pct)` absorbs the rounding gap. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
 | `/servers` | `(dashboard)/servers/page.tsx` | none | Server list with status dot, player count, RCON state, last-poll time. Free-text search by name, slug, or id. Start / stop / restart action buttons. Polls every 4 s. |
 | `/servers/new` | `(dashboard)/servers/new/page.tsx` | `server:create` (enforced by API) | Two-step wizard: form (display_name, slug auto-transliterated from Cyrillic, ports, max_players) → POST /servers → POST /servers/:id/install → WebSocket log tail via `LogConsole`. |
 | `/servers/[id]` | `(dashboard)/servers/[id]/page.tsx` | none | Server detail: status, RCON state, container runtime, log tail (WebSocket), start/stop/restart buttons, links to configs and events tabs. Delete confirm modal warns that files will be wiped from disk and the cfg backup will live in `/servers/archive`. |
@@ -35,7 +35,7 @@ All require a valid session. Permission gating is noted where applicable.
 | `/servers/archive` | `(dashboard)/servers/archive/page.tsx` | `server:view` | Soft-deleted server table from `GET /api/v1/servers/archive`. Forbidden state when caller lacks the permission. |
 | `/servers/archive/[id]` | `(dashboard)/servers/archive/[id]/page.tsx` | `server:view` (+ `config:view` to read backup contents) | Detail + per-cfg backup browser. Each row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`. |
 | `/servers/archive/[id]/restore` | `(dashboard)/servers/archive/[id]/restore/page.tsx` | `server:install` (+ `config:edit`) | Restore wizard: slug + display_name → POST `/restore` (409 inline on slug conflict) → POST `/install` with WS log tail → POST `/restore-configs` → POST `/start`. |
-| `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. Server-driven sorting on Ник, Total playtime, Created, and Last seen — each header is a button that sets `?sort=`/`?dir=` on `GET /api/v1/players` and shows a direction indicator (`↑`/`↓` active, `↕` inactive); clicking the active column flips its direction. New **Created** column rendering `first_seen_at`. A `новые (<7 дней)` checkbox sets `filter=new`. The pure sort/filter state machine lives in `(dashboard)/players/helpers.ts`. The "Online" filter (last_seen_at within 90 s) and the search box stay client-side. Polls every 8 s. |
+| `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. Server-driven sorting on Ник (Nickname), Total playtime, Created, and Last seen — each header is a button that sets `?sort=`/`?dir=` on `GET /api/v1/players` and shows a direction indicator (`↑`/`↓` active, `↕` inactive); clicking the active column flips its direction. New **Created** column rendering `first_seen_at`. A `новые (<7 дней)` (new, <7 days) checkbox sets `filter=new`. The pure sort/filter state machine lives in `(dashboard)/players/helpers.ts`. The "Online" filter (last_seen_at within 90 s) and the search box stay client-side. Polls every 8 s. |
 | `/players/[steam_id64]` | `(dashboard)/players/[steam_id64]/page.tsx` | none | Player profile: SteamID64, EOS ID, playtime, name history, IP history (hidden unless `player:view_ips`). `PanelAccessSection` (assign/remove panel role) shown when caller has `user:manage_roles`. |
 | `/audit` | `(dashboard)/audit/page.tsx` | none | Full audit log (last 200 entries), filterable by action_type, target, or actor. Expandable context JSON per row. Polls every 6 s. |
 | `/logs` | `(dashboard)/logs/page.tsx` | `host:view` (top-bar link gated) | Live log stream from `GET /api/v1/logs`. `LogList` component with source, level, server, and text filters. Export button. |
@@ -43,7 +43,7 @@ All require a valid session. Permission gating is noted where applicable.
 | `/roles/new` | `(dashboard)/roles/new/page.tsx` | none | Redirects to `/settings/groups`. |
 | `/roles/[id]` | `(dashboard)/roles/[id]/page.tsx` | none | Redirects to `/settings/groups`. |
 | `/users` | `(dashboard)/users/page.tsx` | `user:view` | Users with panel roles (players where role_id IS NOT NULL). `AssignModal` (player search + role select) shown when caller has `user:manage_roles`; assigns role via PUT /api/v1/players/:steam_id64/role. Owner role assignment requires confirm dialog. |
-| `/settings/account` | `(dashboard)/(account)/settings/account/page.tsx` | none | Account name (in-game, Steam persona as fallback) plus nickname history in the page header. Profile (SteamID64, permissions count). Own in-game statistics first, profile below it: the «Игровая статистика» block (the shared `DossierSection`, retitled, `serverFilter={false}`) and «Последние матчи», both keyed on `player_id` from `GET /api/v1/me`. Full width — the route sits in the `(account)` group so the section's `reading` layout does not wrap it. Active sessions table with individual and bulk revoke. Logout lives in the top-nav user menu, not on this page. Polls every 30 s. |
+| `/settings/account` | `(dashboard)/(account)/settings/account/page.tsx` | none | Account name (in-game, Steam persona as fallback) plus nickname history in the page header. Profile (SteamID64, permissions count). Own in-game statistics first, profile below it: the «Игровая статистика» (Game statistics) block (the shared `DossierSection`, retitled, `serverFilter={false}`) and «Последние матчи» (Recent matches), both keyed on `player_id` from `GET /api/v1/me`. Full width — the route sits in the `(account)` group so the section's `reading` layout does not wrap it. Active sessions table with individual and bulk revoke. Logout lives in the top-nav user menu, not on this page. Polls every 30 s. |
 | `/settings/tokens` | `(dashboard)/settings/tokens/page.tsx` | none | API token management. Create a named token with a subset of the user's own permissions (scopes). Token plaintext shown once on creation. Revoke existing tokens. |
 
 ---
@@ -60,8 +60,8 @@ function ConnectionBanner(): JSX.Element | null
 
 Sticky top-of-layout banner. Returns `null` when `useLiveBusState() === 'open'` AND `useBridgeState() !== 'down'`. Otherwise renders one of:
 
-- Red: `Связь с панелью потеряна — переподключаемся…` (WS not in `open` state).
-- Amber: `Bridge не отвечает — операции с сервером временно недоступны` (WS open but bridge state is `down`).
+- Red: `Связь с панелью потеряна — переподключаемся…` ("Connection to the panel lost — reconnecting…") (WS not in `open` state).
+- Amber: `Bridge не отвечает — операции с сервером временно недоступны` ("Bridge is not responding — server operations are temporarily unavailable") (WS open but bridge state is `down`).
 
 The banner has `role="alert"` and `data-testid="connection-banner"` for Playwright. Mounted by `apps/web/src/app/(dashboard)/layout.tsx` so every authenticated page sees it.
 
@@ -70,7 +70,7 @@ The banner has `role="alert"` and `data-testid="connection-banner"` for Playwrig
 ```ts
 function LiveIndicator(props: {
   lastUpdate: Date | number | null;
-  label?: string;     // default: "обновлено"
+  label?: string;     // default: "обновлено" (updated)
   title?: string;     // tooltip override
 }): JSX.Element
 ```
@@ -108,7 +108,7 @@ interface LogConsoleErrorBanner {
 }
 ```
 
-Sticky-to-bottom log viewer. Auto-scrolls when the user is within 24 px of the bottom. When scrolled up a "↓ к последней" pill appears. `stderr` lines render in red. The `errorBanner` renders an error strip above the viewport with optional retry button.
+Sticky-to-bottom log viewer. Auto-scrolls when the user is within 24 px of the bottom. When scrolled up a "↓ к последней" (↓ to latest) pill appears. `stderr` lines render in red. The `errorBanner` renders an error strip above the viewport with optional retry button.
 
 ### `LogList`
 
@@ -167,11 +167,11 @@ Mounted by `apps/web/src/app/(dashboard)/dashboard/page.tsx`; opened when the us
 
 Render structure:
 
-- **Header**: «Что занимает панель» as the dialog title plus a close button.
-- **Summary line**: `Всего: <fmt(total_panel_bytes)> · X.X% диска · обновлено N сек назад` where `N = data.cache_age_seconds`. Refresh button to the right.
-- **Section "По типу"**: rows built from `configs_bytes`, `saved_total_bytes`, `depot_volume_bytes`, every entry in `docker_volumes` (label `volume:<name>`), every entry in `docker_images` (label `image:<repo>:<tag>`), and `audit_archive_bytes`. Sorted by bytes descending. Right column is monospace-formatted byte size.
-- **Section "По серверам (saved)"**: rendered only if `saved_per_server.length > 0`. Scrollable table (`max-h-72 overflow-y-auto`) with `Server` (Next `<Link>` to `/servers/<uuid>`, displaying first 8 chars of UUID) and right-aligned monospace `Saved` columns. Sorted by bytes descending.
-- **Loading / empty states**: when `data === null`, shows «Загрузка…» while a refresh is in-flight, otherwise «Нет данных». The latter never fires in practice because the parent always passes a non-null `initialData` once the dashboard's first poll completes.
+- **Header**: «Что занимает панель» (What the panel occupies) as the dialog title plus a close button.
+- **Summary line**: `Всего: <fmt(total_panel_bytes)> · X.X% диска · обновлено N сек назад` (Total: … · X.X% of disk · updated N s ago) where `N = data.cache_age_seconds`. Refresh button to the right.
+- **Section "По типу" (By type)**: rows built from `configs_bytes`, `saved_total_bytes`, `depot_volume_bytes`, every entry in `docker_volumes` (label `volume:<name>`), every entry in `docker_images` (label `image:<repo>:<tag>`), and `audit_archive_bytes`. Sorted by bytes descending. Right column is monospace-formatted byte size.
+- **Section "По серверам (saved)" (By server (saved))**: rendered only if `saved_per_server.length > 0`. Scrollable table (`max-h-72 overflow-y-auto`) with `Server` (Next `<Link>` to `/servers/<uuid>`, displaying first 8 chars of UUID) and right-aligned monospace `Saved` columns. Sorted by bytes descending.
+- **Loading / empty states**: when `data === null`, shows «Загрузка…» (Loading…) while a refresh is in-flight, otherwise «Нет данных» (No data). The latter never fires in practice because the parent always passes a non-null `initialData` once the dashboard's first poll completes.
 
 The component-private `fmt(bytes: number): string` helper picks a base-1024 unit (`B/KB/MB/GB/TB`) and formats with 0/1/2 decimals depending on magnitude. It is not exported.
 
@@ -184,7 +184,7 @@ function RestartBridgeButton(props: {
 }): JSX.Element
 ```
 
-Button that triggers `POST /api/v1/host/restart`. Shows a confirmation modal. Displays "Перезапускается…" spinner during the call. Requires `host:restart` permission (enforced by API; button remains visible but returns 403 if not granted). Becomes disabled and shows `disabledReason` tooltip when bridge is offline.
+Button that triggers `POST /api/v1/host/restart`. Shows a confirmation modal. Displays "Перезапускается…" (Restarting…) spinner during the call. Requires `host:restart` permission (enforced by API; button remains visible but returns 403 if not granted). Becomes disabled and shows `disabledReason` tooltip when bridge is offline.
 
 ### `RoleColorDot`
 

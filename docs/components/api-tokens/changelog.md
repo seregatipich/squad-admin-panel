@@ -22,7 +22,7 @@
 - `apps/api/src/routes/me-tokens.ts` — `GET/POST/DELETE /api/v1/me/tokens` (cookie-only). Hard cap of 25 active tokens per user. Soft revoke via `revoked_at`.
 - `apps/api/src/plugins/auth.ts` — Bearer authentication path. Permissions are intersected with the token's scopes on every request; demotions immediately shrink reach.
 - `apps/api/src/plugins/audit.ts` — wires `req.apiTokenId` into `audit_log.actor_token_id`. The column was previously always NULL.
-- `apps/web/src/app/(dashboard)/settings/tokens/page.tsx` — list / create (with scope checkboxes) / one-time plaintext modal / revoke. Sidebar entry "API-токены".
+- `apps/web/src/app/(dashboard)/settings/tokens/page.tsx` — list / create (with scope checkboxes) / one-time plaintext modal / revoke. Sidebar entry "API-токены" (API tokens).
 - Tests: `apps/api/test/api-tokens.test.ts`, `apps/api/test/me-tokens.test.ts`, `apps/api/test/auth-bearer.test.ts`. `audit-coverage` extended with the new route module.
 
 ### Migration notes

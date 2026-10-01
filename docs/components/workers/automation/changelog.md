@@ -1,16 +1,16 @@
 # Changelog — worker-automation
 
-## 2026-09-30 — notify_admin без доставки не считается выполненным (#79)
+## 2026-09-30 — notify_admin without delivery is not counted as executed (#79)
 
 ### Fixed
 
-- `notify_admin` записывается в историю как `skipped` (`reason: 'not_delivered'`), а не `executed`, когда канал доставки сообщает `delivered: false`. Сейчас боевая реализация пишет только warn-лог и audit-запись, поэтому такие запуски отображаются как пропущенные.
+- `notify_admin` is recorded in the history as `skipped` (`reason: 'not_delivered'`), not `executed`, when the delivery channel reports `delivered: false`. Right now the production implementation writes only a warn log and an audit record, so such runs show up as skipped.
 
-## 2026-09-27 — Правила player_count срабатывают один раз на переход (#34)
+## 2026-09-27 — player_count rules fire once per transition (#34)
 
 ### Fixed
 
-- Правило `player_count` срабатывало на каждом опросе ростера (`rcon.players_polled`, раз в 2 с), пока условие истинно: RCON-команда ставилась в очередь, а в `automation_runs` и append-only `audit_log` писались строки каждые 2 секунды. Теперь правило срабатывает только при переходе условия из «ложно» в «истинно» для каждого сервера. Защёлка хранится в Redis по ключу `automation:pc:<ruleId>:<serverId>` (TTL 600 с, продлевается каждым совпавшим опросом) и снимается первым опросом, на котором условие ложно.
+- A `player_count` rule fired on every roster poll (`rcon.players_polled`, every 2 s) while the condition was true: an RCON command was queued, and rows were written to `automation_runs` and the append-only `audit_log` every 2 seconds. Now the rule fires only when the condition goes from "false" to "true" for each server. The latch is stored in Redis under the key `automation:pc:<ruleId>:<serverId>` (TTL 600 s, extended by every matching poll) and is released by the first poll on which the condition is false.
 
 ## 2026-09-28 — consumer groups on new and re-created streams (#60)
 

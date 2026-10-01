@@ -4,9 +4,9 @@
 
 ### Added
 
-- `pruneProcessedEvents(sql)`: удаляет записи `processed_events` старше срока хранения `events` (24 месяца, граница месяца UTC) — к этому моменту само событие уже удалено вместе с партицией. Раньше таблица росла без ограничений (#52).
-- `pruneScheduledTaskRuns(sql)`: удаляет строки `scheduled_task_runs` старше 90 дней и все, кроме 1000 последних, для каждой задачи — задача с постоянно падающей отправкой писала строку каждые 30 с (#52).
-- Обе функции вызываются в `runPartitionTick`; `test/retention.test.ts` проверяет их на реальной базе.
+- `pruneProcessedEvents(sql)`: deletes `processed_events` records older than the `events` retention period (24 months, UTC month boundary) — by then the event itself has already been deleted along with its partition. Previously the table grew without bound (#52).
+- `pruneScheduledTaskRuns(sql)`: deletes `scheduled_task_runs` rows older than 90 days and all but the latest 1000 for each task — a task with a constantly failing delivery wrote a row every 30 s (#52).
+- Both functions are called in `runPartitionTick`; `test/retention.test.ts` checks them against a real database.
 
 ### Fixed
 
