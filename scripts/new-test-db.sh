@@ -7,24 +7,81 @@
 #     uses the docker-internal host "postgres", which does not resolve on the host);
 #   - the API integration harness reads TEST_DATABASE_URL (reusePublicSchema →
 #     HOST_DB_URL), while workers/migrate read DATABASE_URL — so BOTH must point at
-#     the same isolated DB or tests silently hit the shared `admin` database.
+#     the same isolated DB or tests silently hit the shared `admin` database;
+#   - the API harness throws when TEST_REDIS_URL is unset (it has no default, so a
+#     run can never flush the stack's own Redis), and Redis requires the
+#     REDIS_PASSWORD token from .env.
 #
 # Usage:
-#   eval "$(bash scripts/new-test-db.sh <slug>)"     # provision + export both vars
+#   eval "$(bash scripts/new-test-db.sh <slug>)"     # provision + export the vars
 #   bash scripts/new-test-db.sh <slug>               # just print the export lines
 #   bash scripts/new-test-db.sh --drop <slug>        # drop a database this created
 #
-# Progress goes to stderr; ONLY the two `export …` lines go to stdout, so the
+# Progress goes to stderr; ONLY the three `export …` lines go to stdout, so the
 # command is safe to `eval`. Idempotent: re-running for the same slug reuses the DB.
 #
-# Env overrides: PG_CONTAINER (default: the running squad-admin-panel postgres),
-# PG_HOST (default 127.0.0.1), PG_PORT (default 5432), PG_USER (default admin).
+# TEST_REDIS_URL names an isolated Redis logical database in 8..15 derived from the
+# slug, so worktrees with different slugs rarely land on the same one. The API
+# harness still remaps the index per Vitest worker slot (workerRedisDatabase in
+# apps/api/test/integration/isolated-db.ts), so worktrees that must not share Redis
+# state at all need their own Redis (see "Several worktrees" in
+# docs/development/local-development.md).
+#
+# Env overrides:
+#   PG_CONTAINER   Postgres container to exec into. Default: the one running
+#                  postgres container (or the one of COMPOSE_PROJECT_NAME when that
+#                  is set); the script fails and lists them when it cannot pick one.
+#   PG_HOST        default 127.0.0.1
+#   PG_PORT        default POSTGRES_HOST_PORT (environment, then .env), else 5432
+#   PG_USER        default admin
+#   REDIS_HOST     default 127.0.0.1
+#   REDIS_PORT     default REDIS_HOST_PORT (environment, then .env), else 6379
 set -eu
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+env_file="$repo_root/.env"
 
 log() { printf '%s\n' "$*" >&2; }
 die() {
   printf 'new-test-db: %s\n' "$*" >&2
   exit 1
+}
+
+# Prints the value of KEY: the process environment wins, then the first KEY=value
+# line of the repository .env (quotes stripped). Prints nothing when it is unset.
+env_or_dotenv() {
+  local key=$1 value
+  value=${!key:-}
+  if [ -z "$value" ] && [ -f "$env_file" ]; then
+    value=$(grep -E "^${key}=" "$env_file" | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true)
+  fi
+  printf '%s' "$value"
+}
+
+# Prints the name of the Postgres container to use. PG_CONTAINER wins outright.
+# Otherwise the choice must be unambiguous: with two running stacks (two
+# worktrees, or the stand next to a local stack) taking the first match would
+# silently provision the database in somebody else's cluster, so several
+# candidates are an error.
+resolve_pg_container() {
+  local candidates count project
+  if [ -n "${PG_CONTAINER:-}" ]; then
+    printf '%s' "$PG_CONTAINER"
+    return 0
+  fi
+  candidates=$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'postgres' || true)
+  project=$(env_or_dotenv COMPOSE_PROJECT_NAME)
+  if [ -n "$project" ]; then
+    candidates=$(printf '%s\n' "$candidates" | grep -E "^${project}[-_]postgres[-_]1$" || true)
+  fi
+  count=$(printf '%s\n' "$candidates" | grep -c . || true)
+  if [ "$count" -eq 0 ]; then
+    die "no running postgres container found (set PG_CONTAINER); is the local stack up?"
+  fi
+  if [ "$count" -gt 1 ]; then
+    die "several postgres containers are running: $(printf '%s' "$candidates" | tr '\n' ' ')— set PG_CONTAINER (or COMPOSE_PROJECT_NAME) to pick one"
+  fi
+  printf '%s' "$candidates"
 }
 
 # Normalises a slug into the same valid, collision-resistant database
@@ -56,8 +113,7 @@ if [ "${1:-}" = "--drop" ]; then
   slug=${2:-}
   [ -n "$slug" ] || die "usage: new-test-db.sh --drop <slug>"
   dbname=$(dbname_for_slug "$slug")
-  container=${PG_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 'postgres' || true)}
-  [ -n "$container" ] || die "no running postgres container found (set PG_CONTAINER); is the local stack up?"
+  container=$(resolve_pg_container)
   PG_USER=${PG_USER:-admin}
   log "→ dropping database ${dbname}"
   docker exec "$container" psql -U "$PG_USER" -d "$PG_USER" -q -c \
@@ -71,18 +127,21 @@ slug=${1:-}
 [ -n "$slug" ] || die "usage: new-test-db.sh <slug>"
 dbname=$(dbname_for_slug "$slug")
 
-repo_root=$(cd "$(dirname "$0")/.." && pwd)
-env_file="$repo_root/.env"
 [ -f "$env_file" ] || die ".env not found at $env_file (needed for POSTGRES_PASSWORD)"
 
-pw=$(grep -E '^POSTGRES_PASSWORD=' "$env_file" | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+pw=$(env_or_dotenv POSTGRES_PASSWORD)
 [ -n "$pw" ] || die "POSTGRES_PASSWORD is empty or missing in .env"
+redis_pw=$(env_or_dotenv REDIS_PASSWORD)
+[ -n "$redis_pw" ] || die "REDIS_PASSWORD is empty or missing in .env (TEST_REDIS_URL needs it)"
 
 PG_USER=${PG_USER:-admin}
 PG_HOST=${PG_HOST:-127.0.0.1}
+PG_PORT=${PG_PORT:-$(env_or_dotenv POSTGRES_HOST_PORT)}
 PG_PORT=${PG_PORT:-5432}
-container=${PG_CONTAINER:-$(docker ps --format '{{.Names}}' 2>/dev/null | grep -m1 'postgres' || true)}
-[ -n "$container" ] || die "no running postgres container found (set PG_CONTAINER); is the local stack up?"
+REDIS_HOST=${REDIS_HOST:-127.0.0.1}
+REDIS_PORT=${REDIS_PORT:-$(env_or_dotenv REDIS_HOST_PORT)}
+REDIS_PORT=${REDIS_PORT:-6379}
+container=$(resolve_pg_container)
 
 # Create the database if it does not already exist (idempotent).
 exists=$(docker exec "$container" psql -U "$PG_USER" -d "$PG_USER" -tAc \
@@ -96,6 +155,10 @@ else
 fi
 
 url="postgres://${PG_USER}:${pw}@${PG_HOST}:${PG_PORT}/${dbname}"
+# Logical databases 1-7 belong to the worker suites and 0 to the stack itself, so
+# the name picks one of 8..15 (the API suite's range); cksum keeps it stable.
+redis_db=$((8 + $(printf '%s' "$dbname" | cksum | cut -d' ' -f1) % 8))
+redis_url="redis://:${redis_pw}@${REDIS_HOST}:${REDIS_PORT}/${redis_db}"
 
 log "→ applying migrations (pnpm --filter @squad/db migrate)"
 if DATABASE_URL="$url" pnpm --dir "$repo_root" --filter @squad/db migrate >&2; then
@@ -104,9 +167,10 @@ else
   die "migrations failed against ${dbname}"
 fi
 
-# The ONLY stdout: eval-able exports. Same URL for both variables so the
+# The ONLY stdout: eval-able exports. Same URL for both database variables so the
 # migrate/worker path (DATABASE_URL) and the api integration harness
 # (TEST_DATABASE_URL) can never diverge.
 printf "export DATABASE_URL='%s'\n" "$url"
 printf "export TEST_DATABASE_URL='%s'\n" "$url"
-log "✓ ready: DATABASE_URL and TEST_DATABASE_URL both point at ${dbname}"
+printf "export TEST_REDIS_URL='%s'\n" "$redis_url"
+log "✓ ready: DATABASE_URL and TEST_DATABASE_URL both point at ${dbname}; TEST_REDIS_URL uses Redis db ${redis_db}"
