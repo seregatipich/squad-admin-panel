@@ -1,5 +1,13 @@
 # `api` — changelog
 
+## 2026-10-01 — Структура маршрутов API
+
+### Changed
+
+- Шесть крупных файлов маршрутов разнесены по подплагинам: `routes/clans.ts`, `servers.ts`, `server-configs.ts`, `issues.ts`, `role-members.ts`, `integrations-discord.ts` остались единственной точкой регистрации в `routes/index.ts` и регистрируют по одному подплагину на область из одноимённой папки (`routes/clans/`, …). Общие схемы, мапперы и сервисная логика вынесены в `apps/api/src/lib/<ресурс>/`; версионированная запись конфигов (`writeVersion`, `reloadServerConfig`) теперь в `lib/server-configs/write.ts` и по-прежнему реэкспортируется из `routes/server-configs.ts`. URL, схемы, `config.permissions`, `config.audit` и ответы не менялись.
+- `test/integration/harness.ts` стал фасадом над модулями `test/integration/harness/`; импорты в тестах прежние.
+- `audit-coverage.test.ts` читает исходник модуля маршрутов как входной файл плюс папку подплагинов; `route-registration-parity.test.ts` проверяет, что каждый файл подплагина импортирован и зарегистрирован входным файлом.
+
 ## 2026-10-01 — Фракции команд в `GET /api/v1/servers/:id/roster`
 
 ### Added
