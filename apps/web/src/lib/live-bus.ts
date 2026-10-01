@@ -1,3 +1,4 @@
+import { apiResult } from './api';
 import { isRecord } from './json-guards';
 import { jitteredBackoffMs } from './ws-backoff';
 
@@ -529,8 +530,8 @@ function makeLiveBus(): LiveBusHandle {
     if (attempts >= SESSION_PROBE_AFTER_ATTEMPTS) {
       let sessionExpired = false;
       try {
-        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        sessionExpired = res.status === 401;
+        const probe = await apiResult<void>('/api/v1/me', { discardBody: true });
+        sessionExpired = !probe.ok && probe.error.status === 401;
       } catch (err) {
         debug('session probe failed', err);
       }

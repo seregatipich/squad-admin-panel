@@ -22,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiResult, apiSend } from '@/lib/api';
 import { describeLoadError } from '@/lib/load-error';
 import {
   activeSubscription,
@@ -41,17 +42,6 @@ import {
 
 const HISTORY_PAGE_SIZE = 20;
 
-const json = { 'content-type': 'application/json' };
-
-async function readError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { error?: string };
-    return errorMessage(body?.error);
-  } catch {
-    return errorMessage(null);
-  }
-}
-
 /**
  * VIPSUB-5 (#171) self-service page for a logged-in player.
  *
@@ -61,10 +51,14 @@ async function readError(res: Response): Promise<string> {
  * access, which is why it does not reuse any `(dashboard)` section.
  */
 /**
- * Text for a caught failure: errors built from an API answer already carry Russian
- * text, while a rejected `fetch` (a `TypeError` such as `Failed to fetch`) does not.
+ * Text for a caught failure: an API answer is shown as the Russian text of its
+ * error code, while a rejected `fetch` (a `TypeError` such as `Failed to fetch`)
+ * carries no Russian text of its own.
  */
 function failureText(err: unknown): string {
+  if (err instanceof ApiError) {
+    return errorMessage(err.jsonBody<{ error?: string } | null>()?.error);
+  }
   return err instanceof Error && !(err instanceof TypeError) ? err.message : describeLoadError(err);
 }
 
@@ -88,25 +82,22 @@ export function MeBrowser({ displayName }: { displayName: string }) {
     setError(null);
     try {
       const [balanceRes, tiersRes, subsRes, historyRes] = await Promise.all([
-        fetch('/api/v1/me/bonus-balance', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me/tiers', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me/subscriptions', { credentials: 'include', cache: 'no-store' }),
-        fetch(`/api/v1/me/bonus-transactions?limit=${HISTORY_PAGE_SIZE}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
+        apiResult<MeBalance>('/api/v1/me/bonus-balance'),
+        apiResult<{ rows: MeTier[] }>('/api/v1/me/tiers'),
+        apiResult<{ rows: MeSubscription[] }>('/api/v1/me/subscriptions'),
+        apiResult<MeBonusPage>(`/api/v1/me/bonus-transactions?limit=${HISTORY_PAGE_SIZE}`),
       ]);
-      if (!balanceRes.ok) throw new Error(await readError(balanceRes));
-      if (!tiersRes.ok) throw new Error(await readError(tiersRes));
-      if (!subsRes.ok) throw new Error(await readError(subsRes));
-      if (!historyRes.ok) throw new Error(await readError(historyRes));
+      // Checked in a fixed order so the banner names the same failure on every reload.
+      if (!balanceRes.ok) throw balanceRes.error;
+      if (!tiersRes.ok) throw tiersRes.error;
+      if (!subsRes.ok) throw subsRes.error;
+      if (!historyRes.ok) throw historyRes.error;
 
-      setBalance((await balanceRes.json()) as MeBalance);
-      setTiers(((await tiersRes.json()) as { rows: MeTier[] }).rows);
-      setSubscriptions(((await subsRes.json()) as { rows: MeSubscription[] }).rows);
-      const page = (await historyRes.json()) as MeBonusPage;
-      setHistory(page.items);
-      setCursor(page.next_cursor);
+      setBalance(balanceRes.data);
+      setTiers(tiersRes.data.rows);
+      setSubscriptions(subsRes.data.rows);
+      setHistory(historyRes.data.items);
+      setCursor(historyRes.data.next_cursor);
     } catch (err) {
       setError(failureText(err));
     } finally {
@@ -122,12 +113,9 @@ export function MeBrowser({ displayName }: { displayName: string }) {
     if (cursor === null) return;
     setBusy(true);
     try {
-      const res = await fetch(
+      const page = await apiFetch<MeBonusPage>(
         `/api/v1/me/bonus-transactions?limit=${HISTORY_PAGE_SIZE}&before=${cursor}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(await readError(res));
-      const page = (await res.json()) as MeBonusPage;
       setHistory((prev) => mergeBonusPage(prev, page.items));
       setCursor(page.next_cursor);
     } catch (err) {
@@ -137,16 +125,12 @@ export function MeBrowser({ displayName }: { displayName: string }) {
     }
   }
 
-  async function mutate(request: () => Promise<Response>, successMessage: string): Promise<void> {
+  async function mutate(request: () => Promise<void>, successMessage: string): Promise<void> {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const res = await request();
-      if (!res.ok) {
-        setError(await readError(res));
-        return;
-      }
+      await request();
       setNotice(successMessage);
       await load();
     } catch (err) {
@@ -158,25 +142,13 @@ export function MeBrowser({ displayName }: { displayName: string }) {
 
   const buy = (tierId: string) =>
     mutate(
-      () =>
-        fetch('/api/v1/me/purchases', {
-          method: 'POST',
-          headers: json,
-          credentials: 'include',
-          body: JSON.stringify({ tier_id: tierId }),
-        }),
+      () => apiSend('/api/v1/me/purchases', { method: 'POST', json: { tier_id: tierId } }),
       'VIP продлён.',
     );
 
   const subscribe = (tierId: string) =>
     mutate(
-      () =>
-        fetch('/api/v1/me/subscriptions', {
-          method: 'POST',
-          headers: json,
-          credentials: 'include',
-          body: JSON.stringify({ tier_id: tierId }),
-        }),
+      () => apiSend('/api/v1/me/subscriptions', { method: 'POST', json: { tier_id: tierId } }),
       'Подписка оформлена.',
     );
 
@@ -185,11 +157,7 @@ export function MeBrowser({ displayName }: { displayName: string }) {
   async function confirmCancel(): Promise<void> {
     if (!cancelTarget) return;
     await mutate(
-      () =>
-        fetch(`/api/v1/me/subscriptions/${cancelTarget.id}`, {
-          method: 'DELETE',
-          credentials: 'include',
-        }),
+      () => apiSend(`/api/v1/me/subscriptions/${cancelTarget.id}`, { method: 'DELETE' }),
       'Подписка отменена. Оплаченный период сохранён.',
     );
     setCancelTarget(null);

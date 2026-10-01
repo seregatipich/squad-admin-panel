@@ -12,6 +12,7 @@ import {
   Skeleton,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiResult } from '@/lib/api';
 
 interface SetupStatus {
   setup_completed: boolean;
@@ -29,12 +30,8 @@ export default function SetupPage() {
 
   const loadStatus = useCallback(() => {
     setStatusErr(null);
-    fetch('/api/v1/setup/status', { credentials: 'include', cache: 'no-store' })
-      .then((r) => {
-        if (!r.ok) throw new Error(`setup_status_${r.status}`);
-        return r.json();
-      })
-      .then((s: SetupStatus) => {
+    apiFetch<SetupStatus>('/api/v1/setup/status')
+      .then((s) => {
         if (s.setup_completed) {
           window.location.href = '/';
           return;
@@ -53,23 +50,22 @@ export default function SetupPage() {
     setBusy(true);
     setSubmitErr(null);
     try {
-      const r = await fetch('/api/v1/setup/complete', {
+      const r = await apiResult<void>('/api/v1/setup/complete', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ organization_name: orgName.trim() }),
+        json: { organization_name: orgName.trim() },
+        discardBody: true,
       });
-      if (r.status === 410) {
-        window.location.href = '/';
-        return;
-      }
-      if (r.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${r.status}`);
+        if (r.error.status === 410) {
+          window.location.href = '/';
+          return;
+        }
+        if (r.error.status === 401) {
+          window.location.href = '/login';
+          return;
+        }
+        const body = r.error.jsonBody<{ error?: string } | null>();
+        throw new Error(body?.error ?? `HTTP ${r.error.status}`);
       }
       window.location.href = '/';
     } catch (e) {
