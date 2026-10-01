@@ -69,6 +69,16 @@ export interface RosterApiTeam {
   name: string;
 }
 
+/**
+ * The faction a side plays in the server's open match («Russian Ground Forces»),
+ * from `matches.team{1,2}_faction`. `team_name` in `teams` is the unit name
+ * `ListSquads` reports («58th Motorized Brigade»), which is not the faction.
+ */
+export interface RosterApiTeamFaction {
+  team_id: number;
+  faction: string;
+}
+
 /** Squad metadata the roster rows themselves do not carry: name, lock, declared size. */
 export interface RosterApiSquad {
   team_id: number;
@@ -89,6 +99,8 @@ export interface RosterApiResponse {
    */
   teams: RosterApiTeam[];
   squads: RosterApiSquad[];
+  /** Empty when the server has no open match or the log did not name the factions. */
+  team_factions: RosterApiTeamFaction[];
 }
 
 // #318: unlike parseStoredSquads (which at least checks Array.isArray on
@@ -215,8 +227,9 @@ export function buildRosterResponse(
   identities: PlayerIdentity[],
   storedSquads: StoredSquads | null = null,
   crowns: ReadonlyMap<string, SquadCrown> = new Map(),
+  teamFactions: RosterApiTeamFaction[] = [],
 ): RosterApiResponse {
-  const meta = buildSquadMeta(storedSquads);
+  const meta = { ...buildSquadMeta(storedSquads), team_factions: teamFactions };
   if (!stored) return { polled_at: null, players: [], ...meta };
   const entries = stored.players ?? [];
   if (entries.length === 0) return { polled_at: stored.polled_at ?? null, players: [], ...meta };

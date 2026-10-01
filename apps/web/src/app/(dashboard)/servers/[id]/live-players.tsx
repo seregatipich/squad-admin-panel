@@ -196,7 +196,12 @@ export function LivePlayers({
 
   const players = useMemo(() => (roster ? sortRoster(roster.players) : []), [roster]);
   const { teams, unaffiliated } = useMemo(
-    () => groupRosterByTeam(players, { teams: roster?.teams, squads: roster?.squads }),
+    () =>
+      groupRosterByTeam(players, {
+        teams: roster?.teams,
+        squads: roster?.squads,
+        teamFactions: roster?.team_factions,
+      }),
     [players, roster],
   );
   // Only roster entries resolved to a panel player can be bulk-targeted —
@@ -294,6 +299,7 @@ export function LivePlayers({
                 team={{
                   team_id: null,
                   name: null,
+                  faction: null,
                   squads: [
                     {
                       team_id: null,
@@ -527,7 +533,12 @@ function TeamRoster({
       : team.name
         ? `${team.name}`
         : `Команда ${teamLabel(team.team_id)}`;
-  const subtitle = team.team_id != null && team.name ? `Команда ${teamLabel(team.team_id)}` : null;
+  const subtitle =
+    team.team_id == null
+      ? null
+      : [team.name ? `Команда ${teamLabel(team.team_id)}` : null, team.faction]
+          .filter((part) => part != null)
+          .join(' · ') || null;
   const squadCount = team.squads.filter((group) => group.squad_id != null).length;
 
   // Таблица в фиксированной раскладке: в авто-режиме длинный ник без пробелов

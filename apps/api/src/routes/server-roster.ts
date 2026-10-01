@@ -1,6 +1,6 @@
-import { players } from '@squad/db/schema';
+import { matches, players } from '@squad/db/schema';
 import { squadCrownsKey } from '@squad/shared-types';
-import { inArray, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import {
   parseStoredCrowns,
   parseStoredRoster,
   parseStoredSquads,
+  type RosterApiTeamFaction,
 } from '../lib/roster.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -32,8 +33,19 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
       const stored = parseStoredRoster(rawRoster ?? null);
       const storedSquads = parseStoredSquads(rawSquads ?? null);
       const crowns = parseStoredCrowns(rawCrowns);
+
+      const [openMatch] = await app.db
+        .select({ team1: matches.team1Faction, team2: matches.team2Faction })
+        .from(matches)
+        .where(and(eq(matches.serverId, req.params.id), isNull(matches.endedAt)))
+        .orderBy(desc(matches.startedAt))
+        .limit(1);
+      const teamFactions: RosterApiTeamFaction[] = [];
+      if (openMatch?.team1) teamFactions.push({ team_id: 1, faction: openMatch.team1 });
+      if (openMatch?.team2) teamFactions.push({ team_id: 2, faction: openMatch.team2 });
+
       if (!stored || stored.players.length === 0) {
-        return buildRosterResponse(stored, [], storedSquads, crowns);
+        return buildRosterResponse(stored, [], storedSquads, crowns, teamFactions);
       }
 
       const { eosIds, steamIds } = collectRosterLookups(stored.players);
@@ -53,7 +65,7 @@ const serverRosterRoutes: FastifyPluginAsync = async (app) => {
               .where(matchClauses.length === 1 ? matchClauses[0] : or(...matchClauses))
           : [];
 
-      return buildRosterResponse(stored, identities, storedSquads, crowns);
+      return buildRosterResponse(stored, identities, storedSquads, crowns, teamFactions);
     },
   );
 };

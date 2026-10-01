@@ -24,6 +24,12 @@ export interface RosterTeamMeta {
   name: string;
 }
 
+/** The faction a side plays in the open match, from the match log — «Russian Ground Forces». */
+export interface RosterTeamFaction {
+  team_id: number;
+  faction: string;
+}
+
 /** What `ListSquads` knows about a squad and `ListPlayers` does not: name, lock, declared size. */
 export interface RosterSquadMeta {
   team_id: number;
@@ -44,6 +50,8 @@ export interface RosterResponse {
    */
   teams?: RosterTeamMeta[];
   squads?: RosterSquadMeta[];
+  /** Absent in an API response built before this field existed, and while no match is open. */
+  team_factions?: RosterTeamFaction[];
 }
 
 /** Squad caps every squad, Command Squad included, at nine players. */
@@ -142,8 +150,10 @@ export function groupRosterBySquad(
 /** One team's column: its squads in display order plus the unassigned pool last. */
 export interface TeamColumn {
   team_id: number;
-  /** Faction name from the squads snapshot; `null` when unknown — show «Команда N». */
+  /** Unit name from the squads snapshot («58th Motorized Brigade»); `null` when unknown — show «Команда N». */
   name: string | null;
+  /** Faction of the open match («Russian Ground Forces»); `null` when the match log has not named it. */
+  faction: string | null;
   squads: SquadGroup[];
   player_count: number;
 }
@@ -166,11 +176,20 @@ const MATCH_TEAM_IDS = [1, 2] as const;
  */
 export function groupRosterByTeam(
   list: RosterPlayer[],
-  meta: { teams?: readonly RosterTeamMeta[]; squads?: readonly RosterSquadMeta[] } = {},
+  meta: {
+    teams?: readonly RosterTeamMeta[];
+    squads?: readonly RosterSquadMeta[];
+    teamFactions?: readonly RosterTeamFaction[];
+  } = {},
 ): RosterByTeam {
   const nameByTeam = new Map<number, string>();
   for (const team of meta.teams ?? []) {
     if (team.name.trim().length > 0) nameByTeam.set(team.team_id, team.name);
+  }
+
+  const factionByTeam = new Map<number, string>();
+  for (const entry of meta.teamFactions ?? []) {
+    if (entry.faction.trim().length > 0) factionByTeam.set(entry.team_id, entry.faction);
   }
 
   const teamIds = new Set<number>(MATCH_TEAM_IDS);
@@ -193,6 +212,7 @@ export function groupRosterByTeam(
       return {
         team_id: teamId,
         name: nameByTeam.get(teamId) ?? null,
+        faction: factionByTeam.get(teamId) ?? null,
         squads,
         player_count: squads.reduce((sum, group) => sum + group.players.length, 0),
       };

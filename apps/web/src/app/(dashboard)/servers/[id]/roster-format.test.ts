@@ -212,6 +212,18 @@ describe('groupRosterByTeam', () => {
     expect(teams[1]?.name).toBeNull();
   });
 
+  it('attaches the match faction per team and ignores blank ones', () => {
+    const { teams } = groupRosterByTeam([], {
+      teamFactions: [
+        { team_id: 1, faction: 'Russian Ground Forces' },
+        { team_id: 2, faction: '  ' },
+      ],
+    });
+    expect(teams[0]?.faction).toBe('Russian Ground Forces');
+    expect(teams[1]?.faction).toBeNull();
+    expect(groupRosterByTeam([]).teams.map((team) => team.faction)).toEqual([null, null]);
+  });
+
   it('orders the Command Squad first, then squads by number, unassigned last', () => {
     const roster = sortRoster([
       makePlayer({ name: 'Solo', team_id: 1, squad_id: null }),
