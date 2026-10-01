@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-
 import {
   Badge,
   Card,
@@ -14,6 +13,7 @@ import {
   InlineBanner,
   Select,
 } from '@/components/ui';
+import { type ApiResult, apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
 import {
   canRemoveLink,
@@ -61,10 +61,9 @@ export function IssueLinksBlock({
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as { items: ServerOption[] }) : null))
+    apiFetch<{ items: ServerOption[] }>('/api/v1/servers')
       .then((body) => {
-        if (!cancelled && body) setServers(body.items);
+        if (!cancelled) setServers(body.items);
       })
       .catch(() => {});
     return () => {
@@ -72,20 +71,20 @@ export function IssueLinksBlock({
     };
   }, []);
 
-  async function mutate(request: () => Promise<Response>) {
+  async function mutate(request: () => Promise<ApiResult<void>>) {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       const res = await request();
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(linkErrorMessage(res.status, body.error));
+        const body = res.error.jsonBody<{ error?: string }>();
+        setError(linkErrorMessage(res.error.status, body?.error));
         return;
       }
       onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }
@@ -93,21 +92,20 @@ export function IssueLinksBlock({
 
   function attach(type: IssueLinkEntityType, entityId: string) {
     return mutate(() =>
-      fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/links`, {
+      apiResult<void>(`/api/v1/issues/${encodeURIComponent(issueId)}/links`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ entity_type: type, entity_id: entityId }),
+        json: { entity_type: type, entity_id: entityId },
+        discardBody: true,
       }),
     );
   }
 
   function detach(linkId: string) {
     return mutate(() =>
-      fetch(`/api/v1/issues/${encodeURIComponent(issueId)}/links/${encodeURIComponent(linkId)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      }),
+      apiResult<void>(
+        `/api/v1/issues/${encodeURIComponent(issueId)}/links/${encodeURIComponent(linkId)}`,
+        { method: 'DELETE', discardBody: true },
+      ),
     );
   }
 

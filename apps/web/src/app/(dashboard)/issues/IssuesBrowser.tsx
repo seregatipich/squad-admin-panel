@@ -31,6 +31,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
 import type { IssueLabel, IssueState, IssueView } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -108,9 +109,8 @@ export function IssuesBrowser() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/v1/issues/labels', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((data: { items: IssueLabel[] }) => {
+    apiFetch<{ items: IssueLabel[] }>('/api/v1/issues/labels')
+      .then((data) => {
         if (!cancelled) setLabels(data.items);
       })
       .catch(() => {});
@@ -124,13 +124,7 @@ export function IssuesBrowser() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/issues?${buildApiQuery(filters)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (requestId !== loadRequestId.current) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as IssueListResponse;
+      const data = await apiFetch<IssueListResponse>(`/api/v1/issues?${buildApiQuery(filters)}`);
       if (requestId !== loadRequestId.current) return;
       idsRef.current = new Set(data.items.map((issue) => issue.id));
       setIssues(data.items);
@@ -141,7 +135,7 @@ export function IssuesBrowser() {
         : null;
       if (assigned) setAssigneeName(assigned.name);
     } catch (e) {
-      if (requestId === loadRequestId.current) setError((e as Error).message);
+      if (requestId === loadRequestId.current) setError(describeHttpError(e));
     } finally {
       if (requestId === loadRequestId.current) setLoading(false);
     }
@@ -467,23 +461,21 @@ function CreateIssueForm({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/issues', {
+      const created = await apiFetch<IssueView>('/api/v1/issues', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           title: title.trim(),
           body: body.trim(),
           labels: Array.from(selected),
-        }),
+        },
       });
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${errBody.error ?? 'unknown'}`);
-      }
-      onCreated((await res.json()) as IssueView);
+      onCreated(created);
     } catch (e) {
-      setError((e as Error).message);
+      setError(
+        e instanceof ApiError
+          ? `HTTP ${e.status}: ${e.jsonBody<{ error?: unknown }>()?.error ?? 'unknown'}`
+          : describeHttpError(e),
+      );
     } finally {
       setSubmitting(false);
     }

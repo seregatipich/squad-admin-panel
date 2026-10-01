@@ -28,7 +28,7 @@ import {
   TableRow,
   Td,
 } from '@/components/ui';
-import { errorMessage } from '@/lib/load-error';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   buildMatchCombatLogHref,
@@ -126,20 +126,17 @@ export function MatchCard({
       setLoading(false);
       return;
     }
-    fetch(`/api/v1/matches/${encodeURIComponent(matchId)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (res.status === 404) throw new Error('Матч не найден');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return parseMatchDetail(await res.json());
+    apiFetch<unknown>(`/api/v1/matches/${encodeURIComponent(matchId)}`)
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) throw new Error('Матч не найден');
+        throw err;
       })
+      .then(parseMatchDetail)
       .then((data) => {
         if (current()) setMatch(data);
       })
       .catch((err: unknown) => {
-        if (current()) setError(errorMessage(err));
+        if (current()) setError(describeHttpError(err));
       })
       .finally(() => {
         if (current()) setLoading(false);

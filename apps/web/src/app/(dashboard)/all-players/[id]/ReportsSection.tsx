@@ -13,6 +13,7 @@ import {
   InlineBanner,
   Skeleton,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import {
   excerpt,
   formatReportDate,
@@ -60,17 +61,16 @@ export function ReportsSection({ playerId }: { playerId: string }) {
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(`/api/v1/reports?target_player_id=${playerId}&page_size=${PAGE_SIZE}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<ReportListResponse>(
+      `/api/v1/reports?target_player_id=${playerId}&page_size=${PAGE_SIZE}`,
+    )
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as ReportListResponse;
+        throw res.error;
       })
       .then((body) => {
         if (!cancelled && body) {
@@ -79,7 +79,7 @@ export function ReportsSection({ playerId }: { playerId: string }) {
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

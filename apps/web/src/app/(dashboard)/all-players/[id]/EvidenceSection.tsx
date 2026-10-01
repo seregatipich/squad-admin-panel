@@ -15,6 +15,7 @@ import {
   TextInput,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { MediaPublishControl } from './MediaPublishControl';
@@ -104,23 +105,24 @@ export function EvidenceSection({
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/media`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
+      const res = await apiResult<EvidenceListResponse>(
+        `/api/v1/players/${encodeURIComponent(playerId)}/media`,
+      );
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as EvidenceListResponse;
+      const body = res.data;
       setItems(
         body.items.map((item) => ({ ...item, publications: item.publications ?? NO_PUBLICATIONS })),
       );
       setCanManageMedia(body.can_manage_media ?? false);
       setError(null);
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeHttpError(err));
     } finally {
       setLoading(false);
     }
@@ -154,17 +156,10 @@ export function EvidenceSection({
     setMinting(true);
     setMintError(null);
     try {
-      const res = await fetch('/api/v1/media/upload-tokens', {
+      const body = await apiFetch<MintedUploadLink>('/api/v1/media/upload-tokens', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ target_entity_type: 'player', target_entity_id: playerId }),
+        json: { target_entity_type: 'player', target_entity_id: playerId },
       });
-      if (!res.ok) {
-        setMintError('Не удалось создать ссылку.');
-        return;
-      }
-      const body = (await res.json()) as MintedUploadLink;
       setMintedLink(body);
     } catch {
       setMintError('Не удалось создать ссылку.');

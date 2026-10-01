@@ -11,6 +11,7 @@ import {
   CardHeader,
   InlineBanner,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 
 interface LinkedIssue {
   id: string;
@@ -54,20 +55,20 @@ export function IssueLinksSection({ playerId }: { playerId: string }) {
     let cancelled = false;
     setHidden(false);
     setError(null);
-    fetch(`/api/v1/players/${playerId}/issues`, { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<LinkedIssuesResponse>(`/api/v1/players/${playerId}/issues`)
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as LinkedIssuesResponse;
+        throw res.error;
       })
       .then((body) => {
         if (!cancelled && body) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       });
     return () => {
       cancelled = true;

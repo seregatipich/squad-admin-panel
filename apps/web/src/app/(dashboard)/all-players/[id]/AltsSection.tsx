@@ -19,6 +19,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiResult, apiSend, describeHttpError } from '@/lib/api';
 import {
   type AltCandidate,
   formatRejectedMark,
@@ -76,34 +77,25 @@ export function AltsSection({ playerId }: { playerId: string }) {
       setError(null);
       try {
         const [linksRes, candidatesRes] = await Promise.all([
-          fetch(`/api/v1/players/${playerId}/links`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-          fetch(`/api/v1/players/${playerId}/alt-candidates?limit=100`, {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
+          apiResult<unknown>(`/api/v1/players/${playerId}/links`),
+          apiResult<unknown>(`/api/v1/players/${playerId}/alt-candidates?limit=100`),
         ]);
-        if (
-          linksRes.status === 401 ||
-          linksRes.status === 403 ||
-          candidatesRes.status === 401 ||
-          candidatesRes.status === 403
-        ) {
+        const forbidden = (res: typeof linksRes) =>
+          !res.ok && (res.error.status === 401 || res.error.status === 403);
+        if (forbidden(linksRes) || forbidden(candidatesRes)) {
           setHidden(true);
           return;
         }
-        if (!linksRes.ok) throw new Error(`HTTP ${linksRes.status}`);
-        if (!candidatesRes.ok) throw new Error(`HTTP ${candidatesRes.status}`);
-        const linksBody = parseLinksResponse(await linksRes.json());
-        const candidatesBody = parseCandidateResponse(await candidatesRes.json());
+        if (!linksRes.ok) throw linksRes.error;
+        if (!candidatesRes.ok) throw candidatesRes.error;
+        const linksBody = parseLinksResponse(linksRes.data);
+        const candidatesBody = parseCandidateResponse(candidatesRes.data);
         if (!linksBody || !candidatesBody) throw new Error('invalid response shape');
         setLinks(linksBody.links);
         setCandidates(candidatesBody.candidates);
         setLoaded(true);
       } catch (err) {
-        setError((err as Error).message);
+        setError(describeHttpError(err));
       } finally {
         setLoading(false);
       }
@@ -116,20 +108,17 @@ export function AltsSection({ playerId }: { playerId: string }) {
       setSavingCandidate(candidate.player_id);
       setError(null);
       try {
-        const response = await fetch(`/api/v1/players/${playerId}/links`, {
+        await apiSend(`/api/v1/players/${playerId}/links`, {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+          json: {
             other_player_id: candidate.player_id,
             link_type: status === 'confirmed' ? 'alt' : 'unrelated',
             status,
-          }),
+          },
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await load(true);
       } catch (err) {
-        setError((err as Error).message);
+        setError(describeHttpError(err));
       } finally {
         setSavingCandidate(null);
       }

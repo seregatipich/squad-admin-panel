@@ -13,6 +13,7 @@ import {
   SafeExternalLink,
   Skeleton,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import { formatDateTimeRu } from '@/lib/format';
 import { moderationActionLabel, moderationActionTone } from '@/lib/moderation-actions';
 import {
@@ -105,17 +106,14 @@ export function ModerationHistorySection({
     setLoading(true);
     setHidden(false);
     setError(null);
-    fetch(moderationActionsUrl(playerId, null), {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
+    apiResult<ModerationHistoryResponse>(moderationActionsUrl(playerId, null))
+      .then((res) => {
+        if (res.ok) return res.data;
+        if (res.error.status === 401 || res.error.status === 403) {
           setHidden(true);
           return null;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as ModerationHistoryResponse;
+        throw res.error;
       })
       .then((body) => {
         if (cancelled || !body) return;
@@ -123,7 +121,7 @@ export function ModerationHistorySection({
         setHasMore(body.actions.length > MODERATION_HISTORY_PAGE_SIZE);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -141,12 +139,9 @@ export function ModerationHistorySection({
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const res = await fetch(moderationActionsUrl(playerId, cursor), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as ModerationHistoryResponse;
+      const body = await apiFetch<ModerationHistoryResponse>(
+        moderationActionsUrl(playerId, cursor),
+      );
       const page = body.actions.slice(0, MODERATION_HISTORY_PAGE_SIZE);
       setActions((current) => {
         const known = new Set((current ?? []).map((row) => row.id));
@@ -154,7 +149,7 @@ export function ModerationHistorySection({
       });
       setHasMore(body.actions.length > MODERATION_HISTORY_PAGE_SIZE);
     } catch (err) {
-      setLoadMoreError((err as Error).message);
+      setLoadMoreError(describeHttpError(err));
     } finally {
       setLoadingMore(false);
     }
@@ -165,15 +160,17 @@ export function ModerationHistorySection({
     setDetaching(true);
     setDetachError(null);
     try {
-      const res = await fetch(detachEvidenceUrl(mediaId, actionId), {
+      const res = await apiResult<void>(detachEvidenceUrl(mediaId, actionId), {
         method: 'DELETE',
-        credentials: 'include',
+        discardBody: true,
       });
-      if (res.status === 403) {
-        setDetachError('Недостаточно прав, чтобы открепить это доказательство.');
-        return;
+      if (!res.ok) {
+        if (res.error.status === 403) {
+          setDetachError('Недостаточно прав, чтобы открепить это доказательство.');
+          return;
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setActions((current) =>
         current === null
           ? current
@@ -185,7 +182,7 @@ export function ModerationHistorySection({
       );
       onEvidenceDetached?.();
     } catch (err) {
-      setDetachError((err as Error).message);
+      setDetachError(describeHttpError(err));
     } finally {
       setDetaching(false);
       setDetachTarget(null);

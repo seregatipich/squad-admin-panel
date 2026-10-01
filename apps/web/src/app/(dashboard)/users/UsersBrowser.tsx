@@ -30,6 +30,7 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import { describeHttpStatus, describeLoadError } from '@/lib/load-error';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
@@ -144,15 +145,14 @@ export function UsersBrowser() {
 
   // The caller's permissions and the role list do not depend on the filters.
   useEffect(() => {
-    const options = { credentials: 'include', cache: 'no-store' } as const;
-    void Promise.all([fetch('/api/v1/me', options), fetch('/api/v1/roles', options)])
-      .then(async ([meResponse, rolesResponse]) => {
-        if (meResponse.ok) {
-          setMe((await meResponse.json()) as Me);
+    void Promise.all([apiResult<Me>('/api/v1/me'), apiResult<RoleOption[]>('/api/v1/roles')])
+      .then(([meResult, rolesResult]) => {
+        if (meResult.ok) {
+          setMe(meResult.data);
         } else {
-          setLoadError(`Не удалось загрузить список пользователей: ${meResponse.status}`);
+          setLoadError(`Не удалось загрузить список пользователей: ${meResult.error.status}`);
         }
-        if (rolesResponse.ok) setRoleOptions((await rolesResponse.json()) as RoleOption[]);
+        if (rolesResult.ok) setRoleOptions(rolesResult.data);
       })
       .catch((e: Error) => setLoadError(`Ошибка сети: ${e.message}`));
   }, []);
@@ -164,18 +164,18 @@ export function UsersBrowser() {
     setUnassignBusy(true);
     setActionError(null);
     try {
-      const r = await fetch(`/api/v1/players/${id}/role`, {
+      const r = await apiResult<void>(`/api/v1/players/${id}/role`, {
         method: 'DELETE',
-        credentials: 'include',
+        discardBody: true,
       });
       if (!r.ok) {
-        const e = (await r.json().catch(() => ({}))) as { error?: string };
+        const e = r.error.jsonBody<{ error?: string }>() ?? {};
         // Единственный Owner — не сбой запроса, а правило панели: оператору
         // нужен следующий шаг, а не код ошибки.
         setActionError(
-          r.status === 409 && e.error === 'cannot_remove_last_owner'
+          r.error.status === 409 && e.error === 'cannot_remove_last_owner'
             ? 'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.'
-            : describeRoleError(e.error, r.status),
+            : describeRoleError(e.error, r.error.status),
         );
         return;
       }
@@ -418,18 +418,14 @@ function AssignModal({ onClose, onAssigned }: { onClose: () => void; onAssigned:
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/v1/roles', { credentials: 'include' })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    apiFetch<unknown>('/api/v1/roles')
       .then((body) => {
         if (cancelled) return;
         if (!Array.isArray(body)) throw new Error('unexpected response');
         setRoles(body as RoleOption[]);
       })
       .catch((e) => {
-        if (!cancelled) setErr(`Не удалось загрузить список ролей: ${(e as Error).message}`);
+        if (!cancelled) setErr(`Не удалось загрузить список ролей: ${describeHttpError(e)}`);
       });
     return () => {
       cancelled = true;
@@ -444,12 +440,10 @@ function AssignModal({ onClose, onAssigned }: { onClose: () => void; onAssigned:
     const controller = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/v1/players?q=${encodeURIComponent(q)}`, {
-          credentials: 'include',
-          signal: controller.signal,
-        });
-        if (!r.ok) return;
-        const body = (await r.json()) as { items: PlayerHit[] };
+        const body = await apiFetch<{ items: PlayerHit[] }>(
+          `/api/v1/players?q=${encodeURIComponent(q)}`,
+          { signal: controller.signal },
+        );
         setHits(body.items.slice(0, 20));
       } catch {
         // Aborted by a newer query or a network failure: keep the current hits.
@@ -473,15 +467,14 @@ function AssignModal({ onClose, onAssigned }: { onClose: () => void; onAssigned:
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/v1/players/${picked.id}/role`, {
+      const r = await apiResult<void>(`/api/v1/players/${picked.id}/role`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildRoleAssignPayload(roleId, expiresAt, comment)),
+        json: buildRoleAssignPayload(roleId, expiresAt, comment),
+        discardBody: true,
       });
       if (!r.ok) {
-        const e = (await r.json().catch(() => ({}))) as { error?: string };
-        setErr(describeRoleError(e.error, r.status));
+        const e = r.error.jsonBody<{ error?: string }>() ?? {};
+        setErr(describeRoleError(e.error, r.error.status));
         return;
       }
       onAssigned();

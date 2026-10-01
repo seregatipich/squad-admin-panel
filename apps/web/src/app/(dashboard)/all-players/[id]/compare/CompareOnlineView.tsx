@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
 import {
   Badge,
   Button,
@@ -14,6 +13,7 @@ import {
   InlineBanner,
   Skeleton,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { type PickedPlayer, PlayerSearchSelect } from '../../../issues/PlayerSearchSelect';
 import { fmtDuration, utcDayKey, weekStartMsForEndDay } from '../presence';
 import { SteamFriendCheck } from '../SteamFriendCheck';
@@ -85,21 +85,20 @@ export function CompareOnlineView({
     setError(null);
     const from = utcDayKey(weekStartMsForEndDay(endDay));
     const params = new URLSearchParams({ other: otherId, from, to: endDay });
-    fetch(`/api/v1/players/${encodeURIComponent(playerId)}/compare-online?${params.toString()}`, {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (res.status === 401 || res.status === 403) {
-          setHidden(true);
-          return null;
-        }
+    apiResult<unknown>(
+      `/api/v1/players/${encodeURIComponent(playerId)}/compare-online?${params.toString()}`,
+      { signal: controller.signal },
+    )
+      .then((res) => {
         if (!res.ok) {
-          const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error ?? `HTTP ${res.status}`);
+          if (res.error.status === 401 || res.error.status === 403) {
+            setHidden(true);
+            return null;
+          }
+          const body = res.error.jsonBody<{ error?: string }>();
+          throw new Error(body?.error ?? `HTTP ${res.error.status}`);
         }
-        const body = parseCompareOnlineResponse(await res.json());
+        const body = parseCompareOnlineResponse(res.data);
         if (!body) throw new Error('Некорректный ответ сервера');
         if (body.players[1].id !== otherId) {
           throw new Error('Ответ относится к другому игроку');
@@ -110,7 +109,7 @@ export function CompareOnlineView({
         if (!cancelled && body) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

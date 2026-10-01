@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PlayerMarkBadge } from '@/components/PlayerMarkBadge';
 import {
   Button,
@@ -29,6 +29,7 @@ import {
 import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { fmtDuration } from './[id]/presence';
 import {
   buildPlayersListQuery,
@@ -94,99 +95,54 @@ const ONLINE_SORT_DIRECTION: Record<Exclude<OnlineSort, 'none'>, SortDirection> 
 
 export default function PlayersPage() {
   const locale = useIntlLocale();
-  const [data, setData] = useState<PlayersResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
   const [sortOnline, setSortOnline] = useState<OnlineSort>('none');
   const [sortState, setSortState] = useState<PlayerSortState>(DEFAULT_SORT_STATE);
   const [onlyNew, setOnlyNew] = useState(false);
   const [page, setPage] = useState(1);
-  const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
-  const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
-  const [onlineLoaded, setOnlineLoaded] = useState(false);
-  /**
-   * Внеочередное обновление по кнопке «Повторить».
-   *
-   * Ссылка, а не второй путь загрузки: опрос обязан остаться единственным
-   * местом, которое пишет `data`, — иначе ответ на отменённый запрос обгонит
-   * актуальный и вернёт на экран список, отсортированный по прошлой колонке.
-   */
-  const refreshRef = useRef<() => void>(() => {});
-
-  const loadMarkSummary = useCallback(async () => {
-    try {
-      const r = await fetch('/api/v1/marks/active-summary', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) return;
-      const body = (await r.json()) as {
-        items: Array<{ player_id: string; marks: MarkTypeMini[] }>;
-      };
-      const next: Record<string, MarkTypeMini[]> = {};
-      for (const item of body.items) next[item.player_id] = item.marks;
-      setMarkSummary(next);
-    } catch {
-      /* keep the previous summary on transient failures */
-    }
-  }, []);
-
-  const loadOnlineStatus = useCallback(async () => {
-    try {
-      const r = await fetch('/api/v1/players/online-status', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) return;
-      const body = (await r.json()) as { online_player_ids: string[] };
-      setOnlineIds(new Set(body.online_player_ids));
-      setOnlineLoaded(true);
-    } catch {
-      /* keep the previous online set on transient failures */
-    }
-  }, []);
-
   const listQuery = buildPlayersListQuery(sortState, onlyNew, page, q);
+  const players = useApiResource<PlayersResponse>(`/api/v1/players?${listQuery}`, {
+    intervalMs: POLL_MS,
+  });
+  const online = useApiResource<{ online_player_ids: string[] }>('/api/v1/players/online-status', {
+    intervalMs: POLL_MS,
+  });
+  // The mark summary doesn't need the 8s poll: it's loaded once and kept
+  // current by the mark.changed live subscription below (#489).
+  const marks = useApiResource<{
+    items: Array<{ player_id: string; marks: MarkTypeMini[] }>;
+  }>('/api/v1/marks/active-summary');
+
+  // The hook drops its data when the query changes; the previous page stays on
+  // screen until the new one arrives, so a keystroke in the search box does
+  // not flash the skeleton.
+  const [data, setData] = useState<PlayersResponse | null>(null);
+  useEffect(() => {
+    if (players.data) setData(players.data);
+  }, [players.data]);
+  const err = players.errorMessage;
+
+  const markSummary = useMemo(() => {
+    const next: Record<string, MarkTypeMini[]> = {};
+    for (const item of marks.data?.items ?? []) next[item.player_id] = item.marks;
+    return next;
+  }, [marks.data]);
+
+  const onlineLoaded = online.data !== undefined;
+  const onlineIds = useMemo(() => new Set(online.data?.online_player_ids), [online.data]);
+
+  const refreshAll = () => {
+    void players.refresh();
+    void online.refresh();
+  };
+
   const pageCount = data ? Math.max(1, Math.ceil(data.total / PLAYERS_PAGE_SIZE)) : 1;
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadPlayers() {
-      try {
-        const r = await fetch(`/api/v1/players?${listQuery}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (!cancelled) {
-          setData((await r.json()) as PlayersResponse);
-          setErr(null);
-        }
-      } catch (e) {
-        if (!cancelled) setErr((e as Error).message);
-      }
-    }
-    const refresh = () => {
-      void loadPlayers();
-      void loadOnlineStatus();
-    };
-    refreshRef.current = refresh;
-    refresh();
-    // The mark summary doesn't need the 8s poll: it's loaded once here and
-    // kept current by the mark.changed live subscription below (#489).
-    void loadMarkSummary();
-    const t = setInterval(refresh, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-      refreshRef.current = () => {};
-    };
-  }, [loadMarkSummary, loadOnlineStatus, listQuery]);
-
+  const refreshMarks = marks.refresh;
   const onMarkChanged = useCallback(() => {
-    void loadMarkSummary();
-  }, [loadMarkSummary]);
+    void refreshMarks();
+  }, [refreshMarks]);
   useLiveSubscription('mark.changed', onMarkChanged);
 
   const isOnline = useCallback(
@@ -249,7 +205,7 @@ export default function PlayersPage() {
           title="Не удалось загрузить список игроков"
           description={err}
           action={
-            <Button size="sm" onClick={() => refreshRef.current()}>
+            <Button size="sm" onClick={refreshAll}>
               Повторить
             </Button>
           }

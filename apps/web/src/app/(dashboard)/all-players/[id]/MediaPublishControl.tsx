@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Checkbox, InlineBanner, SafeExternalLink } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
 import {
   destinationLabel,
   destinationsForKind,
@@ -74,16 +75,11 @@ export function MediaPublishControl({
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(publicationsUrl(mediaId), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as PublicationListResponse;
+      const body = await apiFetch<PublicationListResponse>(publicationsUrl(mediaId));
       setItems(body.items);
       setRefreshError(null);
     } catch (err) {
-      setRefreshError(`Не удалось обновить статус публикаций: ${(err as Error).message}`);
+      setRefreshError(`Не удалось обновить статус публикаций: ${describeHttpError(err)}`);
     }
   }, [mediaId]);
 
@@ -106,15 +102,15 @@ export function MediaPublishControl({
     async (destination: MediaPublicationDestination) => {
       setRemovingDestination(destination);
       try {
-        const res = await fetch(publicationUrl(mediaId, destination), {
+        const res = await apiResult<void>(publicationUrl(mediaId, destination), {
           method: 'DELETE',
-          credentials: 'include',
+          discardBody: true,
         });
-        if (res.status === 401 || res.status === 403) {
-          setDenied(true);
-          return;
-        }
         if (!res.ok) {
+          if (res.error.status === 401 || res.error.status === 403) {
+            setDenied(true);
+            return;
+          }
           setSubmitError('Не удалось убрать публикацию. Попробуйте ещё раз.');
           return;
         }
@@ -132,22 +128,20 @@ export function MediaPublishControl({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(publicationsUrl(mediaId), {
+      const res = await apiResult<PublicationListResponse>(publicationsUrl(mediaId), {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ destinations: chosen }),
+        json: { destinations: chosen },
       });
-      if (res.status === 401 || res.status === 403) {
-        setDenied(true);
-        setPicking(false);
-        return;
-      }
       if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setDenied(true);
+          setPicking(false);
+          return;
+        }
         setSubmitError('Не удалось поставить в очередь. Попробуйте ещё раз.');
         return;
       }
-      const body = (await res.json()) as PublicationListResponse;
+      const body = res.data;
       setItems((previous) => [...previous, ...body.items]);
       setPollCount(0);
       setPicking(false);

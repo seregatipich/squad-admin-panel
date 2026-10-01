@@ -24,6 +24,7 @@ import {
   StatusDot,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { describeLoadError } from '@/lib/load-error';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -119,14 +120,7 @@ export function VotesBrowser() {
     setItems([]);
     // A stale in-flight loadMore no longer clears this itself.
     setLoadingMore(false);
-    fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as VoteListResponse;
-      })
+    apiFetch<VoteListResponse>(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`)
       .then((data) => {
         if (!current()) return;
         setItems(data.items);
@@ -149,13 +143,9 @@ export function VotesBrowser() {
 
   const loadTotal = useCallback(() => {
     let cancelled = false;
-    fetch(`/api/v1/votes/count?${buildCountApiQuery(filters)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => (res.ok ? ((await res.json()) as { total: number }) : null))
+    apiFetch<{ total: number }>(`/api/v1/votes/count?${buildCountApiQuery(filters)}`)
       .then((data) => {
-        if (!cancelled && data) setTotal(data.total);
+        if (!cancelled) setTotal(data.total);
       })
       .catch(() => {});
     return () => {
@@ -170,8 +160,7 @@ export function VotesBrowser() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
+    apiFetch<ServersResponse>('/api/v1/servers')
       .then((data) => {
         if (cancelled) return;
         setFetchedServers(
@@ -199,12 +188,9 @@ export function VotesBrowser() {
     const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const data = await apiFetch<VoteListResponse>(
         `/api/v1/votes?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT })}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as VoteListResponse;
       if (!current()) return;
       setItems((prev) => appendVotePage(prev, data.items));
       setNextCursor(data.next_cursor);
@@ -234,13 +220,9 @@ export function VotesBrowser() {
     // request was built from the filters in effect when it fired.
     const requestId = listRequestRef.current;
     const current = () => listRequestRef.current === requestId;
-    fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => (res.ok ? ((await res.json()) as VoteListResponse) : null))
+    apiFetch<VoteListResponse>(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`)
       .then((data) => {
-        if (!data || !current()) return;
+        if (!current()) return;
         setItems((prev) => mergeVotePage(data.items, prev));
       })
       .catch(() => {});
@@ -509,13 +491,9 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
   const loadBallots = useCallback(() => {
     setBallotsLoading(true);
     setBallotsError(null);
-    fetch(`/api/v1/votes/${vote.id}`, { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as VoteDetail;
-      })
+    apiFetch<VoteDetail>(`/api/v1/votes/${vote.id}`)
       .then((data) => setBallots(data.ballots))
-      .catch((err: unknown) => setBallotsError((err as Error).message))
+      .catch((err: unknown) => setBallotsError(describeHttpError(err)))
       .finally(() => setBallotsLoading(false));
   }, [vote.id]);
 

@@ -20,6 +20,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError, nullOnHttpError } from '@/lib/api';
 import { purchaseErrorText, type ShopTier } from './bonus-history';
 
 /** `vip_subscriptions.status` — the closed set the API writes. */
@@ -92,30 +93,28 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/subscriptions`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
+      const res = await apiResult<{ rows: Subscription[] }>(
+        `/api/v1/players/${playerId}/subscriptions`,
+      );
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setRows(((await res.json()) as { rows: Subscription[] }).rows);
+      setRows(res.data.rows);
 
-      const tiersRes = await fetch('/api/v1/bonus-shop/tiers', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
+      const tiersRes = await apiResult<{ tiers: ShopTier[] }>('/api/v1/bonus-shop/tiers');
       setTiersError(!tiersRes.ok);
       if (tiersRes.ok) {
-        const body = (await tiersRes.json()) as { tiers: ShopTier[] };
+        const body = tiersRes.data;
         const purchasable = body.tiers.filter((t) => t.price_bonuses != null);
         setTiers(purchasable);
         setSelected((prev) => prev || (purchasable[0]?.id ?? ''));
       }
     } catch (err) {
-      setLoadError((err as Error).message);
+      setLoadError(describeHttpError(err));
     } finally {
       setLoading(false);
     }
@@ -123,9 +122,9 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
 
   useEffect(() => {
     void load();
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { can_manage_economy?: boolean; permissions?: string[] } | null) => {
+    apiFetch<{ can_manage_economy?: boolean; permissions?: string[] }>('/api/v1/me')
+      .catch(nullOnHttpError)
+      .then((body) => {
         setCanGrant(
           (body?.can_manage_economy ?? false) &&
             (body?.permissions?.includes('user:manage_roles') ?? false),
@@ -140,30 +139,29 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/v1/players/${playerId}/subscriptions`, {
+      const res = await apiResult<void>(`/api/v1/players/${playerId}/subscriptions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ tier_id: selected }),
+        json: { tier_id: selected },
+        discardBody: true,
       });
-      if (res.status === 403) {
-        const body = (await res.json().catch(() => null)) as { required?: string } | null;
-        setError(
-          body?.required
-            ? `Недостаточно прав: требуется ${body.required}.`
-            : 'Недостаточно прав для выдачи подписки.',
-        );
-        return;
-      }
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(body?.error ? purchaseErrorText(body.error) : `HTTP ${res.status}`);
+        if (res.error.status === 403) {
+          const body = res.error.jsonBody<{ required?: string }>();
+          setError(
+            body?.required
+              ? `Недостаточно прав: требуется ${body.required}.`
+              : 'Недостаточно прав для выдачи подписки.',
+          );
+          return;
+        }
+        const body = res.error.jsonBody<{ error?: string }>();
+        setError(body?.error ? purchaseErrorText(body.error) : `HTTP ${res.error.status}`);
         return;
       }
       setNotice('Подписка выдана: первый период списан с баланса игрока.');
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(describeHttpError(err));
     } finally {
       setBusy(false);
     }

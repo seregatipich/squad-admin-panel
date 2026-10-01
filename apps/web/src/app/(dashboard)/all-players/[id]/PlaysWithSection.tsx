@@ -18,6 +18,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { type CoplayPartner, coplayUrl, parseCoplayPartners } from './coplay';
 import { fmtDuration } from './presence';
 
@@ -36,18 +37,16 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
     let cancelled = false;
     const controller = new AbortController();
     setError(null);
-    fetch(coplayUrl(playerId), {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (response.status === 401 || response.status === 403) {
-          if (!cancelled) setHidden(true);
-          return null;
+    apiResult<unknown>(coplayUrl(playerId), { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          if (response.error.status === 401 || response.error.status === 403) {
+            if (!cancelled) setHidden(true);
+            return null;
+          }
+          throw response.error;
         }
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const parsed = parseCoplayPartners(await response.json());
+        const parsed = parseCoplayPartners(response.data);
         if (!parsed) throw new Error('Некорректный ответ сервера');
         return parsed;
       })
@@ -55,7 +54,7 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
         if (!cancelled && body) setPartners(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       });
     return () => {
       cancelled = true;
