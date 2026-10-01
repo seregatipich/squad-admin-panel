@@ -14,6 +14,7 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { apiFetch, apiResult, nullOnHttpError } from '@/lib/api';
 
 type PortalState = 'loading' | 'open' | 'closed' | 'error';
 
@@ -45,19 +46,17 @@ export default function PublicWhitelistPage() {
   const refresh = useCallback(async () => {
     setState('loading');
     try {
-      const res = await fetch('/api/v1/public/whitelist/settings', { cache: 'no-store' });
-      if (!res.ok) {
-        setState('error');
-        return;
-      }
-      const data = (await res.json()) as { enabled?: unknown } | null;
+      const data = await apiFetch<{ enabled?: unknown } | null>(
+        '/api/v1/public/whitelist/settings',
+      );
       if (typeof data?.enabled !== 'boolean') {
         setState('error');
         return;
       }
       if (data.enabled) {
-        const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        const me = meRes.ok ? ((await meRes.json()) as { steam_id64: string | null }) : null;
+        const me = await apiFetch<{ steam_id64: string | null } | null>('/api/v1/me').catch(
+          nullOnHttpError,
+        );
         setSteamId64(me?.steam_id64 ?? null);
       }
       setState(data.enabled ? 'open' : 'closed');
@@ -79,50 +78,49 @@ export default function PublicWhitelistPage() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch('/api/v1/public/whitelist/applications', {
+      const res = await apiResult<void>('/api/v1/public/whitelist/applications', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           body: body.trim(),
           contact: contact.trim() || undefined,
-        }),
+        },
+        discardBody: true,
       });
-      if (res.status === 201) {
+      if (res.ok) {
         setSubmitted(true);
         setBody('');
         setContact('');
         return;
       }
-      if (res.status === 404) {
+      const status = res.error.status;
+      if (status === 404) {
         setState('closed');
         return;
       }
-      if (res.status === 401) {
+      if (status === 401) {
         setSteamId64(null);
         setError('Сессия истекла — войдите через Steam ещё раз.');
         return;
       }
-      if (res.status === 409) {
+      if (status === 409) {
         setError(
           'Заявка с этим SteamID64 уже на рассмотрении. Если вы её не подавали, войдите через Steam и отправьте заявку снова.',
         );
         return;
       }
-      if (res.status === 403) {
+      if (status === 403) {
         setError('SteamID64 не совпадает с аккаунтом Steam, под которым вы вошли.');
         return;
       }
-      if (res.status === 429) {
+      if (status === 429) {
         setError('Слишком много заявок с этого адреса. Попробуйте позже.');
         return;
       }
-      if (res.status === 400) {
+      if (status === 400) {
         setError('Проверьте правильность заполнения полей.');
         return;
       }
-      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      setError(`Не удалось отправить заявку: ${data.error ?? res.status}`);
+      setError(`Не удалось отправить заявку: ${res.error.codeOrStatus()}`);
     } catch (err) {
       setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {

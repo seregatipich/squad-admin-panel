@@ -24,10 +24,10 @@ describe('LoginPage', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<LoginPage />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/me', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/me',
+      expect.objectContaining({ credentials: 'include', cache: 'no-store' }),
+    );
     expect(screen.getByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
   });
 

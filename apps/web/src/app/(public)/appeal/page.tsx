@@ -12,6 +12,7 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { ApiResponseError, apiFetch, apiResult, nullOnHttpError } from '@/lib/api';
 
 const BODY_MIN = 20;
 const BODY_MAX = 4000;
@@ -79,10 +80,10 @@ export default function PublicAppealPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        const me = res.ok
-          ? ((await res.json()) as { steam_id64?: string | null; canonical_name?: string })
-          : null;
+        const me = await apiFetch<{
+          steam_id64?: string | null;
+          canonical_name?: string;
+        } | null>('/api/v1/me').catch(nullOnHttpError);
         if (cancelled) return;
         setIdentity(
           me?.steam_id64
@@ -108,18 +109,16 @@ export default function PublicAppealPage() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch('/api/v1/public/appeals', {
+      const res = await apiResult<Partial<SubmittedAppeal> | null>('/api/v1/public/appeals', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           steam_id64: identity.steamId64,
           body: body.trim(),
           contact: contact.trim() || undefined,
-        }),
+        },
       });
-      if (res.status === 201) {
-        const created = (await res.json().catch(() => null)) as Partial<SubmittedAppeal> | null;
+      if (res.ok) {
+        const created = res.data;
         if (typeof created?.number !== 'number' || typeof created.tracking_token !== 'string') {
           setError('Не удалось отправить апелляцию: сервер вернул неожиданный ответ.');
           return;
@@ -127,30 +126,34 @@ export default function PublicAppealPage() {
         setSubmitted({ number: created.number, tracking_token: created.tracking_token });
         return;
       }
-      if (res.status === 401) {
+      const status = res.error.status;
+      if (status === 401) {
         setIdentity({ kind: 'anonymous' });
         setError('Вход через Steam истёк. Войдите ещё раз.');
         return;
       }
-      if (res.status === 403) {
+      if (status === 403) {
         setError('Апелляцию можно подать только за тот аккаунт Steam, с которым вы вошли.');
         return;
       }
-      if (res.status === 409) {
+      if (status === 409) {
         setError('Ваша апелляция уже на рассмотрении.');
         return;
       }
-      if (res.status === 429) {
+      if (status === 429) {
         setError('Слишком много заявок. Попробуйте завтра.');
         return;
       }
-      if (res.status === 400) {
+      if (status === 400) {
         setError('Проверьте правильность заполнения полей.');
         return;
       }
-      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      setError(`Не удалось отправить апелляцию: ${data.error ?? res.status}`);
+      setError(`Не удалось отправить апелляцию: ${res.error.codeOrStatus()}`);
     } catch (err) {
+      if (err instanceof ApiResponseError) {
+        setError('Не удалось отправить апелляцию: сервер вернул неожиданный ответ.');
+        return;
+      }
       setError(`Ошибка сети: ${(err as Error).message}`);
     } finally {
       setSubmitting(false);

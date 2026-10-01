@@ -14,6 +14,7 @@ import {
   PageHeader,
   Skeleton,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 interface AppealStatusView {
   number: number;
@@ -89,12 +90,12 @@ export default function AppealStatusPage() {
       return;
     }
     try {
-      const res = await fetch(`/api/v1/public/appeals/${encodeURIComponent(token)}`, {
-        cache: 'no-store',
-      });
+      const res = await apiResult<Partial<AppealStatusView> | null>(
+        `/api/v1/public/appeals/${encodeURIComponent(token)}`,
+      );
       // The API answers 400 for a token of the wrong length: a truncated link
       // is a missing appeal, not an outage worth retrying.
-      if (res.status === 404 || res.status === 400) {
+      if (!res.ok && (res.error.status === 404 || res.error.status === 400)) {
         setState('missing');
         return;
       }
@@ -102,7 +103,7 @@ export default function AppealStatusPage() {
         setState('error');
         return;
       }
-      const view = (await res.json()) as Partial<AppealStatusView> | null;
+      const view = res.data;
       if (typeof view?.number !== 'number' || typeof view.status !== 'string') {
         setState('error');
         return;

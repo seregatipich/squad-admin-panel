@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { SteamLoginLink } from '@/components/SteamLoginLink';
 import { Card, InlineBanner, PageContainer, PageHeader } from '@/components/ui';
 import { useTranslator } from '@/i18n/LocaleProvider';
+import { apiSend } from '@/lib/api';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +20,8 @@ export default function LoginPage() {
     if (errorCode === 'logout_failed') return;
     (async () => {
       try {
-        const meRes = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (meRes.ok) window.location.href = '/dashboard';
+        await apiSend('/api/v1/me');
+        window.location.href = '/dashboard';
       } catch {
         // Сбой проверки сессии не мешает войти: страница входа остаётся доступной.
       }
