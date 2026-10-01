@@ -270,6 +270,10 @@ jobs:
   test-packages:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     services:
       # Dynamic host ports (Docker assigns a free one); the resolved ports are
       # read back below via the job.services context. tmpfs keeps an interrupted
@@ -347,8 +351,8 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo/cache
-          key: turbo-test-packages-${{ github.sha }}
-          restore-keys: turbo-test-packages-
+          key: turbo-test-packages-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: turbo-test-packages-${{ matrix.shard }}-
       # The worker contract tests start each worker's built dist/index.js under
       # plain Node, which resolves @squad/* to their built output; every other
       # suite here resolves to source through vitest.
@@ -357,7 +361,7 @@ jobs:
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
       - name: Run the package tests with coverage
-        run: bash scripts/ci-test-shard.sh packages
+        run: bash scripts/ci-test-shard.sh packages ${{ matrix.shard }} 3
 
   scripts:
     runs-on: ubuntu-24.04

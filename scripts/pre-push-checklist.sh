@@ -23,6 +23,13 @@
 #   6. pnpm test:scripts, only when scripts/ or .github/ changed (it needs the
 #      database and Redis too).
 #
+# Only a push that updates `dev` is gated. A work-branch push deploys nothing
+# and the same diff is checked in full when it reaches dev; a master push is the
+# fast-forward promotion of a dev tip this checklist already passed. lefthook
+# feeds the native pre-push lines on stdin (`<local ref> <local sha> <remote ref>
+# <remote sha>`); when any remote ref is refs/heads/dev, or stdin carries no
+# lines (a manual run), the checklist runs. FULL=1 always runs.
+#
 # "Changed since origin/dev" is measured from the merge base, like
 # `git diff origin/dev...`: step 1 moves origin/dev, and measured from its tip
 # every commit that landed on dev after this branch forked would count as a
@@ -49,6 +56,15 @@
 #                                 (default 2).
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if [ "${FULL:-0}" != "1" ] && [ ! -t 0 ]; then
+  pushed_refs=""
+  while read -r -t 1 _ _ remote_ref _; do pushed_refs+="${remote_ref}"$'\n'; done
+  if [ -n "$pushed_refs" ] && ! grep -qx 'refs/heads/dev' <<<"$pushed_refs"; then
+    echo "[checklist] skipped — this push does not update dev (work branches and the master promotion are not gated here)"
+    exit 0
+  fi
+fi
 
 fail=0
 declare -a passed=() failed=() skipped=()

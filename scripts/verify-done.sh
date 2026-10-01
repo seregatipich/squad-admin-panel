@@ -35,8 +35,16 @@ set -u
 #                      here: the branch has not been merged yet. Use this to attest a wave
 #                      task done; the orchestrator runs the default mode after
 #                      merging to dev. See CLAUDE.md "Parallel-wave handoff".
+#   --wait [seconds]   integration mode only: poll until the deploy and ci runs
+#                      for the tip finish (default 900 s) instead of failing on a
+#                      run that is still in progress. Start the deploy and the ci
+#                      run together (promote right after pushing dev) and let one
+#                      `verify-done.sh --wait` cover both. VERIFY_DONE_POLL_SECS
+#                      sets the poll interval (default 10).
 MODE=dev
 FEATURE_BRANCH=""
+WAIT_SECS=0
+POLL_SECS=${VERIFY_DONE_POLL_SECS:-10}
 while [ $# -gt 0 ]; do
   case "$1" in
   --feature)
@@ -50,8 +58,24 @@ while [ $# -gt 0 ]; do
       ;;
     esac
     ;;
+  --wait)
+    shift
+    case "${1:-}" in
+    "" | -*) WAIT_SECS=900 ;;
+    *)
+      WAIT_SECS=$1
+      shift
+      ;;
+    esac
+    case "$WAIT_SECS" in
+    '' | *[!0-9]*)
+      echo "verify-done: --wait takes a number of seconds (got '$WAIT_SECS')" >&2
+      exit 2
+      ;;
+    esac
+    ;;
   -h | --help)
-    echo "usage: verify-done.sh [--feature [branch]]"
+    echo "usage: verify-done.sh [--feature [branch] | --wait [seconds]]"
     exit 0
     ;;
   *)
@@ -221,6 +245,26 @@ run_for_sha() {
     jq -r --arg sha "$3" '[.[] | select(.headSha == $sha)][0] // empty | "\(.status) \(.conclusion) \(.databaseId)"'
 }
 
+# await_run <branch> <workflow> <sha> <absent-grace-seconds>
+# Like run_for_sha, but with --wait it polls until the run is completed. A run
+# that does not exist yet (the push was seconds ago) is waited for at most
+# <absent-grace-seconds>. Prints the last "<status> <conclusion> <run id>" seen.
+await_run() {
+  local run waited=0 grace=$4
+  run=$(run_for_sha "$1" "$2" "$3")
+  while [ "$waited" -lt "$WAIT_SECS" ]; do
+    if [ -n "$run" ]; then
+      [ "${run%% *}" = completed ] && break
+    elif [ "$waited" -ge "$grace" ]; then
+      break
+    fi
+    sleep "$POLL_SECS"
+    waited=$((waited + POLL_SECS))
+    run=$(run_for_sha "$1" "$2" "$3")
+  done
+  printf '%s' "$run"
+}
+
 # check_run <label> <status conclusion id> <sha> <hint>
 check_run() {
   local label=$1 run=$2 sha=$3 hint=$4 status rest conclusion run_id
@@ -229,7 +273,7 @@ check_run() {
   conclusion=${rest%% *}
   run_id=${rest#* }
   if [ "$status" != "completed" ]; then
-    fail "$label run $run_id for $sha is still $status — work is not done until it is green (gh run watch $run_id)"
+    fail "$label run $run_id for $sha is still $status — work is not done until it is green (re-run with --wait, or gh run watch $run_id)"
   elif [ "$conclusion" = "success" ]; then
     pass "$label green at $sha (run $run_id)"
   else
@@ -241,7 +285,7 @@ check_run() {
 # deploy.yml ignores pushes that only touch Markdown or docs/, so such a
 # tip has no deploy run of its own; the newest green deploy of an ancestor
 # then already serves everything the tip changes.
-deploy_run=$(run_for_sha dev deploy.yml "$dev_sha")
+deploy_run=$(await_run dev deploy.yml "$dev_sha" 30)
 if [ -n "$deploy_run" ]; then
   check_run "dev stand deploy" "$deploy_run" "$dev_sha" "fix forward and push dev again"
 else
@@ -267,7 +311,7 @@ fi
 master_sha=$(git rev-parse origin/master 2>/dev/null || echo "")
 if [ -n "$dev_sha" ] && [ "$master_sha" = "$dev_sha" ]; then
   pass "dev tip promoted (origin/master == origin/dev == ${dev_sha:0:12})"
-  ci_run=$(run_for_sha master ci.yml "$dev_sha")
+  ci_run=$(await_run master ci.yml "$dev_sha" "$WAIT_SECS")
   if [ -z "$ci_run" ]; then
     fail "no ci run found on master for $dev_sha — watch the run the promotion started (gh run watch)"
   else

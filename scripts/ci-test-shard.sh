@@ -4,7 +4,7 @@
 #
 # Usage: bash scripts/ci-test-shard.sh api <index> <count>
 #        bash scripts/ci-test-shard.sh web <index> <count>
-#        bash scripts/ci-test-shard.sh packages
+#        bash scripts/ci-test-shard.sh packages [<index> <count>]
 #
 # The package list stays the `--filter` list of the root `test:cov` script, the
 # one scripts/test-cov-complete.sh keeps complete.
@@ -18,7 +18,11 @@
 # package's vitest.config.ts to the merged coverage.
 #
 # `packages` is every other entry. Each suite runs whole under its own
-# thresholds, in a pool of PNPM_WORKSPACE_CONCURRENCY packages. pnpm cannot run
+# thresholds, so unlike api/web it needs no blob merge: with `<index> <count>` it
+# takes every <count>-th package of the longest-first order, starting at the
+# <index>-th, which hands each slice one of the longest suites. Without them it
+# runs them all. Within a slice the suites run in a pool of
+# PNPM_WORKSPACE_CONCURRENCY packages. pnpm cannot run
 # them in a chosen order (`--no-sort` sorts by directory, which starts the
 # longest suites last), so the pool here starts the longest suites first and
 # the short ones fill the remaining slots instead of stretching the tail.
@@ -38,7 +42,7 @@ cd "$repo_root"
 LONGEST_FIRST=(@squad/db @squad/worker-log-ingest @squad/worker-rcon)
 
 usage() {
-  echo "usage: ci-test-shard.sh api <index> <count> | web <index> <count> | packages" >&2
+  echo "usage: ci-test-shard.sh api <index> <count> | web <index> <count> | packages [<index> <count>]" >&2
   exit 2
 }
 
@@ -90,7 +94,17 @@ web)
   run_sharded @squad/web "$2" "$3"
   exit 0
   ;;
-packages) [ $# -eq 1 ] || usage ;;
+packages)
+  if [ $# -eq 3 ]; then
+    [[ "$2" =~ ^[1-9][0-9]*$ && "$3" =~ ^[1-9][0-9]*$ && "$2" -le "$3" ]] || usage
+    pkg_index=$2
+    pkg_count=$3
+  else
+    [ $# -eq 1 ] || usage
+    pkg_index=1
+    pkg_count=1
+  fi
+  ;;
 *) usage ;;
 esac
 
@@ -103,10 +117,17 @@ for name in "${all[@]}"; do
   contains "$name" "${LONGEST_FIRST[@]}" || ordered+=("$name")
 done
 
+selected=()
+for i in "${!ordered[@]}"; do
+  [ $((i % pkg_count)) -eq $((pkg_index - 1)) ] && selected+=("${ordered[$i]}")
+done
+ordered=(${selected[@]+"${selected[@]}"})
+
 if [ "${CI_TEST_SHARD_DRY_RUN:-}" = 1 ]; then
-  printf '%s\n' "${ordered[@]}"
+  printf '%s\n' ${ordered[@]+"${ordered[@]}"}
   exit 0
 fi
+[ ${#ordered[@]} -gt 0 ] || { echo "ci-test-shard: slice $pkg_index/$pkg_count selected no package"; exit 0; }
 
 concurrency=${PNPM_WORKSPACE_CONCURRENCY:-4}
 [[ "$concurrency" =~ ^[1-9][0-9]*$ ]] || {

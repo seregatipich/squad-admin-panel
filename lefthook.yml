@@ -48,9 +48,11 @@ pre-push:
       # stand: biome, gitleaks, typecheck and tests of what changed since
       # origin/dev (auto-provisioning a test DB when possible; DB-backed suites
       # are skipped with a warning without one). `ci` on master is the
-      # authoritative gate. Runs on every push, the dev→master promotion
-      # included. Bypass in an emergency with `git push --no-verify`.
+      # authoritative gate. Runs only for pushes that update dev; work-branch
+      # pushes and the dev→master promotion skip it. Bypass in an emergency with `git push --no-verify`.
       # Knobs: FULL=1 (the full gate: build, test:cov, mutation tests),
       # SKIP_BUILD=1 (with FULL=1), PREPUSH_TURBO_CONCURRENCY (default 2).
       priority: 2
+      # Receives the pushed refspecs so it can skip pushes that are not dev.
+      use_stdin: true
       run: bash scripts/pre-push-checklist.sh

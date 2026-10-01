@@ -36,7 +36,7 @@ Committed project settings load automatically — no per-user setup.
 
 ## Layer 2 — git hooks (lefthook)
 
-[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` as a command on `pre-commit` (`check-commit`) and on `pre-push` (`check-push`, with `use_stdin: true` so it receives the native refspec lines). The pre-push guard runs on every push — including cross-ref pushes such as the dev→master promotion and file-less branch deletions. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
+[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` as a command on `pre-commit` (`check-commit`) and on `pre-push` (`check-push`, with `use_stdin: true` so it receives the native refspec lines). The pre-push guard runs on every push — including cross-ref pushes such as the dev→master promotion and file-less branch deletions. The `checklist` command is also fed the refspecs (`use_stdin: true`) and runs only for a push that updates `dev`. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
 
 ## Layer 3 — GitHub rulesets (authoritative)
 
@@ -150,7 +150,7 @@ the newest SHA matters and nothing deploys from it.
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
 | `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
 | `test-web` (2 shards) | half of the web suite each — no services, no build |
-| `test-packages` | every other `test:cov` package whole under its own thresholds, four at a time, longest first; builds only the workers the contract tests start |
+| `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; each shard takes every third package of that order, so each starts with one of the three longest suites; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
@@ -220,11 +220,13 @@ runner; `scripts/check-runner-health.sh` went with it.
 
 ## Completion verification
 
-The harness also enforces *how tasks end*: CLAUDE.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:
+The harness also enforces *how tasks end*: CLAUDE.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from the angles that matter for the change — requirements coverage, tests that provably exercise the change, a diff self-review, docs, runtime evidence when the change is observable at runtime, and mechanical state. The mechanical angles are automated:
 
 ```bash
-bash scripts/verify-done.sh   # exit 0 required before reporting done
+bash scripts/verify-done.sh --wait   # exit 0 required before reporting done
 ```
+
+`--wait [seconds]` (default 900) polls every `VERIFY_DONE_POLL_SECS` (default 10) until the `deploy` and `ci` runs for the tip have finished, instead of failing on a run that is still in progress. That lets the promotion follow the `dev` push immediately: the stand deploy and `ci` run side by side and one command waits for both. Without `--wait` a run in progress fails the check.
 
 It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
 

@@ -286,11 +286,14 @@ describe('local pre-push checklist and git hooks', () => {
       untracked?: string[];
       packages?: { name: string; path: string }[];
       env?: NodeJS.ProcessEnv;
+      /** Native pre-push lines lefthook would pipe in; empty for a manual run. */
+      input?: string;
     } = {},
   ): CommandResult {
     const items = options.packages ?? [];
     return run('/bin/bash', [fixture.script], {
       cwd: fixture.root,
+      input: options.input,
       env: {
         OPS_LOG: fixture.log,
         DB_ENV_LOG: fixture.dbEnvLog,
@@ -339,6 +342,49 @@ describe('local pre-push checklist and git hooks', () => {
       'src/queue.test.ts': 'const redis = process.env.REDIS_URL;\n',
     },
   };
+
+  describe('which pushes are gated', () => {
+    const pushLine = (remoteRef: string) =>
+      `refs/heads/work ${MERGE_BASE} ${remoteRef} ${'0'.repeat(40)}\n`;
+    const gatedCommands = (fixture: ChecklistFixture) => checklistCommands(fixture);
+
+    it('runs for a push that updates dev', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, { input: pushLine('refs/heads/dev') });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(gatedCommands(fixture).length > 0, 'the dev push must run the checklist');
+    });
+
+    it('skips a work-branch push, which deploys nothing', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, { input: pushLine('refs/heads/feature/x') });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /skipped — this push does not update dev/);
+      assert.deepEqual(gatedCommands(fixture), []);
+    });
+
+    it('skips the dev→master promotion, whose tip the dev push already passed', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, { input: pushLine('refs/heads/master') });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(gatedCommands(fixture), []);
+    });
+
+    it('runs when one of several pushed refs is dev', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        input: pushLine('refs/heads/feature/x') + pushLine('refs/heads/dev'),
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(gatedCommands(fixture).length > 0);
+    });
+
+    it('runs FULL=1 whatever is pushed', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      runChecklist(fixture, { input: pushLine('refs/heads/master'), env: { FULL: '1' } });
+      assert.ok(gatedCommands(fixture).length > 0);
+    });
+  });
 
   it('runs the light default checklist in order, scoped to changes since the merge base', () => {
     const fixture = checklistFixture(FIXTURE_PACKAGES);
