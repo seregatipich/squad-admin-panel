@@ -26,8 +26,10 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   apiItemToRow,
   buildApiQuery,
@@ -70,6 +72,8 @@ interface ServerOption {
  * модуль со своим владельцем; здесь канал переводится в тон дизайн-системы.
  * Цвет только различает соседние категории (§5) — смысл несёт подпись.
  */
+const NO_SERVERS: ServerOption[] = [];
+
 const SCOPE_TONE: Record<ChatScope, BadgeTone> = {
   all: 'accent',
   team: 'good',
@@ -95,14 +99,20 @@ export function ChatArchive() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveEnabled, setLiveEnabled] = useState(false);
-  const [servers, setServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [canBan, setCanBan] = useState(false);
   // Tracks the most recently started load()/loadMore() request; a response is
   // applied only if it is still the current one, so a filter change (a new
   // load()) can never be clobbered by a slower loadMore() (or an even older
   // load()) that resolves after it — see finding #504.
   const requestIdRef = useRef(0);
+
+  const serversResource = useApiResource<{ items?: ServerOption[] }>('/api/v1/servers');
+  const servers = serversResource.data?.items ?? NO_SERVERS;
+
+  // BANNAME-3 — derives the «Забанить ник» button's visibility the same way
+  // servers/[id]/page.tsx does: from the squad `ban` permission on /api/v1/me.
+  const meResource = useApiResource<{ squad_permissions?: string[] }>('/api/v1/me');
+  const canBan = meResource.data?.squad_permissions?.includes('ban') ?? false;
 
   const serverNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -122,52 +132,21 @@ export function ChatArchive() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((data: { items: ServerOption[] }) => {
-        if (!cancelled) setServers(data.items ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // BANNAME-3 — derives the «Забанить ник» button's visibility the same way
-  // servers/[id]/page.tsx does: from the squad `ban` permission on /api/v1/me.
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((me: { squad_permissions?: string[] } | null) => {
-        if (!cancelled) setCanBan(me?.squad_permissions?.includes('ban') ?? false);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const load = useCallback(async () => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     setLiveRows([]);
     try {
-      const res = await fetch(`/api/v1/chat/messages?${buildApiQuery(filters)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ChatListResponse;
+      const data = await apiFetch<ChatListResponse>(
+        `/api/v1/chat/messages?${buildApiQuery(filters)}`,
+      );
       if (requestIdRef.current !== requestId) return;
       setPageRows(data.items.map(apiItemToRow));
       setCursor(data.next_cursor);
     } catch (err) {
       if (requestIdRef.current !== requestId) return;
-      setError((err as Error).message);
+      setError(describeHttpError(err));
       setPageRows([]);
       setCursor(null);
     } finally {
@@ -184,18 +163,15 @@ export function ChatArchive() {
     const requestId = ++requestIdRef.current;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/v1/chat/messages?${buildApiQuery(filters, cursor)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ChatListResponse;
+      const data = await apiFetch<ChatListResponse>(
+        `/api/v1/chat/messages?${buildApiQuery(filters, cursor)}`,
+      );
       if (requestIdRef.current !== requestId) return;
       setPageRows((prev) => [...prev, ...data.items.map(apiItemToRow)]);
       setCursor(data.next_cursor);
     } catch (err) {
       if (requestIdRef.current !== requestId) return;
-      setError((err as Error).message);
+      setError(describeHttpError(err));
     } finally {
       if (requestIdRef.current === requestId) setLoadingMore(false);
     }

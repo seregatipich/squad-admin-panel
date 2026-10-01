@@ -23,6 +23,8 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   buildCombatLogTeamkillHref,
   buildTeamkillQueryString,
@@ -50,6 +52,8 @@ interface ServersResponse {
 }
 
 /** Подписи направления для `SortableTh`: примитивы не читают словарь переводов. */
+const NO_SERVERS: ServerOption[] = [];
+
 const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по убыванию' } as const;
 
 export function TeamkillsBrowser() {
@@ -58,7 +62,8 @@ export function TeamkillsBrowser() {
   const searchParams = useSearchParams();
   const filters = useMemo(() => parseTeamkillFilters(searchParams), [searchParams]);
 
-  const [servers, setServers] = useState<ServerOption[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers');
+  const servers = serversResource.data?.items ?? NO_SERVERS;
   const [data, setData] = useState<TeamkillSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,19 +77,6 @@ export function TeamkillsBrowser() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
-      .then((body) => {
-        if (!cancelled) setServers(body.items ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // Отдельная функция, а не тело эффекта: тот же запрос повторяет кнопка
   // «Повторить» в полосе ошибки, и фильтры при этом не меняются.
   const load = useCallback(
@@ -92,16 +84,16 @@ export function TeamkillsBrowser() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
-          `/api/v1/moderation/teamkills?${buildTeamkillSummaryApiQuery(filters)}`,
-          { credentials: 'include', cache: 'no-store', signal },
+        setData(
+          await apiFetch<TeamkillSummaryResponse>(
+            `/api/v1/moderation/teamkills?${buildTeamkillSummaryApiQuery(filters)}`,
+            { signal },
+          ),
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        setData((await res.json()) as TeamkillSummaryResponse);
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         setData(null);
-        setError((err as Error).message);
+        setError(describeHttpError(err));
       } finally {
         if (!signal?.aborted) setLoading(false);
       }

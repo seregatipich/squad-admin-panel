@@ -23,6 +23,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 import { RelativeTime } from './RelativeTime';
 import type { ServerRow } from './types';
 
@@ -215,13 +216,12 @@ function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () 
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch(`/api/v1/servers/${server.id}/restart`, {
+      const result = await apiResult<unknown>(`/api/v1/servers/${server.id}/restart`, {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
+        discardBody: true,
       });
-      if (!r.ok) {
-        setError(r.status === 403 ? 'нет прав' : `ошибка ${r.status}`);
+      if (!result.ok) {
+        setError(result.error.status === 403 ? 'нет прав' : `ошибка ${result.error.status}`);
       } else {
         onAction();
       }

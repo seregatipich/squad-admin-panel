@@ -27,8 +27,10 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, describeHttpError, nullOnHttpError } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   appendPage,
   buildExportApiQuery,
@@ -77,6 +79,8 @@ interface PlayersResponse {
  * Тип боевого события. Оттенки различают соседние категории и ничего не
  * сообщают о состоянии системы: смысл несёт подпись внутри метки (§5).
  */
+const NO_SERVERS: ServerOption[] = [];
+
 const EVENT_TONE: Record<string, BadgeTone> = {
   death: 'crit',
   damage: 'warn',
@@ -128,7 +132,10 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [servers, setServers] = useState<ServerOption[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers', {
+    enabled: !lockedServerId,
+  });
+  const servers = serversResource.data?.items ?? NO_SERVERS;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [damageSort, setDamageSort] = useState<SortDir>('desc');
   const [liveEnabled, setLiveEnabled] = useState(false);
@@ -161,20 +168,6 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    if (lockedServerId) return;
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((data: ServersResponse) => {
-        if (!cancelled) setServers(data.items ?? []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [lockedServerId]);
-
   const loadFirstPage = useCallback(() => {
     listRequestRef.current += 1;
     const requestId = listRequestRef.current;
@@ -182,16 +175,10 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     setLoading(true);
     setError(null);
     setApproxTotal(null);
-    fetch(
+    apiFetch<Partial<CombatListResponse>>(
       `/api/v1/combat-events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId, damageSort: serverDamageSort })}`,
-      {
-        credentials: 'include',
-        cache: 'no-store',
-      },
     )
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as Partial<CombatListResponse>;
+      .then((body) => {
         if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
         return body as CombatListResponse;
       })
@@ -204,7 +191,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
       })
       .catch((err: unknown) => {
         if (!current()) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(describeHttpError(err));
         setRows([]);
         setLiveRows([]);
         setNextCursor(null);
@@ -231,19 +218,16 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     const current = () => listRequestRef.current === requestId;
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const body = await apiFetch<Partial<CombatListResponse>>(
         `/api/v1/combat-events?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT, lockedServerId, damageSort: serverDamageSort })}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as Partial<CombatListResponse>;
       if (!Array.isArray(body.rows)) throw new Error('Некорректный ответ сервера');
       if (!current()) return;
       setRows((prev) => appendPage(prev, body.rows as CombatApiRow[]));
       setNextCursor(body.nextCursor ?? null);
     } catch (err) {
       if (!current()) return;
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeHttpError(err));
     } finally {
       if (current()) setLoadingMore(false);
     }
@@ -686,16 +670,15 @@ function PlayerAutocomplete({
       setSuggestions([]);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`/api/v1/players?q=${encodeURIComponent(query)}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      apiFetch<PlayersResponse | null>(`/api/v1/players?q=${encodeURIComponent(query)}`, {
+        signal: controller.signal,
       })
-        .then((res) => (res.ok ? res.json() : { items: [] }))
-        .then((data: PlayersResponse) => {
-          if (cancelled) return;
-          const names = (data.items ?? [])
+        .catch(nullOnHttpError)
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          const names = (data?.items ?? [])
             .map((item) => item.canonical_name)
             .filter((name): name is string => Boolean(name));
           setSuggestions(Array.from(new Set(names)).slice(0, 10));
@@ -703,7 +686,7 @@ function PlayerAutocomplete({
         .catch(() => {});
     }, 250);
     return () => {
-      cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [draft]);

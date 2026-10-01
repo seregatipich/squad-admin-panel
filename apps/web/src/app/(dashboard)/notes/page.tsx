@@ -24,6 +24,8 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface FeedNote {
   id: string;
@@ -52,6 +54,7 @@ interface Author {
   role_name: string | null;
 }
 
+const NO_AUTHORS: Author[] = [];
 const BODY_TRUNCATE = 160;
 
 function formatDate(iso: string): string {
@@ -103,7 +106,8 @@ export default function NotesFeedPage() {
   const [rows, setRows] = useState<FeedNote[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [canViewDeleted, setCanViewDeleted] = useState(false);
-  const [authors, setAuthors] = useState<Author[]>([]);
+  const authorsResource = useApiResource<{ items: Author[] }>('/api/v1/notes/authors');
+  const authors = authorsResource.data?.items ?? NO_AUTHORS;
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,20 +143,16 @@ export default function NotesFeedPage() {
     setError(null);
     try {
       const params = buildParams(filters);
-      const res = await fetch(`/api/v1/notes?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      const body = await apiFetch<FeedResponse>(`/api/v1/notes?${params.toString()}`, {
         signal: controller.signal,
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as FeedResponse;
       if (controller.signal.aborted) return;
       setRows(body.items);
       setNextCursor(body.next_cursor);
       setCanViewDeleted(body.can_view_deleted);
     } catch (e) {
       if (controller.signal.aborted) return;
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -162,13 +162,6 @@ export default function NotesFeedPage() {
     void load();
     return () => loadAbortRef.current?.abort();
   }, [load]);
-
-  useEffect(() => {
-    fetch('/api/v1/notes/authors', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((body: { items: Author[] }) => setAuthors(body.items))
-      .catch(() => setAuthors([]));
-  }, []);
 
   async function loadMore() {
     if (!nextCursor || busy) return;
@@ -181,17 +174,12 @@ export default function NotesFeedPage() {
     try {
       const params = buildParams(requestFilters);
       params.set('cursor', nextCursor);
-      const res = await fetch(`/api/v1/notes?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as FeedResponse;
+      const body = await apiFetch<FeedResponse>(`/api/v1/notes?${params.toString()}`);
       if (requestFilters !== filtersRef.current) return;
       setRows((prev) => [...prev, ...body.items]);
       setNextCursor(body.next_cursor);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }
@@ -217,7 +205,7 @@ export default function NotesFeedPage() {
       anchor.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setBusy(false);
     }

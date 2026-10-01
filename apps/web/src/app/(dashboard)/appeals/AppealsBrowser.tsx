@@ -25,6 +25,7 @@ import {
   TextInput,
   Toolbar,
 } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   type AppealFilters,
@@ -149,17 +150,18 @@ export function AppealsBrowser() {
       if (!options?.silent) setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
+        const result = await apiResult<unknown>(
           `/api/v1/appeals?${buildApiQuery({ status: filterStatus, page: filterPage })}`,
-          { credentials: 'include', cache: 'no-store' },
         );
-        if (res.status === 403 || res.status === 401) {
-          setForbidden(true);
-          setItems([]);
-          return;
+        if (!result.ok) {
+          if (result.error.status === 403 || result.error.status === 401) {
+            setForbidden(true);
+            setItems([]);
+            return;
+          }
+          throw new Error(describeHttpError(result.error));
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const parsed = appealListResponseSchema.safeParse(await res.json());
+        const parsed = appealListResponseSchema.safeParse(result.data);
         if (!parsed.success) throw new Error('Неожиданный формат ответа сервера');
         const data = parsed.data;
         setForbidden(false);
@@ -202,15 +204,16 @@ export function AppealsBrowser() {
       const internal = internalNote[appeal.id]?.trim();
       if (internal) payload.internal_note = internal;
 
-      const res = await fetch(`/api/v1/appeals/${appeal.id}`, {
+      const result = await apiResult<unknown>(`/api/v1/appeals/${appeal.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
+        discardBody: true,
       });
-      if (!res.ok) {
-        const parsed = appealErrorResponseSchema.safeParse(await res.json().catch(() => null));
-        setError(decideErrorText(parsed.success ? parsed.data.error : undefined, res.status));
+      if (!result.ok) {
+        const parsed = appealErrorResponseSchema.safeParse(result.error.jsonBody());
+        setError(
+          decideErrorText(parsed.success ? parsed.data.error : undefined, result.error.status),
+        );
         return;
       }
       await load({ silent: true });

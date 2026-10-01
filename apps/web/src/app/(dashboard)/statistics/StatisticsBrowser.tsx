@@ -15,7 +15,9 @@ import {
   TextInput,
   Toolbar,
 } from '@/components/ui';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
 import { serverColor } from '@/lib/server-color';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   buildStatisticsQuery,
   type DrillTarget,
@@ -33,6 +35,8 @@ import {
 
 const SELECTION_DEBOUNCE_MS = 300;
 const REVOKE_URL_DELAY_MS = 10_000;
+// Statistics aggregate a whole date range, heavier than the panel's usual reads.
+const STATISTICS_TIMEOUT_MS = 30_000;
 
 const StackedSeriesChart = dynamic(
   () => import('./StatisticsCharts').then((mod) => mod.StackedSeriesChart),
@@ -65,7 +69,15 @@ interface ServersResponse {
 }
 
 export function StatisticsBrowser() {
-  const [servers, setServers] = useState<ServerOption[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers');
+  const servers = useMemo<ServerOption[]>(
+    () =>
+      (serversResource.data?.items ?? []).map((item) => ({
+        id: item.id,
+        display_name: item.display_name,
+      })),
+    [serversResource.data],
+  );
   const [selected, setSelected] = useState<string[]>([]);
   const [committed, setCommitted] = useState<string[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -92,20 +104,6 @@ export function StatisticsBrowser() {
   useEffect(() => {
     setRange(presetRange(preset, new Date(), customFrom, customTo));
   }, [preset, customFrom, customTo]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
-      .then((body) => {
-        if (cancelled) return;
-        setServers(body.items.map((item) => ({ id: item.id, display_name: item.display_name })));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Клик вне списка и Escape закрывают его, иначе выбор серверов не применится.
   useEffect(() => {
@@ -151,17 +149,14 @@ export function StatisticsBrowser() {
     setError(null);
     try {
       const query = buildStatisticsQuery({ from: range.from, to: range.to, servers: committed });
-      const res = await fetch(`/api/v1/statistics${query}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      const body = await apiFetch<StatisticsResponse>(`/api/v1/statistics${query}`, {
+        timeoutMs: STATISTICS_TIMEOUT_MS,
       });
-      if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      const body = (await res.json()) as StatisticsResponse;
       if (requestIdRef.current !== requestId) return;
       setData(body);
     } catch (e) {
       if (requestIdRef.current !== requestId) return;
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? `ошибка ${e.status}` : describeHttpError(e));
     } finally {
       if (requestIdRef.current === requestId) setLoading(false);
     }

@@ -35,6 +35,7 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, apiSend, describeHttpError } from '@/lib/api';
 
 interface ListResponse {
   items: BannedNameRule[];
@@ -97,12 +98,7 @@ export default function BannedNamesPage() {
     params.set('page', String(page));
     params.set('page_size', String(PAGE_SIZE));
     try {
-      const res = await fetch(`/api/v1/banned-names?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as ListResponse;
+      const body = await apiFetch<ListResponse>(`/api/v1/banned-names?${params.toString()}`);
       // Ответ на устаревший поиск или страницу не должен затирать свежий.
       if (requestId !== latestLoadRef.current) return;
       setRows(body.items);
@@ -111,7 +107,7 @@ export default function BannedNamesPage() {
       setMsg((current) => (current?.kind === 'err' ? null : current));
     } catch (e) {
       if (requestId !== latestLoadRef.current) return;
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       if (requestId === latestLoadRef.current) setLoading(false);
     }
@@ -173,17 +169,13 @@ export default function BannedNamesPage() {
     setDeletingId(rule.id);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/banned-names/${rule.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/banned-names/${rule.id}`, { method: 'DELETE' });
       setPendingDelete(null);
       setMsg({ kind: 'ok', text: 'Правило удалено.' });
       await load();
     } catch (e) {
       setPendingDelete(null);
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setDeletingId(null);
     }
