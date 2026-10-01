@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -111,5 +111,41 @@ describe('route-registration-parity', () => {
       extraInRegistration,
       `registerRoutes() registers identifiers that routes/index.ts never imports: ${extraInRegistration.join(', ')}. Remove the stale registration.`,
     ).toEqual([]);
+  });
+
+  // A large route module is split into `routes/<name>.ts` (the entry file
+  // registered in routes/index.ts) plus one sub-plugin per concern in
+  // `routes/<name>/`. The directory is invisible to the file checks above, so
+  // a sub-plugin dropped into it and never registered by its entry file would
+  // silently serve no routes.
+  it('registers every sub-plugin file of a split route module from its entry file', () => {
+    const subPluginDirs = readdirSync(ROUTES_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+
+    const problems: string[] = [];
+    for (const dir of subPluginDirs) {
+      const entryPath = resolve(ROUTES_DIR, `${dir}.ts`);
+      if (!existsSync(entryPath)) {
+        problems.push(`routes/${dir}/ has no entry file routes/${dir}.ts`);
+        continue;
+      }
+      const entrySource = readFileSync(entryPath, 'utf-8');
+      for (const file of readdirSync(resolve(ROUTES_DIR, dir)).filter((n) => n.endsWith('.ts'))) {
+        const base = file.replace(/\.ts$/, '');
+        const importMatch = new RegExp(`^import (\\w+) from '\\./${dir}/${base}\\.js';$`, 'm').exec(
+          entrySource,
+        );
+        if (!importMatch?.[1]) {
+          problems.push(`routes/${dir}/${file} is not imported by routes/${dir}.ts`);
+        } else if (!entrySource.includes(`await app.register(${importMatch[1]});`)) {
+          problems.push(
+            `routes/${dir}/${file} is imported but never registered by routes/${dir}.ts`,
+          );
+        }
+      }
+    }
+    expect(problems).toEqual([]);
   });
 });
