@@ -19,6 +19,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { formatCount, formatDuration, medalFor } from '../helpers';
 import {
   BONUS_PERIODS,
@@ -79,13 +80,8 @@ function BonusLeaderboardBrowser() {
     const current = () => requestRef.current === requestId;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/leaderboards/bonuses?${buildApiQuery(period)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as BonusLeaderboardBody;
+    apiFetch<BonusLeaderboardBody>(`/api/v1/leaderboards/bonuses?${buildApiQuery(period)}`)
+      .then((body) => {
         if (!Array.isArray(body?.rows)) throw new Error('Некорректный ответ сервера');
         return body;
       })
@@ -94,7 +90,7 @@ function BonusLeaderboardBrowser() {
       })
       .catch((err: unknown) => {
         if (!current()) return;
-        setError((err as Error).message);
+        setError(describeHttpError(err));
         setData(null);
       })
       .finally(() => {

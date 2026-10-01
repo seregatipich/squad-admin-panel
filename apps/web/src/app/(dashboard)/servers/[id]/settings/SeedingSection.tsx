@@ -5,7 +5,7 @@ import {
 } from '@squad/shared-types';
 import { useEffect, useState } from 'react';
 import { Button, GroupedList, GroupedRow, InlineBanner, TextInput } from '@/components/ui';
-import { readErrorMessage, readJson } from './helpers';
+import { describeSettingsError, fetchValidated } from './helpers';
 import { useSavedFlag } from './useSavedFlag';
 
 interface SeedingSectionProps {
@@ -41,9 +41,7 @@ export function SeedingSection({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok || cancelled) return;
-        const me = await readJson(res, meSquadPermissionsResponse, 'профиль');
+        const me = await fetchValidated('/api/v1/me', meSquadPermissionsResponse, 'профиль');
         if (!cancelled) setCanManageServer(me.squad_permissions?.includes('manageserver') ?? false);
       } catch {
         // permission fetch is best-effort; the section simply stays hidden
@@ -58,18 +56,18 @@ export function SeedingSection({
     setSeedingBusy(true);
     setSeedingErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/seeding-settings`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(seedingDraft),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      onSaved(await readJson(res, seedingSettingsResponse, 'пороги сидинга'));
+      onSaved(
+        await fetchValidated(
+          `/api/v1/servers/${serverId}/seeding-settings`,
+          seedingSettingsResponse,
+          'пороги сидинга',
+          { method: 'PUT', json: seedingDraft },
+        ),
+      );
       setSeedingDraft({});
       flashSeedingSaved();
     } catch (e) {
-      setSeedingErr((e as Error).message);
+      setSeedingErr(describeSettingsError(e));
     } finally {
       setSeedingBusy(false);
     }

@@ -1,5 +1,5 @@
 'use client';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertDialog,
   Badge,
@@ -13,8 +13,10 @@ import {
   Modal,
   SearchField,
 } from '@/components/ui';
+import { type ApiError, apiResult, describeHttpError } from '@/lib/api';
 import { announcesMatchBoundary } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { canSubmitLayer, filterLayers, formatMatchElapsed } from './map-widget-helpers';
 
 /** Резервный опрос: изменения карты приходят по live-шине, воркер обновляет статус раз в ~30 с. */
@@ -45,13 +47,10 @@ interface CatalogLayer {
 
 type PickerMode = 'next' | 'change' | null;
 
-async function readJsonError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { error?: string };
-    return body.error ?? `HTTP ${res.status}`;
-  } catch {
-    return `HTTP ${res.status}`;
-  }
+const NO_LAYERS: CatalogLayer[] = [];
+
+function readJsonError(error: ApiError): string {
+  return error.jsonBody<{ error?: string }>()?.error ?? `HTTP ${error.status}`;
 }
 
 /** Служебный ярлык над значением — единственное место, где разрешён капслок (§1). */
@@ -74,71 +73,33 @@ function MapSlot({ label, children }: { label: string; children: ReactNode }) {
  * `POST /api/v1/servers/:serverId/map/{next,change,end-match}`.
  */
 export function MapWidget({ serverId, canChangeMap }: { serverId: string; canChangeMap: boolean }) {
-  const [data, setData] = useState<MapResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Изменения карты приходят по live-шине; опрос — резервный.
+  const mapResource = useApiResource<MapResponse>(`/api/v1/servers/${serverId}/map`, {
+    intervalMs: REFRESH_INTERVAL_MS,
+  });
+  const data = mapResource.data ?? null;
+  const err = mapResource.errorMessage;
+  const load = mapResource.refresh;
   const [now, setNow] = useState<number>(() => Date.now());
-  const [catalog, setCatalog] = useState<CatalogLayer[]>([]);
   const [pickerMode, setPickerMode] = useState<PickerMode>(null);
   const [pickerQuery, setPickerQuery] = useState('');
   const [pickerSelected, setPickerSelected] = useState<CatalogLayer | null>(null);
   const [confirmDeprecated, setConfirmDeprecated] = useState(false);
   const [changeConfirmOpen, setChangeConfirmOpen] = useState(false);
   const [endMatchConfirmOpen, setEndMatchConfirmOpen] = useState(false);
-  const catalogRequested = useRef(false);
+  const [catalogWanted, setCatalogWanted] = useState(false);
+  // Каталог слоёв большой: грузим его при первом открытии окна выбора.
+  const catalogResource = useApiResource<{ rows: CatalogLayer[] }>('/api/v1/layers', {
+    enabled: canChangeMap && catalogWanted,
+  });
+  const catalog = catalogResource.data?.rows ?? NO_LAYERS;
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-
-  /** Номер последнего запроса: запоздавший ответ не должен затирать более свежий. */
-  const latestLoad = useRef(0);
-
-  const load = useCallback(async () => {
-    const request = ++latestLoad.current;
-    try {
-      const res = await fetch(`/api/v1/servers/${serverId}/map`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const next = (await res.json()) as MapResponse;
-      if (request !== latestLoad.current) return;
-      setData(next);
-      setErr(null);
-    } catch (e) {
-      if (request !== latestLoad.current) return;
-      setErr((e as Error).message);
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    void load();
-    const timer = setInterval(load, REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
     return () => clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    // Каталог слоёв большой: грузим его при первом открытии окна выбора.
-    if (!canChangeMap || pickerMode === null || catalogRequested.current) return;
-    catalogRequested.current = true;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok || cancelled) return;
-        const body = (await res.json()) as { rows: CatalogLayer[] };
-        if (!cancelled) setCatalog(body.rows);
-      } catch {
-        // catalog fetch is best-effort — the picker just stays empty
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canChangeMap, pickerMode]);
 
   const onMapChanged = useCallback(
     (event: { data: { server_id: string } }) => {
@@ -165,6 +126,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
   const filteredCatalog = useMemo(() => filterLayers(catalog, pickerQuery), [catalog, pickerQuery]);
 
   function openPicker(mode: 'next' | 'change') {
+    setCatalogWanted(true);
     setPickerMode(mode);
     setPickerQuery('');
     setPickerSelected(null);
@@ -183,16 +145,15 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
     setBusy(true);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/map/${pickerMode}`, {
+      const res = await apiResult<unknown>(`/api/v1/servers/${serverId}/map/${pickerMode}`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        discardBody: true,
+        json: {
           layer: pickerSelected.name,
           confirm_deprecated: confirmDeprecated,
-        }),
+        },
       });
-      if (!res.ok) throw new Error(await readJsonError(res));
+      if (!res.ok) throw new Error(readJsonError(res.error));
       setFeedback({
         kind: 'ok',
         text: pickerMode === 'next' ? 'Следующая карта установлена' : 'Карта сменена',
@@ -201,7 +162,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
       closePicker();
       void load();
     } catch (e) {
-      setFeedback({ kind: 'err', text: (e as Error).message });
+      setFeedback({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -212,16 +173,16 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
     setBusy(true);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/map/end-match`, {
+      const res = await apiResult<unknown>(`/api/v1/servers/${serverId}/map/end-match`, {
         method: 'POST',
-        credentials: 'include',
+        discardBody: true,
       });
-      if (!res.ok) throw new Error(await readJsonError(res));
+      if (!res.ok) throw new Error(readJsonError(res.error));
       setFeedback({ kind: 'ok', text: 'Матч завершён' });
       setEndMatchConfirmOpen(false);
       void load();
     } catch (e) {
-      setFeedback({ kind: 'err', text: (e as Error).message });
+      setFeedback({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
     }

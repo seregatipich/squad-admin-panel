@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -22,6 +22,8 @@ import {
   Toolbar,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface AuditEntry {
   id: string;
@@ -55,12 +57,10 @@ interface VerifyChainResult {
 }
 
 const POLL_MS = 6000;
+const EMPTY_ITEMS: AuditEntry[] = [];
 
 export default function AuditPage() {
   const locale = useIntlLocale();
-  const [items, setItems] = useState<AuditEntry[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -72,63 +72,24 @@ export default function AuditPage() {
     setVerifyErr(null);
     setVerifyResult(null);
     try {
-      const r = await fetch('/api/v1/audit/verify-chain', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setVerifyResult((await r.json()) as VerifyChainResult);
+      setVerifyResult(await apiFetch<VerifyChainResult>('/api/v1/audit/verify-chain'));
     } catch (e) {
-      setVerifyErr((e as Error).message);
+      setVerifyErr(describeHttpError(e));
     } finally {
       setVerifying(false);
     }
   }
 
-  // Один запрос в полёте одновременно: тик опроса, догнавший ещё не
-  // завершённый предыдущий, пропускается вместо того, чтобы удвоить нагрузку
-  // на append-only таблицу (#488).
-  const inFlightRef = useRef(false);
-
-  // Вынесено из эффекта, чтобы «Повторить» на полосе ошибки звало ровно тот же
-  // запрос, что и опрос по таймеру, а не его копию.
-  const load = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    try {
-      const r = await fetch('/api/v1/audit?page=1&page_size=200', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { items: AuditEntry[] };
-      setItems(j.items);
-      setErr(null);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoaded(true);
-      inFlightRef.current = false;
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => {
-      // A hidden tab's journal isn't visible anyway, so skip the tick
-      // entirely; the effect below catches up once it becomes visible again.
-      if (typeof document !== 'undefined' && document.hidden) return;
-      void load();
-    }, POLL_MS);
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void load();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [load]);
+  // Тик опроса, догнавший ещё не завершённый запрос, пропускается самим хуком
+  // (один запрос в полёте, #488); скрытая вкладка журнал всё равно не видит,
+  // поэтому тики на ней пропускаются, а при возврате данные подтягиваются.
+  const audit = useApiResource<{ items: AuditEntry[] }>('/api/v1/audit?page=1&page_size=200', {
+    intervalMs: POLL_MS,
+    pauseWhenHidden: true,
+  });
+  const items = audit.data?.items ?? EMPTY_ITEMS;
+  const loaded = !audit.loading;
+  const err = audit.errorMessage;
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -162,7 +123,7 @@ export default function AuditPage() {
           title="Не удалось загрузить журнал"
           description={err}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void audit.refresh()}>
               Повторить
             </Button>
           }

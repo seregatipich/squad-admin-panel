@@ -13,7 +13,8 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
-import { readErrorMessage, readJson } from './helpers';
+import { apiResult, describeHttpError } from '@/lib/api';
+import { describeSettingsError, fetchValidated } from './helpers';
 import { useSavedFlag } from './useSavedFlag';
 
 interface LogSourceDraft {
@@ -58,13 +59,11 @@ export function LogSourceSection({ serverId }: { serverId: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/servers/${serverId}/log-source`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (cancelled) return;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await readJson(res, logSourceView, 'источник логов');
+        const data = await fetchValidated(
+          `/api/v1/servers/${serverId}/log-source`,
+          logSourceView,
+          'источник логов',
+        );
         if (cancelled) return;
         setLogSource(data);
         if (data.configured) {
@@ -80,7 +79,7 @@ export function LogSourceSection({ serverId }: { serverId: string }) {
         if (cancelled) return;
         // Пустая форма без блокировки перезаписала бы уже настроенный источник значениями по умолчанию.
         setLogSourceLoadFailed(true);
-        setLogSourceErr(`Не удалось загрузить источник логов: ${(e as Error).message}`);
+        setLogSourceErr(`Не удалось загрузить источник логов: ${describeHttpError(e)}`);
       }
     })();
     return () => {
@@ -92,18 +91,21 @@ export function LogSourceSection({ serverId }: { serverId: string }) {
     setLogSourceBusy(true);
     setLogSourceErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/log-source`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...logSourceDraft, regenerate_key: regenerateKey }),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      setLogSource(await readJson(res, logSourceView, 'источник логов'));
+      setLogSource(
+        await fetchValidated(
+          `/api/v1/servers/${serverId}/log-source`,
+          logSourceView,
+          'источник логов',
+          {
+            method: 'PUT',
+            json: { ...logSourceDraft, regenerate_key: regenerateKey },
+          },
+        ),
+      );
       setLogSourceDirty(false);
       flashLogSourceSaved();
     } catch (e) {
-      setLogSourceErr((e as Error).message);
+      setLogSourceErr(describeSettingsError(e));
     } finally {
       setLogSourceBusy(false);
     }
@@ -113,16 +115,16 @@ export function LogSourceSection({ serverId }: { serverId: string }) {
     setLogSourceBusy(true);
     setLogSourceErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/log-source`, {
+      const res = await apiResult<unknown>(`/api/v1/servers/${serverId}/log-source`, {
         method: 'DELETE',
-        credentials: 'include',
+        discardBody: true,
       });
-      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok && res.error.status !== 404) throw new Error(`HTTP ${res.error.status}`);
       setLogSource({ configured: false, status: null });
       setLogSourceDraft(LOG_SOURCE_DEFAULTS);
       setLogSourceDirty(false);
     } catch (e) {
-      setLogSourceErr((e as Error).message);
+      setLogSourceErr(describeHttpError(e));
     } finally {
       setLogSourceBusy(false);
     }

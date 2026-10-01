@@ -30,9 +30,13 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiResult, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 import type { ClanSortField, MeResponse, ServerOption, SortOrder } from './helpers';
 import { priorityBadge } from './helpers';
 import { PRIORITY_TONE } from './priority-tone';
+
+const NO_SERVERS: ServerOption[] = [];
 
 interface Clan {
   id: string;
@@ -61,8 +65,12 @@ const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по у
 export default function ClansPage() {
   const router = useRouter();
   const [data, setData] = useState<ClansResponse | null>(null);
-  const [servers, setServers] = useState<ServerOption[]>([]);
-  const [canManageClans, setCanManageClans] = useState(false);
+  // Server names are a display nicety only, and a failed /me read leaves the
+  // create button hidden.
+  const serversResource = useApiResource<{ items: ServerOption[] }>('/api/v1/servers');
+  const servers = serversResource.data?.items ?? NO_SERVERS;
+  const meResource = useApiResource<MeResponse>('/api/v1/me');
+  const canManageClans = meResource.data?.can_manage_clans ?? false;
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<ClanSortField>('name');
@@ -84,51 +92,21 @@ export default function ClansPage() {
     });
     if (q.trim().length > 0) query.set('q', q.trim());
     try {
-      const res = await fetch(`/api/v1/clans?${query.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`Не удалось загрузить кланы (${res.status})`);
-      const body = (await res.json()) as ClansResponse;
+      const body = await apiFetch<ClansResponse>(`/api/v1/clans?${query.toString()}`);
       if (latestLoadRef.current !== requestId) return;
       setData(body);
       setErr(null);
     } catch (e) {
       if (latestLoadRef.current !== requestId) return;
-      setErr((e as Error).message);
+      setErr(
+        e instanceof ApiError ? `Не удалось загрузить кланы (${e.status})` : describeHttpError(e),
+      );
     }
   }, [q, sort, order, page]);
-
-  const loadServers = useCallback(async () => {
-    try {
-      const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-      if (!res.ok) return;
-      const body = (await res.json()) as { items: ServerOption[] };
-      setServers(body.items);
-    } catch {
-      /* server names are a display nicety only */
-    }
-  }, []);
-
-  const loadMe = useCallback(async () => {
-    try {
-      const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      if (!res.ok) return;
-      const body = (await res.json()) as MeResponse;
-      setCanManageClans(body.can_manage_clans);
-    } catch {
-      /* leave the create button hidden on failure */
-    }
-  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    void loadServers();
-    void loadMe();
-  }, [loadServers, loadMe]);
 
   const serverNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -392,11 +370,9 @@ function CreateClanModal({
       .filter((tag) => tag.length > 0);
     const slots = Number.parseInt(form.max_priority_slots, 10);
     try {
-      const res = await fetch('/api/v1/clans', {
+      const result = await apiResult<{ id: string }>('/api/v1/clans', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           name,
           description: form.description.trim() ? form.description.trim() : null,
           tags,
@@ -404,17 +380,15 @@ function CreateClanModal({
           primary_server_id: form.primary_server_id || null,
           is_public: form.is_public,
           is_tag_protected: form.is_tag_protected,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(`Не удалось создать клан: ${body.error ?? res.status}`);
+      if (!result.ok) {
+        setError(`Не удалось создать клан: ${result.error.codeOrStatus()}`);
         return;
       }
-      const created = (await res.json()) as { id: string };
-      onCreated(created.id);
+      onCreated(result.data.id);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setSubmitting(false);
     }

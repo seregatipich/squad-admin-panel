@@ -20,7 +20,9 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import { formatDateTimeRu } from '@/lib/format';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   type BanStatusLike,
   banStatusBadge,
@@ -82,6 +84,8 @@ function isBanSourceOptionArray(value: unknown): value is BanSourceOption[] {
 }
 
 /** Доверие к источнику — категория, а не состояние системы: пилюля, а не цвет строки. */
+const NO_SOURCES: BanSourceOption[] = [];
+
 const TRUST_TONE: Record<string, BadgeTone> = {
   trusted: 'good',
   normal: 'accent',
@@ -104,26 +108,11 @@ export function ExternalBansBrowser() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sources, setSources] = useState<BanSourceOption[]>([]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const loadRequestId = useRef(0);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch('/api/v1/ban-sources/options', {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : []))
-      .then((body: unknown) => {
-        setSources(isBanSourceOptionArray(body) ? body : []);
-      })
-      .catch(() => {});
-    return () => {
-      controller.abort();
-    };
-  }, []);
+  const sourcesResource = useApiResource<unknown>('/api/v1/ban-sources/options');
+  const sources = isBanSourceOptionArray(sourcesResource.data) ? sourcesResource.data : NO_SOURCES;
 
   const navigate = useCallback(
     (partial: Partial<typeof filters>) => {
@@ -146,18 +135,14 @@ export function ExternalBansBrowser() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/external-bans?${buildApiQuery(filters)}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (requestId !== loadRequestId.current) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as RegistryResponse;
+      const data = await apiFetch<RegistryResponse>(
+        `/api/v1/external-bans?${buildApiQuery(filters)}`,
+      );
       if (requestId !== loadRequestId.current) return;
       setRows(data.rows);
       setTotal(data.total);
     } catch (e) {
-      if (requestId === loadRequestId.current) setError((e as Error).message);
+      if (requestId === loadRequestId.current) setError(describeHttpError(e));
     } finally {
       if (requestId === loadRequestId.current) setLoading(false);
     }

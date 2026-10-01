@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { use, useEffect, useState } from 'react';
+import { use } from 'react';
 import {
   Badge,
   PageContainer,
@@ -9,6 +9,7 @@ import {
   SegmentedNav,
   type SegmentedNavItem,
 } from '@/components/ui';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 /**
  * Подразделы сервера слева направо: сначала то, на что оператор смотрит во
@@ -80,32 +81,12 @@ export default function ServerSectionLayout({
 }) {
   const { id } = use(params);
   const pathname = usePathname();
-  const [name, setName] = useState<string | null>(null);
-  const [runtime, setRuntime] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch(`/api/v1/servers/${id}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!response.ok || cancelled) return;
-        const body = (await response.json()) as Partial<ServerNameResponse>;
-        if (!cancelled && typeof body.server?.display_name === 'string') {
-          setName(body.server.display_name);
-          setRuntime(body.server.runtime ?? 'container');
-        }
-      } catch {
-        // Имя — украшение шапки: содержимое подраздела грузится независимо и
-        // само сообщит об ошибке запроса.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  // Имя — украшение шапки: при ошибке запроса остаётся запасной заголовок, а
+  // содержимое подраздела грузится независимо и само сообщит об ошибке.
+  const { data: serverBody } = useApiResource<Partial<ServerNameResponse>>(`/api/v1/servers/${id}`);
+  const named = typeof serverBody?.server?.display_name === 'string' ? serverBody.server : null;
+  const name = named?.display_name ?? null;
+  const runtime = named ? (named.runtime ?? 'container') : null;
 
   const isExternal = runtime === 'external';
   // Пока тип сервера неизвестен (ответа нет или он не пришёл), контейнерные

@@ -19,6 +19,7 @@ import {
   Skeleton,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import {
   addLayer,
   buildSavePayload,
@@ -71,20 +72,16 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [rotationRes, layersRes] = await Promise.all([
-        fetch(`/api/v1/servers/${id}/rotation`, { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/layers', { credentials: 'include', cache: 'no-store' }),
+      const [rotation, layersBody] = await Promise.all([
+        apiFetch<RotationResponse>(`/api/v1/servers/${id}/rotation`),
+        apiFetch<{ rows: LayerRow[] }>('/api/v1/layers'),
       ]);
-      if (!rotationRes.ok) throw new Error(`HTTP ${rotationRes.status}`);
-      if (!layersRes.ok) throw new Error(`HTTP ${layersRes.status}`);
-      const rotation = (await rotationRes.json()) as RotationResponse;
-      const layersBody = (await layersRes.json()) as { rows: LayerRow[] };
       setCanEdit(rotation.can_edit);
       setEntries(rotation.entries);
       setPool(layersBody.rows.filter((layer) => !layer.deprecated));
       setDirty(false);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e));
     } finally {
       setLoading(false);
     }
@@ -158,18 +155,15 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
     setErr(null);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/rotation`, {
+      await apiSend(`/api/v1/servers/${id}/rotation`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildSavePayload(entries)),
+        json: buildSavePayload(entries),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       setDirty(false);
       setMsg('Сохранено — применится со следующего матча');
       await load();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeHttpError(e, true));
     } finally {
       setSaving(false);
     }

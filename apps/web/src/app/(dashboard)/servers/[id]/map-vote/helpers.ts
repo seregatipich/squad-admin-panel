@@ -1,3 +1,5 @@
+import type { ApiError } from '@/lib/api';
+
 /** One candidate row of the GAME-1 map-vote editor, as returned by `GET /map-vote`. */
 export interface MapVoteCandidate {
   layer: string;
@@ -5,6 +7,54 @@ export interface MapVoteCandidate {
   gamemode: string | null;
   weight: number;
   enabled: boolean;
+  deprecated: boolean;
+}
+
+/** Combined state of `GET /map-vote`. */
+export interface MapVoteResponse {
+  enabled: boolean;
+  selection: 'weighted_random' | 'least_recently_played';
+  layer_cooldown: number;
+  map_cooldown: number;
+  broadcast_template: string | null;
+  can_edit: boolean;
+  candidates: MapVoteCandidate[];
+}
+
+/** What the next auto-pick would consider and choose. */
+export interface PreviewResponse {
+  eligible: Array<{ layer: string; weight: number; probability: number }>;
+  excluded: Array<{ layer: string; reason: string }>;
+  would_pick: string | null;
+}
+
+/** One recorded auto-pick. */
+export interface PickRow {
+  id: string;
+  match_id: string;
+  layer: string;
+  selection: string;
+  applied: boolean;
+  failure_reason: string | null;
+  created_at: string;
+}
+
+/** One saved version of the map-vote rules and pool. */
+export interface VersionRow {
+  id: string;
+  sha256: string;
+  parent_version_id: string | null;
+  author: string | null;
+  message: string | null;
+  created_at: string;
+}
+
+/** A layer of the catalog the pool is picked from. */
+export interface CatalogLayer {
+  id: string;
+  name: string;
+  map: string;
+  gamemode: string;
   deprecated: boolean;
 }
 
@@ -134,13 +184,13 @@ const ERROR_LABELS: Record<string, string> = {
 };
 
 /**
- * Turns a failed map-vote API response into a Russian message: known error
+ * Turns a failed map-vote API answer into a Russian message: known error
  * codes get their own text (with the offending layer name when the API sends
  * one), everything else falls back to a generic message with the HTTP status.
  */
-export async function describeApiError(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown; layer?: unknown } | null;
+export function describeApiError(error: ApiError): string {
+  const body = error.jsonBody<{ error?: unknown; layer?: unknown }>();
   const label = typeof body?.error === 'string' ? ERROR_LABELS[body.error] : undefined;
-  if (!label) return `Не удалось выполнить запрос (HTTP ${res.status}).`;
+  if (!label) return `Не удалось выполнить запрос (HTTP ${error.status}).`;
   return typeof body?.layer === 'string' ? `${label} Слой: ${body.layer}.` : label;
 }

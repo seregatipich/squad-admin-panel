@@ -6,6 +6,7 @@ import {
   analyticsWindowRange,
   buildAnalyticsWindowQuery,
 } from '@/lib/analytics-window';
+import { ApiError, apiFetch } from '@/lib/api';
 
 export interface AnalyticsServerOption {
   id: string;
@@ -19,6 +20,13 @@ export interface AnalyticsServerOption {
  */
 export const DOWNLOAD_LINK_CLASS =
   'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
+
+/**
+ * Aggregations over a multi-day window are heavier than the panel's usual
+ * reads, so they get the same generous bound `useApiResource` uses instead of
+ * the 10 s default.
+ */
+const ANALYTICS_TIMEOUT_MS = 30_000;
 
 /** Hours of the day marked on the 24-bar hourly charts. */
 export const AXIS_HOURS = [0, 6, 12, 18];
@@ -77,18 +85,14 @@ export function useAnalyticsWindow<T>(endpoint: string, defaultDays: number): An
         from: freshRange.from,
         to: freshRange.to,
       });
-      const res = await fetch(`${endpoint}${query}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`ошибка ${res.status}`);
-      const body = (await res.json()) as T;
+      const body = await apiFetch<T>(`${endpoint}${query}`, { timeoutMs: ANALYTICS_TIMEOUT_MS });
       if (requestRef.current !== requestId) return;
       setData(body);
       setRange(freshRange);
     } catch (e) {
       if (requestRef.current !== requestId) return;
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError) setError(`ошибка ${e.status}`);
+      else setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (requestRef.current === requestId) setLoading(false);
     }

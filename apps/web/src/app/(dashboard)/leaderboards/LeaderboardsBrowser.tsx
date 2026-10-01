@@ -28,6 +28,8 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   buildApiQuery,
   buildQueryString,
@@ -81,8 +83,24 @@ export function LeaderboardsBrowser() {
   const searchParams = useSearchParams();
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
-  const [servers, setServers] = useState<ServerOption[]>([]);
-  const [seasons, setSeasons] = useState<Season[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers');
+  const servers = useMemo<ServerOption[]>(() => {
+    const items = serversResource.data?.items;
+    if (!Array.isArray(items)) return [];
+    return items.map((entry) => ({
+      id: entry.id,
+      display_name: entry.display_name,
+      slug: entry.slug,
+    }));
+  }, [serversResource.data]);
+  // LEAD-7 (#178): the season list drives the period selector. A viewer without
+  // panel access simply gets no seasons, which collapses the selector rather
+  // than surfacing an error — the leaderboard itself already reports auth.
+  const seasonsResource = useApiResource<SeasonsResponse>('/api/v1/seasons');
+  const seasons = useMemo<Season[]>(
+    () => (Array.isArray(seasonsResource.data?.items) ? seasonsResource.data.items : []),
+    [seasonsResource.data],
+  );
   const [data, setData] = useState<LeaderboardBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,71 +119,28 @@ export function LeaderboardsBrowser() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
-      .then((body) => {
-        if (cancelled) return;
-        setServers(
-          Array.isArray(body.items)
-            ? body.items.map((entry) => ({
-                id: entry.id,
-                display_name: entry.display_name,
-                slug: entry.slug,
-              }))
-            : [],
-        );
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // LEAD-7 (#178): the season list drives the period selector. A viewer without
-  // panel access simply gets no seasons, which collapses the selector rather
-  // than surfacing an error — the leaderboard itself already reports auth.
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v1/seasons', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as SeasonsResponse) : { items: [] }))
-      .then((body) => {
-        if (!cancelled) setSeasons(Array.isArray(body.items) ? body.items : []);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const load = useCallback(() => {
     requestRef.current += 1;
     const requestId = requestRef.current;
     const current = () => requestRef.current === requestId;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/leaderboards?${buildApiQuery(filters)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as {
-            error?: string | { code?: string; message?: string };
-          };
-          const message =
-            typeof body.error === 'string' ? body.error : (body.error?.message ?? body.error?.code);
-          throw new Error(message ?? `HTTP ${res.status}`);
-        }
-        return (await res.json()) as LeaderboardBody;
-      })
+    apiFetch<LeaderboardBody>(`/api/v1/leaderboards?${buildApiQuery(filters)}`)
       .then((body) => {
         if (current()) setData(body);
       })
       .catch((err: unknown) => {
         if (current()) {
-          setError((err as Error).message);
+          if (err instanceof ApiError) {
+            const apiError = err.jsonBody<{
+              error?: string | { code?: string; message?: string };
+            }>()?.error;
+            const message =
+              typeof apiError === 'string' ? apiError : (apiError?.message ?? apiError?.code);
+            setError(message ?? describeHttpError(err));
+          } else {
+            setError(describeHttpError(err));
+          }
           setData(null);
         }
       })

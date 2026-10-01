@@ -1,7 +1,7 @@
 import { type ExternalConnectionResponse, externalConnectionResponse } from '@squad/shared-types';
 import { useState } from 'react';
 import { Button, GroupedList, GroupedRow, InlineBanner, TextInput } from '@/components/ui';
-import { readErrorMessage, readJson } from './helpers';
+import { describeSettingsError, fetchValidated } from './helpers';
 import { useSavedFlag } from './useSavedFlag';
 
 /** Черновик правок RCON-подключения внешнего сервера; пустой пароль = не менять. */
@@ -43,18 +43,18 @@ export function ConnectionSection({
     setConnectionBusy(true);
     setConnectionErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/external-connection`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(connectionDraft),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      onSaved(await readJson(res, externalConnectionResponse, 'подключение'));
+      onSaved(
+        await fetchValidated(
+          `/api/v1/servers/${serverId}/external-connection`,
+          externalConnectionResponse,
+          'подключение',
+          { method: 'PUT', json: connectionDraft },
+        ),
+      );
       setConnectionDraft({});
       flashConnectionSaved();
     } catch (e) {
-      setConnectionErr((e as Error).message);
+      setConnectionErr(describeSettingsError(e));
     } finally {
       setConnectionBusy(false);
     }

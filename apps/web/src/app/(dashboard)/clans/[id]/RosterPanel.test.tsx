@@ -11,16 +11,17 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-import RosterPanel, {
+import RosterPanel from './RosterPanel';
+import { RosterRow } from './RosterRow';
+import {
   deriveCapabilities,
   formatMemberDate,
   formatOnlineDuration,
   memberRoleLabel,
   priorityErrorMessage,
   type RosterMember,
-  RosterRow,
   transferLeadershipMessage,
-} from './RosterPanel';
+} from './roster-model';
 
 function member(overrides: Partial<RosterMember> = {}): RosterMember {
   return {

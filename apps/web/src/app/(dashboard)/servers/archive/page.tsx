@@ -1,6 +1,5 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
   ButtonLink,
@@ -19,6 +18,8 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { ApiError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface ArchiveRow {
   id: string;
@@ -36,43 +37,10 @@ interface ArchiveResponse {
 
 export default function ArchivePage() {
   const locale = useIntlLocale();
-  const [data, setData] = useState<ArchiveResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [forbidden, setForbidden] = useState(false);
-
-  /**
-   * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
-   * в замыкании эффекта: тот же запрос запускает и кнопка «Повторить», у
-   * которой отменять нечего.
-   */
-  const loadArchive = useCallback(async (isStale: () => boolean = () => false) => {
-    try {
-      const r = await fetch('/api/v1/servers/archive', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (r.status === 403) {
-        if (!isStale()) setForbidden(true);
-        return;
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as ArchiveResponse;
-      if (!isStale()) {
-        setData(j);
-        setErr(null);
-      }
-    } catch (e) {
-      if (!isStale()) setErr((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadArchive(() => cancelled);
-    return () => {
-      cancelled = true;
-    };
-  }, [loadArchive]);
+  const archive = useApiResource<ArchiveResponse>('/api/v1/servers/archive');
+  const data = archive.data ?? null;
+  const forbidden = archive.error instanceof ApiError && archive.error.status === 403;
+  const err = forbidden ? null : archive.errorMessage;
 
   return (
     <PageContainer>
@@ -103,7 +71,7 @@ export default function ArchivePage() {
               action={
                 <Button
                   onClick={() => {
-                    void loadArchive();
+                    void archive.refresh();
                   }}
                 >
                   Повторить

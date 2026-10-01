@@ -25,10 +25,11 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { apiSend, describeHttpError } from '@/lib/api';
 import { ConnectionSection } from './ConnectionSection';
 import {
-  readErrorMessage,
-  readJson,
+  describeSettingsError,
+  fetchValidated,
   type SidecarIntegration,
   sidecarEngineLabel,
   sidecarModeLabel,
@@ -91,12 +92,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const load = useCallback(
     async (resetDraft = true) => {
       try {
-        const r = await fetch(`/api/v1/servers/${id}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await readJson(r, serverDetailResponse, 'сервер');
+        const data = await fetchValidated(`/api/v1/servers/${id}`, serverDetailResponse, 'сервер');
         if (!data.settings) throw new Error('У сервера нет сохранённых настроек');
         setServerInfo({
           status: data.server.status,
@@ -116,7 +112,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         setErr(null);
         if (resetDraft) setDraft({});
       } catch (e) {
-        setErr((e as Error).message);
+        setErr(describeHttpError(e));
       }
     },
     [id],
@@ -134,12 +130,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/servers/${id}/rnsquadjs`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!res.ok || cancelled) return;
-        const data = await readJson(res, sidecarIntegrationResponse, 'сайдкар');
+        const data = await fetchValidated(
+          `/api/v1/servers/${id}/rnsquadjs`,
+          sidecarIntegrationResponse,
+          'сайдкар',
+        );
         if (!cancelled) setSidecar(data);
       } catch {
         // best-effort: the section simply stays hidden
@@ -164,18 +159,16 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/v1/servers/${id}/settings`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(draft),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      setSettings(await readJson(res, serverSettingsView, 'настройки'));
+      setSettings(
+        await fetchValidated(`/api/v1/servers/${id}/settings`, serverSettingsView, 'настройки', {
+          method: 'PUT',
+          json: draft,
+        }),
+      );
       setDraft({});
       flashSaved();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(describeSettingsError(e));
     } finally {
       setBusy(false);
     }
@@ -245,19 +238,13 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               const previousTags = tags;
               setTags(newTags);
               try {
-                const res = await fetch(`/api/v1/servers/${id}`, {
+                await apiSend(`/api/v1/servers/${id}`, {
                   method: 'PATCH',
-                  credentials: 'include',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ tags: newTags }),
+                  json: { tags: newTags },
                 });
-                if (!res.ok) {
-                  const body = await res.json().catch(() => ({}));
-                  throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
-                }
               } catch (e) {
                 setTags(previousTags);
-                setErr(`Не удалось сохранить теги: ${(e as Error).message}`);
+                setErr(`Не удалось сохранить теги: ${describeSettingsError(e)}`);
               }
             }}
           />

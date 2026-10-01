@@ -24,8 +24,12 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch } from '@/lib/api';
 import { describeLoadError } from '@/lib/load-error';
 import { type MarkTone, type MarkTypeOption, markIconEmoji, severityTone } from '@/lib/marks';
+import { useApiResource } from '@/lib/use-polled-resource';
+
+const NO_MARK_TYPES: MarkTypeOption[] = [];
 
 interface SuspectMark {
   mark_type_id: number;
@@ -88,7 +92,8 @@ function buildParams(filters: {
 }
 
 export function SuspectsBrowser() {
-  const [markTypes, setMarkTypes] = useState<MarkTypeOption[]>([]);
+  const markTypesResource = useApiResource<MarkTypeOption[]>('/api/v1/mark-types');
+  const markTypes = Array.isArray(markTypesResource.data) ? markTypesResource.data : NO_MARK_TYPES;
   const [rows, setRows] = useState<Suspect[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,13 +109,6 @@ export function SuspectsBrowser() {
   // Bumped by every first-page load; older responses compare against it and are dropped.
   const requestGeneration = useRef(0);
 
-  useEffect(() => {
-    fetch('/api/v1/mark-types', { credentials: 'include', cache: 'no-store' })
-      .then((r) => (r.ok ? (r.json() as Promise<MarkTypeOption[]>) : []))
-      .then(setMarkTypes)
-      .catch(() => setMarkTypes([]));
-  }, []);
-
   const filters = useMemo(
     () => ({ markTypeIds, q, noActiveBan, sort }),
     [markTypeIds, q, noActiveBan, sort],
@@ -123,12 +121,7 @@ export function SuspectsBrowser() {
     setError(null);
     try {
       const params = buildParams(filters);
-      const res = await fetch(`/api/v1/suspects?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as SuspectsResponse;
+      const body = await apiFetch<SuspectsResponse>(`/api/v1/suspects?${params.toString()}`);
       if (generation !== requestGeneration.current) return;
       setRows(body.items);
       setNextCursor(body.next_cursor);
@@ -151,12 +144,7 @@ export function SuspectsBrowser() {
     try {
       const params = buildParams(filters);
       params.set('cursor', nextCursor);
-      const res = await fetch(`/api/v1/suspects?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as SuspectsResponse;
+      const body = await apiFetch<SuspectsResponse>(`/api/v1/suspects?${params.toString()}`);
       // A filter change while this page was in flight started a newer load.
       if (generation !== requestGeneration.current) return;
       setRows((prev) => [...prev, ...body.items]);

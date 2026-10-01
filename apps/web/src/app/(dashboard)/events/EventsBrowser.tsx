@@ -4,50 +4,38 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
-  type BadgeTone,
   Button,
   Card,
-  Checkbox,
-  EmptyState,
   IconButton,
   InlineBanner,
   Modal,
   SearchField,
-  Select,
-  Skeleton,
-  SkeletonTable,
-  Table,
-  TableBody,
-  TableHead,
-  TableRow,
-  Td,
-  Th,
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError, nullOnHttpError } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
+import { EnvelopeModal } from './EnvelopeModal';
+import { FilterPanel } from './EventFilterPanel';
+import { EventList } from './EventList';
 import {
   appendEventPage,
   buildCountApiQuery,
   buildExportApiQuery,
   buildListApiQuery,
   buildQueryString,
-  DATE_PRESETS,
-  type EventEnvelope,
   type EventFilters,
   type EventListItem,
   type EventListResponse,
   type EventsAppendedBatch,
   eventsBatchAffectsList,
-  formatDateTime,
-  kindLabel,
   kindOptionsFromEvents,
   mergeEventPage,
   PAGE_LIMIT,
   parseFilters,
   type ServerOption,
   serverOptionsFromEvents,
-  shortServerName,
 } from './helpers';
 
 /** Минимальный промежуток между живыми перечитываниями первой страницы. */
@@ -68,27 +56,6 @@ interface ServersResponse {
  */
 const DOWNLOAD_LINK_CLASS =
   'inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-3 text-xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
-
-/**
- * Тон пилюли типа события.
- *
- * Повторяет разбиение `kindTone` из `helpers.ts`, но выдаёт тон дизайн-системы,
- * а не строку классов: помощник — общий модуль со своим владельцем, и цвета
- * оформления в нём остаются те, что были. Смысл всё равно несёт подпись
- * `kindLabel`, а не цвет (§5).
- */
-function kindBadgeTone(kind: string): BadgeTone {
-  if (kind.startsWith('server.crashed') || kind.endsWith('.failed')) return 'crit';
-  if (kind.startsWith('player.connected') || kind.startsWith('match.started')) return 'good';
-  if (
-    kind.startsWith('player.disconnected') ||
-    kind.startsWith('match.ended') ||
-    kind.startsWith('banname.matched')
-  ) {
-    return 'warn';
-  }
-  return 'neutral';
-}
 
 /**
  * Журнал событий: список конвертов с фильтрами и постраничной подгрузкой.
@@ -119,10 +86,21 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [totalEstimated, setTotalEstimated] = useState(false);
-  const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers', {
+    enabled: !lockedServerId,
+  });
+  const fetchedServers = useMemo<ServerOption[]>(
+    () =>
+      (serversResource.data?.items ?? []).map((entry) => ({
+        id: entry.id,
+        display_name: entry.display_name,
+        slug: entry.slug,
+      })),
+    [serversResource.data],
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<EventListItem | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
+  const [_reloadToken, setReloadToken] = useState(0);
 
   /**
    * Bumped every time `filters`/`lockedServerId` change (a new first page is
@@ -157,21 +135,16 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     loadMoreFailedRef.current = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as EventListResponse;
-      })
+    apiFetch<EventListResponse>(
+      `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`,
+    )
       .then((data) => {
         if (cancelled) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -179,20 +152,17 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [filters, lockedServerId, reloadToken]);
+  }, [filters, lockedServerId]);
 
   useEffect(() => {
     let cancelled = false;
     setTotal(null);
-    fetch(`/api/v1/events/count?${buildCountApiQuery(filters, { lockedServerId })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
+    apiFetch<{ total: number; estimated?: boolean } | null>(
+      `/api/v1/events/count?${buildCountApiQuery(filters, { lockedServerId })}`,
+    )
       // A failed count is unknown, not zero: `total: 0` would render "Всего: 0"
       // and read as "there are no events" instead of "count unavailable".
-      .then(async (res) =>
-        res.ok ? ((await res.json()) as { total: number; estimated?: boolean }) : null,
-      )
+      .catch(nullOnHttpError)
       .then((data) => {
         if (cancelled) return;
         setTotal(data ? data.total : null);
@@ -204,39 +174,15 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     };
   }, [filters, lockedServerId]);
 
-  useEffect(() => {
-    if (lockedServerId) return;
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
-      .then((data) => {
-        if (cancelled) return;
-        setFetchedServers(
-          data.items.map((entry) => ({
-            id: entry.id,
-            display_name: entry.display_name,
-            slug: entry.slug,
-          })),
-        );
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [lockedServerId]);
-
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMoreRef.current) return;
     const generation = requestGenerationRef.current;
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const data = await apiFetch<EventListResponse>(
         `/api/v1/events?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT, lockedServerId })}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as EventListResponse;
       // The filters/server may have changed while this request was in
       // flight — the first-page effect already replaced `items` under the
       // new filters, so an old-generation response must not be appended to
@@ -247,7 +193,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       loadMoreFailedRef.current = false;
     } catch (err) {
       if (requestGenerationRef.current !== generation) return;
-      setError((err as Error).message);
+      setError(describeHttpError(err));
       // Stop the IntersectionObserver from firing again on its own; only the
       // visible "Показать ещё" click clears this (EVENTS-552).
       loadMoreFailedRef.current = true;
@@ -284,12 +230,11 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       let collected: EventListItem[] = [];
       let cursor: string | undefined;
       for (let page = 0; page < MAX_CATCHUP_PAGES; page++) {
-        const res = await fetch(
+        const result = await apiResult<EventListResponse>(
           `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, cursor, lockedServerId })}`,
-          { credentials: 'include', cache: 'no-store' },
         );
-        if (!res.ok) break;
-        const data = (await res.json()) as EventListResponse;
+        if (!result.ok) break;
+        const data = result.data;
         collected = collected.concat(data.items);
         const reachedKnownRow = data.items.some((event) => known.has(event.event_id));
         if (reachedKnownRow || !data.next_cursor || data.items.length < PAGE_LIMIT) break;
@@ -510,269 +455,5 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
 
       <EnvelopeModal event={selected} onClose={() => setSelected(null)} />
     </div>
-  );
-}
-
-function FilterPanel({
-  filters,
-  servers,
-  kinds,
-  lockedServerId,
-  onChange,
-}: {
-  filters: EventFilters;
-  servers: ServerOption[];
-  kinds: Array<{ value: string; label: string }>;
-  lockedServerId: string | undefined;
-  onChange: (partial: Partial<EventFilters>) => void;
-}) {
-  function toggleKind(value: string) {
-    const active = filters.kinds.includes(value);
-    const nextKinds = active
-      ? filters.kinds.filter((entry) => entry !== value)
-      : [...filters.kinds, value];
-    onChange({ kinds: nextKinds });
-  }
-
-  function toggleServer(id: string) {
-    const active = filters.servers.includes(id);
-    const nextServers = active
-      ? filters.servers.filter((entry) => entry !== id)
-      : [...filters.servers, id];
-    onChange({ servers: nextServers });
-  }
-
-  return (
-    <Card className="space-y-4">
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-ink-2">Тип события</span>
-          {filters.kinds.length > 0 ? (
-            <Button variant="plain" size="sm" onClick={() => onChange({ kinds: [] })}>
-              Сбросить
-            </Button>
-          ) : null}
-        </div>
-        <div className="max-h-56 space-y-1 overflow-y-auto rounded-ctl border border-line p-1">
-          {kinds.map((option) => (
-            <Checkbox
-              key={option.value}
-              label={<span className="truncate">{option.label}</span>}
-              checked={filters.kinds.includes(option.value)}
-              onChange={() => toggleKind(option.value)}
-              className="px-1.5"
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="block text-xs font-medium text-ink-2">Период</span>
-        <Select
-          aria-label="Период"
-          value={filters.preset}
-          onChange={(event) => onChange({ preset: event.target.value as EventFilters['preset'] })}
-        >
-          {DATE_PRESETS.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </Select>
-        {filters.preset === 'custom' ? (
-          <div className="flex flex-col gap-2 pt-1">
-            <label className="flex items-center justify-between gap-2 text-xs text-ink-3">
-              С
-              <input
-                type="date"
-                value={filters.from}
-                onChange={(event) => onChange({ from: event.target.value })}
-                className="h-8 rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-ink-3">
-              По
-              <input
-                type="date"
-                value={filters.to}
-                onChange={(event) => onChange({ to: event.target.value })}
-                className="h-8 rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
-              />
-            </label>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="block text-xs font-medium text-ink-2">Порядок</span>
-        <Select
-          aria-label="Порядок событий"
-          value={filters.order}
-          onChange={(event) => onChange({ order: event.target.value as EventFilters['order'] })}
-        >
-          <option value="desc">Сначала новые</option>
-          <option value="asc">Сначала старые</option>
-        </Select>
-      </div>
-
-      {lockedServerId ? null : (
-        <div className="space-y-1.5">
-          <span className="block text-xs font-medium text-ink-2">Серверы</span>
-          {servers.length === 0 ? (
-            <p className="text-xs text-ink-3">Нет доступных серверов</p>
-          ) : (
-            <div className="max-h-48 space-y-1 overflow-y-auto rounded-ctl border border-line p-1">
-              {servers.map((server) => (
-                <Checkbox
-                  key={server.id}
-                  label={
-                    <span className="truncate">
-                      {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
-                    </span>
-                  }
-                  checked={filters.servers.includes(server.id)}
-                  onChange={() => toggleServer(server.id)}
-                  className="px-1.5"
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function EventList({
-  items,
-  loading,
-  filtersApplied,
-  showServer,
-  onSelect,
-  onResetFilters,
-}: {
-  items: EventListItem[];
-  loading: boolean;
-  filtersApplied: boolean;
-  showServer: boolean;
-  onSelect: (event: EventListItem) => void;
-  onResetFilters: () => void;
-}) {
-  if (loading && items.length === 0) {
-    return (
-      <div className="p-3">
-        <SkeletonTable rows={8} cols={showServer ? 5 : 4} label="Загружаем журнал событий" />
-      </div>
-    );
-  }
-  if (!loading && items.length === 0) {
-    return (
-      <EmptyState
-        variant={filtersApplied ? 'filtered' : 'initial'}
-        title={filtersApplied ? 'Ничего не нашлось' : 'Событий пока нет'}
-        description={
-          filtersApplied
-            ? 'Ни одно событие не подходит под выбранные фильтры.'
-            : 'Как только серверы начнут присылать события, они появятся здесь.'
-        }
-        action={filtersApplied ? <Button onClick={onResetFilters}>Сбросить фильтр</Button> : null}
-      />
-    );
-  }
-  return (
-    <Table dense ariaLabel="События">
-      <TableHead>
-        <TableRow>
-          <Th>Время</Th>
-          <Th>Тип</Th>
-          {showServer ? <Th>Сервер</Th> : null}
-          <Th>Кто</Th>
-          <Th align="right">Идентификатор</Th>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {items.map((event) => (
-          <TableRow key={event.event_id} interactive>
-            <Td className="whitespace-nowrap">
-              {/* Конверт открывается в модальном окне, поэтому здесь настоящая
-                  кнопка, а не ссылка и не обработчик на строке. */}
-              <Button
-                variant="plain"
-                size="sm"
-                onClick={() => onSelect(event)}
-                title={`Показать конверт события ${event.event_id.slice(0, 8)}`}
-              >
-                {formatDateTime(event.occurred_at)}
-              </Button>
-            </Td>
-            <Td>
-              <Badge size="sm" tone={kindBadgeTone(event.kind)}>
-                {kindLabel(event.kind)}
-              </Badge>
-            </Td>
-            {showServer ? <Td className="text-ink-2">{shortServerName(event)}</Td> : null}
-            <Td truncate className="text-ink-2">
-              {event.actor_nickname ?? '—'}
-            </Td>
-            <Td numeric className="font-mono text-2xs text-ink-3">
-              {event.event_id.slice(0, 8)}
-            </Td>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-function EnvelopeModal({ event, onClose }: { event: EventListItem | null; onClose: () => void }) {
-  const [envelope, setEnvelope] = useState<EventEnvelope | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const eventId = event?.event_id ?? null;
-
-  useEffect(() => {
-    if (eventId === null) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setEnvelope(null);
-    fetch(`/api/v1/events/${eventId}`, { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as EventEnvelope;
-      })
-      .then((data) => {
-        if (!cancelled) setEnvelope(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId]);
-
-  return (
-    <Modal
-      open={event !== null}
-      onClose={onClose}
-      title={event ? kindLabel(event.kind) : 'Событие'}
-      description={event ? `${formatDateTime(event.occurred_at)} · ${event.event_id}` : undefined}
-      size="lg"
-      closeLabel="Закрыть"
-    >
-      {loading ? (
-        <Skeleton variant="text" count={6} label="Загружаем конверт события" />
-      ) : error ? (
-        <InlineBanner tone="crit" title="Не удалось загрузить конверт" description={error} />
-      ) : envelope ? (
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-ctl bg-raised p-3 font-mono text-2xs leading-relaxed text-ink-2">
-          {JSON.stringify(envelope, null, 2)}
-        </pre>
-      ) : null}
-    </Modal>
   );
 }
