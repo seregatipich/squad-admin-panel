@@ -778,6 +778,8 @@ describe('local pre-push checklist and git hooks', () => {
   });
 });
 
+const RELEASE_SHA = 'a'.repeat(40);
+
 describe('the stand host forced-command deploy entry', { concurrency: true }, () => {
   const VALID = [
     'deploy',
