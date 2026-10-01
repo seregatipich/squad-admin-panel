@@ -25,8 +25,6 @@ src/app/(dashboard)/all-players/[id]/SubscriptionGrantSection.tsx	4
 src/app/(dashboard)/all-players/[id]/VotesSection.tsx	1
 src/app/(dashboard)/all-players/[id]/compare/CompareOnlineView.tsx	1
 src/app/(dashboard)/all-players/page.tsx	3
-src/app/(dashboard)/balancer/BalancerBrowser.tsx	5
-src/app/(dashboard)/events/EventsBrowser.tsx	6
 src/app/(dashboard)/issues/IssuesBrowser.tsx	3
 src/app/(dashboard)/issues/PlayerSearchSelect.tsx	1
 src/app/(dashboard)/issues/[id]/IssueLinksBlock.tsx	3

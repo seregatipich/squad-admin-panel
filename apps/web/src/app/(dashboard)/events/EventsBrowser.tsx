@@ -25,7 +25,9 @@ import {
   Toolbar,
   type ToolbarProps,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError, nullOnHttpError } from '@/lib/api';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   appendEventPage,
   buildCountApiQuery,
@@ -119,7 +121,18 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [totalEstimated, setTotalEstimated] = useState(false);
-  const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
+  const serversResource = useApiResource<ServersResponse>('/api/v1/servers', {
+    enabled: !lockedServerId,
+  });
+  const fetchedServers = useMemo<ServerOption[]>(
+    () =>
+      (serversResource.data?.items ?? []).map((entry) => ({
+        id: entry.id,
+        display_name: entry.display_name,
+        slug: entry.slug,
+      })),
+    [serversResource.data],
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<EventListItem | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -157,21 +170,16 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     loadMoreFailedRef.current = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as EventListResponse;
-      })
+    apiFetch<EventListResponse>(
+      `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, lockedServerId })}`,
+    )
       .then((data) => {
         if (cancelled) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (!cancelled) setError(describeHttpError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -184,15 +192,12 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   useEffect(() => {
     let cancelled = false;
     setTotal(null);
-    fetch(`/api/v1/events/count?${buildCountApiQuery(filters, { lockedServerId })}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
+    apiFetch<{ total: number; estimated?: boolean } | null>(
+      `/api/v1/events/count?${buildCountApiQuery(filters, { lockedServerId })}`,
+    )
       // A failed count is unknown, not zero: `total: 0` would render "Всего: 0"
       // and read as "there are no events" instead of "count unavailable".
-      .then(async (res) =>
-        res.ok ? ((await res.json()) as { total: number; estimated?: boolean }) : null,
-      )
+      .catch(nullOnHttpError)
       .then((data) => {
         if (cancelled) return;
         setTotal(data ? data.total : null);
@@ -204,39 +209,15 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     };
   }, [filters, lockedServerId]);
 
-  useEffect(() => {
-    if (lockedServerId) return;
-    let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => (res.ok ? ((await res.json()) as ServersResponse) : { items: [] }))
-      .then((data) => {
-        if (cancelled) return;
-        setFetchedServers(
-          data.items.map((entry) => ({
-            id: entry.id,
-            display_name: entry.display_name,
-            slug: entry.slug,
-          })),
-        );
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [lockedServerId]);
-
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMoreRef.current) return;
     const generation = requestGenerationRef.current;
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const data = await apiFetch<EventListResponse>(
         `/api/v1/events?${buildListApiQuery(filters, { cursor: nextCursor, limit: PAGE_LIMIT, lockedServerId })}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as EventListResponse;
       // The filters/server may have changed while this request was in
       // flight — the first-page effect already replaced `items` under the
       // new filters, so an old-generation response must not be appended to
@@ -247,7 +228,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       loadMoreFailedRef.current = false;
     } catch (err) {
       if (requestGenerationRef.current !== generation) return;
-      setError((err as Error).message);
+      setError(describeHttpError(err));
       // Stop the IntersectionObserver from firing again on its own; only the
       // visible "Показать ещё" click clears this (EVENTS-552).
       loadMoreFailedRef.current = true;
@@ -284,12 +265,11 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
       let collected: EventListItem[] = [];
       let cursor: string | undefined;
       for (let page = 0; page < MAX_CATCHUP_PAGES; page++) {
-        const res = await fetch(
+        const result = await apiResult<EventListResponse>(
           `/api/v1/events?${buildListApiQuery(filters, { limit: PAGE_LIMIT, cursor, lockedServerId })}`,
-          { credentials: 'include', cache: 'no-store' },
         );
-        if (!res.ok) break;
-        const data = (await res.json()) as EventListResponse;
+        if (!result.ok) break;
+        const data = result.data;
         collected = collected.concat(data.items);
         const reachedKnownRow = data.items.some((event) => known.has(event.event_id));
         if (reachedKnownRow || !data.next_cursor || data.items.length < PAGE_LIMIT) break;
@@ -725,35 +705,13 @@ function EventList({
 }
 
 function EnvelopeModal({ event, onClose }: { event: EventListItem | null; onClose: () => void }) {
-  const [envelope, setEnvelope] = useState<EventEnvelope | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const eventId = event?.event_id ?? null;
-
-  useEffect(() => {
-    if (eventId === null) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setEnvelope(null);
-    fetch(`/api/v1/events/${eventId}`, { credentials: 'include', cache: 'no-store' })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as EventEnvelope;
-      })
-      .then((data) => {
-        if (!cancelled) setEnvelope(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId]);
+  const resource = useApiResource<EventEnvelope>(
+    eventId === null ? null : `/api/v1/events/${eventId}`,
+  );
+  const envelope = resource.data ?? null;
+  const loading = resource.loading;
+  const error = resource.errorMessage;
 
   return (
     <Modal

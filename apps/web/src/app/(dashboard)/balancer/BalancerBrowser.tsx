@@ -27,6 +27,8 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch, apiResult, describeHttpError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 import {
   type BalancerFilters,
   balancerViewState,
@@ -44,6 +46,7 @@ import {
 } from './helpers';
 
 const POLL_INTERVAL_MS = 8000;
+const NO_PROPOSALS: ProposalItem[] = [];
 
 interface TriggerReason {
   kind: string;
@@ -72,6 +75,11 @@ interface ProposalItem {
   signals: Record<string, unknown>;
   proposal: DiffEntry[];
   evaluation: { triggered: boolean; reasons: TriggerReason[] };
+}
+
+interface ProposalsResponse {
+  items: ProposalItem[];
+  next_cursor: string | null;
 }
 
 interface DecisionRow {
@@ -207,94 +215,48 @@ function signalValue(signals: Record<string, unknown>, key: string): string {
  * button that moves a player on a live server.
  */
 export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
-  const [items, setItems] = useState<ProposalItem[]>([]);
   const [detail, setDetail] = useState<ProposalDetail | null>(null);
   const [settings, setSettings] = useState<SettingsView>(DEFAULT_SETTINGS);
   const [filters, setFilters] = useState<BalancerFilters>(DEFAULT_BALANCER_FILTERS);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [vetoReasonKind, setVetoReasonKind] = useState('other');
   const [vetoReason, setVetoReason] = useState('');
-  const [hasMore, setHasMore] = useState(false);
-  const proposalsRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
 
+  // Only proposals are polled: re-polling settings every POLL_INTERVAL_MS
+  // silently overwrote whatever the operator was mid-editing — an edit older
+  // than 8s vanished with no warning (#493). Settings are loaded once up front
+  // and refreshed explicitly after a save. The poll skips a hidden tab and
+  // catches up as soon as it is visible again; a filter change refetches.
+  const proposals = useApiResource<ProposalsResponse>(
+    `/api/v1/balancer/proposals?${buildProposalsQuery(filters)}`,
+    { intervalMs: POLL_INTERVAL_MS, pauseWhenHidden: true },
+  );
+  const items = proposals.data?.items ?? NO_PROPOSALS;
+  const hasMore = (proposals.data?.next_cursor ?? null) !== null;
+  const loading = proposals.loading;
+  const error = proposals.errorMessage ?? settingsError;
+
   const loadSettings = useCallback(async () => {
-    const res = await fetch('/api/v1/balancer/settings', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { settings: SettingsView };
+    const body = await apiFetch<{ settings: SettingsView }>('/api/v1/balancer/settings');
     setSettings(body.settings);
   }, []);
 
-  const loadProposals = useCallback(async () => {
-    const requestId = ++proposalsRequestRef.current;
-    const res = await fetch(`/api/v1/balancer/proposals?${buildProposalsQuery(filters)}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { items: ProposalItem[]; next_cursor: string | null };
-    // Ответ на устаревший фильтр не должен перезаписать список нового.
-    if (requestId !== proposalsRequestRef.current) return;
-    setItems(body.items);
-    setHasMore(body.next_cursor !== null);
-  }, [filters]);
-
-  // Settings back the rules-edit form below (`settings` is the same state the
-  // form binds to). Only proposals are polled: re-polling settings every
-  // POLL_INTERVAL_MS silently overwrote whatever the operator was mid-editing
-  // — an edit older than 8s vanished with no warning (#493). Settings are
-  // loaded once up front and refreshed explicitly after a save.
-  const refresh = useCallback(async () => {
-    try {
-      await loadProposals();
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [loadProposals]);
-
   useEffect(() => {
-    loadSettings().catch((e) => setError((e as Error).message));
+    loadSettings().catch((e) => setSettingsError(describeHttpError(e)));
   }, [loadSettings]);
-
-  useEffect(() => {
-    void refresh();
-    const timer = setInterval(() => {
-      if (document.hidden) return;
-      void refresh();
-    }, POLL_INTERVAL_MS);
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [refresh]);
 
   const openDetail = useCallback(async (id: string) => {
     setFailure(null);
     const requestId = ++detailRequestRef.current;
     try {
-      const res = await fetch(`/api/v1/balancer/proposals/${id}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as ProposalDetail;
+      const body = await apiFetch<ProposalDetail>(`/api/v1/balancer/proposals/${id}`);
       if (requestId !== detailRequestRef.current) return;
       setDetail(body);
     } catch (e) {
-      setFailure((e as Error).message);
+      setFailure(describeHttpError(e));
     }
   }, []);
 
@@ -310,19 +272,15 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
       return;
     }
     try {
-      const res = await fetch('/api/v1/balancer/settings', {
+      const body = await apiFetch<{ settings: SettingsView }>('/api/v1/balancer/settings', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(settings),
+        json: settings,
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { settings: SettingsView };
       setSettings(body.settings);
       setNotice('Правила сохранены');
-      await loadProposals();
+      await proposals.refresh();
     } catch (e) {
-      setFailure((e as Error).message);
+      setFailure(describeHttpError(e));
     }
   }
 
@@ -337,27 +295,24 @@ export function BalancerBrowser({ canEdit }: { canEdit: boolean }) {
       return;
     }
     try {
-      const res = await fetch(`/api/v1/balancer/proposals/${detail.id}/decision`, {
+      const result = await apiResult<unknown>(`/api/v1/balancer/proposals/${detail.id}/decision`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        discardBody: true,
+        json: {
           decision,
           veto_reason_kind: isVeto ? vetoReasonKind : undefined,
           veto_reason: isVeto ? comment : undefined,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(
-          (body.error && DECISION_ERROR_MESSAGES[body.error]) || `HTTP ${res.status}`,
-        );
+      if (!result.ok) {
+        const code = result.error.jsonBody<{ error?: string }>()?.error;
+        throw new Error((code && DECISION_ERROR_MESSAGES[code]) || `HTTP ${result.error.status}`);
       }
       setNotice(`Решение сохранено: ${decisionLabel(decision)}`);
       setVetoReason('');
-      await Promise.all([loadProposals(), openDetail(detail.id)]);
+      await Promise.all([proposals.refresh(), openDetail(detail.id)]);
     } catch (e) {
-      setFailure((e as Error).message);
+      setFailure(describeHttpError(e));
     }
   }
 
