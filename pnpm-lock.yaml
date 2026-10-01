@@ -337,6 +337,9 @@ importers:
       '@squad/shared-types':
         specifier: workspace:*
         version: link:../../../packages/shared-types
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
@@ -451,6 +454,9 @@ importers:
       '@squad/shared-types':
         specifier: workspace:*
         version: link:../../../packages/shared-types
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
@@ -522,6 +528,9 @@ importers:
       '@squad/shared-types':
         specifier: workspace:*
         version: link:../../../packages/shared-types
+      '@squad/worker-kit':
+        specifier: workspace:*
+        version: link:../../../packages/worker-kit
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
