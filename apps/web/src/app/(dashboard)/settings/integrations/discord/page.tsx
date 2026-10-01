@@ -25,6 +25,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, ApiResponseError, apiFetch, apiSend } from '@/lib/api';
 import DiscordRoleMappingsSection from './DiscordRoleMappingsSection';
 import DiscordStatusChannelsSection from './DiscordStatusChannelsSection';
 import DiscordTemplatesSection from './DiscordTemplatesSection';
@@ -63,12 +64,19 @@ interface WebhookRow {
 
 type Banner = { kind: 'ok' | 'err'; text: string } | null;
 
-async function readJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(describeApiError(res.status, body.error));
+/** Turns a failed API answer into the Russian banner text of `describeApiError`. */
+function toBannerError(error: unknown): unknown {
+  if (!(error instanceof ApiError)) return error;
+  const body = error.jsonBody<Record<string, unknown>>() ?? {};
+  return new Error(describeApiError(error.status, body.error));
+}
+
+async function discordJson<T>(path: string, options?: Parameters<typeof apiFetch<T>>[1]) {
+  try {
+    return await apiFetch<T>(path, options);
+  } catch (error) {
+    throw toBannerError(error);
   }
-  return (await res.json()) as T;
 }
 
 export default function DiscordIntegrationPage() {
@@ -104,21 +112,10 @@ export default function DiscordIntegrationPage() {
       // A hidden tab has nobody to show the result to.
       if (loadedOnce && document.visibilityState === 'hidden') return;
       try {
-        const [settingsRes, hooksRes] = await Promise.all([
-          fetch('/api/v1/integrations/discord', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/integrations/discord/webhooks', {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
+        const [settings, hooks] = await Promise.all([
+          apiFetch<IntegrationSettings>('/api/v1/integrations/discord'),
+          apiFetch<WebhookRow[]>('/api/v1/integrations/discord/webhooks'),
         ]);
-        if (cancelled) return;
-        if (settingsRes.status === 403 || hooksRes.status === 403) {
-          setForbidden(true);
-          clearInterval(timer);
-          return;
-        }
-        const settings = await readJson<IntegrationSettings>(settingsRes);
-        const hooks = await readJson<WebhookRow[]>(hooksRes);
         if (cancelled) return;
         setIntegration(settings);
         if (!formDirtyRef.current) {
@@ -128,8 +125,14 @@ export default function DiscordIntegrationPage() {
         setWebhooks(hooks);
         loadedOnce = true;
       } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 403) {
+          setForbidden(true);
+          clearInterval(timer);
+          return;
+        }
         // Background polls must not overwrite the result of the operator's own action.
-        if (!cancelled && !loadedOnce) setBanner({ kind: 'err', text: (e as Error).message });
+        if (!loadedOnce) setBanner({ kind: 'err', text: (toBannerError(e) as Error).message });
       }
     }
     void load();
@@ -150,13 +153,10 @@ export default function DiscordIntegrationPage() {
         enabled,
       };
       if (botToken.trim() !== '') payload.bot_token = botToken.trim();
-      const res = await fetch('/api/v1/integrations/discord', {
+      const updated = await discordJson<IntegrationSettings>('/api/v1/integrations/discord', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      const updated = await readJson<IntegrationSettings>(res);
       setIntegration(updated);
       setBotToken('');
       setBanner({ kind: 'ok', text: 'Настройки интеграции сохранены.' });
@@ -176,18 +176,15 @@ export default function DiscordIntegrationPage() {
     setCreating(true);
     setBanner(null);
     try {
-      const res = await fetch('/api/v1/integrations/discord/webhooks', {
+      const created = await discordJson<WebhookRow>('/api/v1/integrations/discord/webhooks', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           event_type: newEventType,
           webhook_url: newUrl.trim(),
           channel_label: newLabel.trim() === '' ? null : newLabel.trim(),
           mention_everyone: newMention,
-        }),
+        },
       });
-      const created = await readJson<WebhookRow>(res);
       setWebhooks((prev) => [...prev, created]);
       setNewUrl('');
       setNewLabel('');
@@ -204,13 +201,10 @@ export default function DiscordIntegrationPage() {
     setBusyId(row.id);
     setBanner(null);
     try {
-      const res = await fetch(`/api/v1/integrations/discord/webhooks/${row.id}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !row.enabled }),
-      });
-      const updated = await readJson<WebhookRow>(res);
+      const updated = await discordJson<WebhookRow>(
+        `/api/v1/integrations/discord/webhooks/${row.id}`,
+        { method: 'PUT', json: { enabled: !row.enabled } },
+      );
       setWebhooks((prev) => prev.map((w) => (w.id === row.id ? updated : w)));
     } catch (err) {
       setBanner({ kind: 'err', text: (err as Error).message });
@@ -223,13 +217,10 @@ export default function DiscordIntegrationPage() {
     setBusyId(id);
     setBanner(null);
     try {
-      const res = await fetch(`/api/v1/integrations/discord/webhooks/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(describeApiError(res.status, body.error));
+      try {
+        await apiSend(`/api/v1/integrations/discord/webhooks/${id}`, { method: 'DELETE' });
+      } catch (error) {
+        throw toBannerError(error);
       }
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
       setBanner({ kind: 'ok', text: 'Вебхук удалён.' });
@@ -249,12 +240,20 @@ export default function DiscordIntegrationPage() {
       return next;
     });
     try {
-      const res = await fetch(`/api/v1/integrations/discord/webhooks/${id}/test`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      const body = (await res.json().catch(() => ({}))) as { error?: string; status?: number };
-      setTestResults((prev) => ({ ...prev, [id]: describeTestSendOutcome(res.ok, body) }));
+      type TestBody = { error?: string; status?: number };
+      let outcome: TestSendOutcome;
+      try {
+        const body = await apiFetch<TestBody>(`/api/v1/integrations/discord/webhooks/${id}/test`, {
+          method: 'POST',
+        });
+        outcome = describeTestSendOutcome(true, body ?? {});
+      } catch (e) {
+        if (e instanceof ApiError)
+          outcome = describeTestSendOutcome(false, e.jsonBody<TestBody>() ?? {});
+        else if (e instanceof ApiResponseError) outcome = describeTestSendOutcome(true, {});
+        else throw e;
+      }
+      setTestResults((prev) => ({ ...prev, [id]: outcome }));
     } catch {
       setTestResults((prev) => ({
         ...prev,

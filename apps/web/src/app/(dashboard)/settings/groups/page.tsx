@@ -31,6 +31,7 @@ import {
   TextInput,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -116,26 +117,31 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
-    try {
-      const [rolesRes, meRes] = await Promise.all([
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-      ]);
-      let loadErr: string | null = null;
-      if (rolesRes.ok) {
-        setRows((await rolesRes.json()) as RoleRow[]);
-      } else {
-        loadErr = `Не удалось загрузить список ролей: ${rolesRes.status}`;
-      }
-      if (meRes.ok) {
-        setMe((await meRes.json()) as Me);
-      } else {
-        loadErr ??= `Не удалось загрузить данные пользователя: ${meRes.status}`;
-      }
-      setGlobalErr(loadErr);
-    } catch {
+    const [rolesResult, meResult] = await Promise.allSettled([
+      apiFetch<RoleRow[]>('/api/v1/roles'),
+      apiFetch<Me>('/api/v1/me'),
+    ]);
+    // A transport failure of either read voids the whole load, as before; an
+    // error status only fails its own half.
+    const transportFailure = [rolesResult, meResult].some(
+      (result) => result.status === 'rejected' && !(result.reason instanceof ApiError),
+    );
+    if (transportFailure) {
       setGlobalErr('Не удалось загрузить список ролей: ошибка сети.');
+      return;
     }
+    let loadErr: string | null = null;
+    if (rolesResult.status === 'fulfilled') {
+      setRows(rolesResult.value);
+    } else {
+      loadErr = `Не удалось загрузить список ролей: ${(rolesResult.reason as ApiError).status}`;
+    }
+    if (meResult.status === 'fulfilled') {
+      setMe(meResult.value);
+    } else {
+      loadErr ??= `Не удалось загрузить данные пользователя: ${(meResult.reason as ApiError).status}`;
+    }
+    setGlobalErr(loadErr);
   }, []);
 
   useEffect(() => {
@@ -174,19 +180,15 @@ export default function GroupsPage() {
       if (patch.can_handle_reports !== undefined)
         body.can_handle_reports = patch.can_handle_reports;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
-      const res = await fetch(`/api/v1/roles/${role.id}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}) as Record<string, unknown>);
-        setGlobalErr(`Ошибка сохранения роли «${role.name}»: ${err.error ?? res.status}`);
+      let fresh: RoleRow;
+      try {
+        fresh = await apiFetch<RoleRow>(`/api/v1/roles/${role.id}`, { method: 'PUT', json: body });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        setGlobalErr(`Ошибка сохранения роли «${role.name}»: ${e.codeOrStatus()}`);
         await refresh();
         return;
       }
-      const fresh = (await res.json()) as RoleRow;
       setRows((prev) =>
         prev
           ? prev.map((r) => {
@@ -237,22 +239,18 @@ export default function GroupsPage() {
     let attempt = 0;
     while (attempt < 5) {
       const trial = attempt === 0 ? body : { ...body, name: `Новая роль ${attempt + 1}` };
-      const res = await fetch('/api/v1/roles', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(trial),
-      });
-      if (res.ok) {
-        await refresh();
+      try {
+        await apiSend('/api/v1/roles', { method: 'POST', json: trial });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        if (e.status === 409) {
+          attempt += 1;
+          continue;
+        }
+        setGlobalErr(`Ошибка создания: ${e.codeOrStatus()}`);
         return;
       }
-      if (res.status === 409) {
-        attempt += 1;
-        continue;
-      }
-      const err = await res.json().catch(() => ({}) as Record<string, unknown>);
-      setGlobalErr(`Ошибка создания: ${err.error ?? res.status}`);
+      await refresh();
       return;
     }
     setGlobalErr('Не удалось придумать уникальное имя — переименуйте существующие роли.');
@@ -263,13 +261,11 @@ export default function GroupsPage() {
     setDeleting(true);
     setGlobalErr(null);
     try {
-      const res = await fetch(`/api/v1/roles/${role.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}) as Record<string, unknown>);
-        setGlobalErr(`Ошибка удаления: ${err.error ?? res.status}`);
+      try {
+        await apiSend(`/api/v1/roles/${role.id}`, { method: 'DELETE' });
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e;
+        setGlobalErr(`Ошибка удаления: ${e.codeOrStatus()}`);
         return;
       }
       await refresh();

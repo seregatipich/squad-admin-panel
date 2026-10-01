@@ -22,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { AccountIdentity } from './AccountIdentity';
@@ -86,14 +87,12 @@ export default function AccountSettings() {
   // повторно незачем, они загружаются один раз при монтировании (#426).
   const loadProfile = useCallback(async () => {
     try {
-      const [meRes, namesRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me/names', { credentials: 'include', cache: 'no-store' }),
+      const [loadedMe, loadedNames] = await Promise.all([
+        apiFetch<Me>('/api/v1/me'),
+        apiFetch<AccountNames>('/api/v1/me/names'),
       ]);
-      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-      if (!namesRes.ok) throw new Error(`HTTP ${namesRes.status}`);
-      setMe((await meRes.json()) as Me);
-      setNames((await namesRes.json()) as AccountNames);
+      setMe(loadedMe);
+      setNames(loadedNames);
       // Снимается только сообщение об ошибке от ЭТОГО же запроса: удачный
       // опрос профиля не должен стирать ошибку сессий (и наоборот), а
       // подтверждение «Сессия завершена» опрос вообще не имеет права стереть.
@@ -103,19 +102,14 @@ export default function AccountSettings() {
       }
     } catch (e) {
       lastFailedRef.current = 'profile';
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     }
   }, []);
 
   const loadSessions = useCallback(async () => {
     const revision = sessionsRevisionRef.current;
     try {
-      const res = await fetch('/api/v1/me/sessions', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ActiveSession[];
+      const data = await apiFetch<ActiveSession[]>('/api/v1/me/sessions');
       if (sessionsRevisionRef.current !== revision) return;
       setSessions(data);
       setSessionsLoaded(true);
@@ -127,7 +121,7 @@ export default function AccountSettings() {
       if (sessionsRevisionRef.current !== revision) return;
       setSessionsLoaded(true);
       lastFailedRef.current = 'sessions';
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     }
   }, []);
 
@@ -155,16 +149,12 @@ export default function AccountSettings() {
     setBusyId(id);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/me/sessions/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await apiSend(`/api/v1/me/sessions/${id}`, { method: 'DELETE' });
       sessionsRevisionRef.current++;
       setSessions((prev) => prev.filter((s) => s.id !== id));
       setMsg({ kind: 'ok', text: 'Сессия завершена.' });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusyId(null);
       setPendingRevoke(null);
@@ -175,14 +165,10 @@ export default function AccountSettings() {
     setRevokingAll(true);
     setMsg(null);
     try {
-      const r = await fetch('/api/v1/me/sessions', {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await apiSend('/api/v1/me/sessions', { method: 'DELETE' });
       window.location.href = '/login';
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
       setRevokingAll(false);
       setPendingRevoke(null);
     }

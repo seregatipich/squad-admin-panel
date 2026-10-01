@@ -1,4 +1,5 @@
 import type { MarkTypeIcon } from '@squad/shared-config/mark-types';
+import { ApiError } from '@/lib/api';
 
 export interface MarkType {
   id: number;
@@ -58,5 +59,6 @@ export class RequestFailure extends Error {
 /** Russian banner text for anything thrown while calling the API. */
 export function requestFailureText(error: unknown): string {
   if (error instanceof RequestFailure) return error.message;
+  if (error instanceof ApiError) return new RequestFailure(error.status).message;
   return 'Сетевая ошибка. Проверьте соединение и повторите.';
 }

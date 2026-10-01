@@ -12,7 +12,9 @@ import {
   StatTile,
   type StatTileTone,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 import { computeHostHealth, type HealthLevel } from '@/lib/host-health';
+import { useApiResource } from '@/lib/use-polled-resource';
 import { AnalyticsPanel } from './analytics-panel';
 import { buildConnectionRows, ConnectionsHealth } from './ConnectionsHealth';
 import { HostBlock } from './HostBlock';
@@ -63,7 +65,11 @@ export default function DashboardPage() {
   // загрузки, и оператор видит «Серверов нет» там, где идёт первый запрос (§8).
   const [loaded, setLoaded] = useState(false);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
-  const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
+  // Auxiliary: a transient error keeps the last breakdown.
+  const { data: diskBreakdown = null, setData: setDiskBreakdown } = useApiResource<DiskBreakdown>(
+    '/api/v1/host/disk-usage',
+    { intervalMs: 30_000 },
+  );
   const [diskModalOpen, setDiskModalOpen] = useState(false);
   const [depotModalOpen, setDepotModalOpen] = useState(false);
   const [depotProgressOpen, setDepotProgressOpen] = useState(false);
@@ -177,43 +183,15 @@ export default function DashboardPage() {
     };
   }, [load, loadInfo]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadDiskBreakdown() {
-      try {
-        const res = await fetch('/api/v1/host/disk-usage', {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!res.ok) return;
-        const payload = (await res.json()) as DiskBreakdown;
-        if (!cancelled) setDiskBreakdown(payload);
-      } catch {
-        // tolerate transient errors — disk breakdown is auxiliary
-      }
-    }
-    void loadDiskBreakdown();
-    const t = setInterval(loadDiskBreakdown, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
-
   const refreshDiskBreakdown = useCallback(async (): Promise<DiskBreakdown | null> => {
     try {
-      const res = await fetch('/api/v1/host/disk-usage?refresh=1', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) return null;
-      const payload = (await res.json()) as DiskBreakdown;
+      const payload = await apiFetch<DiskBreakdown>('/api/v1/host/disk-usage?refresh=1');
       setDiskBreakdown(payload);
       return payload;
     } catch {
       return null;
     }
-  }, []);
+  }, [setDiskBreakdown]);
 
   const runningCount = servers.filter((s) => s.status === 'running').length;
   const playersOnline = servers.reduce((acc, s) => acc + (s.player_count ?? 0), 0);
@@ -368,17 +346,14 @@ export default function DashboardPage() {
           player_count: s.player_count ?? 0,
         }))}
         onStart={async (serverIds) => {
-          const r = await fetch('/api/v1/depot/update', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ server_ids: serverIds }),
-          });
-          if (!r.ok) {
-            const body = (await r.json().catch(() => null)) as {
-              error?: string;
-              server_ids?: string[];
-            } | null;
+          try {
+            await apiSend('/api/v1/depot/update', {
+              method: 'POST',
+              json: { server_ids: serverIds },
+            });
+          } catch (e) {
+            if (!(e instanceof ApiError)) throw e;
+            const body = e.jsonBody<{ error?: string; server_ids?: string[] }>();
             // The depot is one volume shared by every server on the host, so
             // the API refuses unless every other live server is selected too
             // (#20 follow-up).
@@ -388,7 +363,7 @@ export default function DashboardPage() {
               );
             }
             // The dialog shows this message, so carry the API's error code.
-            throw new Error(body?.error ?? `HTTP ${r.status}`);
+            throw new Error(body?.error ?? `HTTP ${e.status}`);
           }
           setDepotProgressOpen(true);
           void load();
@@ -406,8 +381,12 @@ export default function DashboardPage() {
   );
 }
 
+/** Reads a JSON endpoint; a failed answer reads `<path> <status>` in the error strips. */
 async function fetchJson<T>(path: string): Promise<T> {
-  const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
-  if (!r.ok) throw new Error(`${path} ${r.status}`);
-  return (await r.json()) as T;
+  try {
+    return await apiFetch<T>(path);
+  } catch (e) {
+    if (e instanceof ApiError) throw new Error(`${path} ${e.status}`);
+    throw e;
+  }
 }

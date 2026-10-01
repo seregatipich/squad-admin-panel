@@ -32,7 +32,9 @@ import {
   Th,
   WarningIcon,
 } from '@/components/ui';
+import { ApiError, ApiResponseError, apiFetch } from '@/lib/api';
 import { useLiveBusState, useLiveSubscription } from '@/lib/use-live-bus';
+import { usePolledResource } from '@/lib/use-polled-resource';
 import {
   formatTimeOnServer,
   groupRosterByTeam,
@@ -112,8 +114,32 @@ export function LivePlayers({
    */
   modPermissions?: readonly string[];
 }) {
-  const [roster, setRoster] = useState<RosterResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Никакого опроса по таймеру: список ведёт шина. worker-rcon публикует
+  // `rcon.roster` сразу после каждого обновления состава, и строка появляется
+  // ровно тогда, когда игрок зашёл, а не на следующем тике часов.
+  //
+  // Событий достаточно, пока сокет жив, поэтому единственное, что здесь
+  // остаётся, — перечитать список после обрыва: за время, пока шина
+  // переподключалась, события потерялись. То же самое при возврате на вкладку,
+  // которую браузер усыпил вместе с сокетом.
+  //
+  // Загрузки идут из шины, возврата на вкладку и после модерации и могут
+  // завершиться не по порядку: хук применяет только ответ самого свежего
+  // запроса, а после смены сервера или размонтирования прежний отбрасывает.
+  const rosterPath = `/api/v1/servers/${serverId}/roster`;
+  const {
+    data: roster = null,
+    errorMessage: err,
+    refresh: load,
+  } = usePolledResource<RosterResponse>(
+    rosterPath,
+    async (signal) => {
+      const body = await apiFetch<RosterResponse>(rosterPath, { signal, timeoutMs: null });
+      if (!Array.isArray(body?.players)) throw new Error('Некорректный ответ сервера');
+      return body;
+    },
+    { pauseWhenHidden: true },
+  );
   const [squadTarget, setSquadTarget] = useState<SquadMessageTarget | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -129,55 +155,6 @@ export function LivePlayers({
       return next;
     });
   }, []);
-
-  /**
-   * Номер последнего запроса ростера. Загрузки идут из шины, возврата на
-   * вкладку и после модерации и могут завершиться не по порядку: применяется
-   * только ответ самого свежего запроса, а после смены сервера или размонтирования
-   * номер сдвигается, и прежний ответ отбрасывается.
-   */
-  const latestLoad = useRef(0);
-  useEffect(() => {
-    return () => {
-      latestLoad.current += 1;
-    };
-  }, [serverId]);
-
-  const load = useCallback(async () => {
-    const request = ++latestLoad.current;
-    try {
-      const resp = await fetch(`/api/v1/servers/${serverId}/roster`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const body = (await resp.json()) as RosterResponse;
-      if (request !== latestLoad.current) return;
-      if (!Array.isArray(body?.players)) throw new Error('Некорректный ответ сервера');
-      setRoster(body);
-      setErr(null);
-    } catch (loadError) {
-      if (request !== latestLoad.current) return;
-      setErr((loadError as Error).message);
-    }
-  }, [serverId]);
-
-  // Никакого опроса по таймеру: список ведёт шина. worker-rcon публикует
-  // `rcon.roster` сразу после каждого обновления состава, и строка появляется
-  // ровно тогда, когда игрок зашёл, а не на следующем тике часов.
-  //
-  // Событий достаточно, пока сокет жив, поэтому единственное, что здесь
-  // остаётся, — перечитать список после обрыва: за время, пока шина
-  // переподключалась, события потерялись. То же самое при возврате на вкладку,
-  // которую браузер усыпил вместе с сокетом.
-  useEffect(() => {
-    void load();
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void load();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [load]);
 
   const busState = useLiveBusState();
   const previousBusState = useRef(busState);
@@ -422,28 +399,32 @@ function QuickModerationDialog({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/moderation-actions/bulk', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          server_id: serverId,
-          action_type: action,
-          player_ids: [target.playerId],
-          reason: trimmed,
-          ban_length: action === 'ban' ? banLength : '0',
-          confirm_bulk: true,
-        }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(
-          REQUEST_ERROR_LABEL[body.error ?? ''] ?? `Не удалось применить (HTTP ${res.status})`,
-        );
+      let body: BulkResponse | null;
+      try {
+        body = await apiFetch<BulkResponse>('/api/v1/moderation-actions/bulk', {
+          method: 'POST',
+          json: {
+            server_id: serverId,
+            action_type: action,
+            player_ids: [target.playerId],
+            reason: trimmed,
+            ban_length: action === 'ban' ? banLength : '0',
+            confirm_bulk: true,
+          },
+        });
+      } catch (requestError) {
+        if (requestError instanceof ApiError) {
+          const failed = requestError.jsonBody<{ error?: string }>() ?? {};
+          throw new Error(
+            REQUEST_ERROR_LABEL[failed.error ?? ''] ??
+              `Не удалось применить (HTTP ${requestError.status})`,
+          );
+        }
+        if (requestError instanceof ApiResponseError) body = null;
+        else throw requestError;
       }
       // Запрос не транзакционный: 200 приходит и тогда, когда единственная
       // цель не была задета, — причина лежит в `results[0].error`.
-      const body = (await res.json().catch(() => null)) as BulkResponse | null;
       if (!Array.isArray(body?.results)) throw new Error('Некорректный ответ сервера');
       const failure = body.results.find((row) => row.status === 'failed');
       if (failure) {
