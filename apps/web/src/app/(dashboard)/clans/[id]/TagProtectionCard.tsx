@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Card, CardBody, CardHeader, InlineBanner, Switch } from '@/components/ui';
+import { apiResult, describeHttpError } from '@/lib/api';
 
 interface TagProtectionCardProps {
   clanId: string;
@@ -53,25 +54,21 @@ export default function TagProtectionCard({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/clans/${encodeURIComponent(clanId)}/settings`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ is_tag_protected: !isProtected }),
-      });
-      if (res.status === 401 || res.status === 403) {
-        setCanToggle(false);
+      const result = await apiResult<ClanSettingsResponse>(
+        `/api/v1/clans/${encodeURIComponent(clanId)}/settings`,
+        { method: 'PATCH', json: { is_tag_protected: !isProtected } },
+      );
+      if (!result.ok) {
+        if (result.error.status === 401 || result.error.status === 403) {
+          setCanToggle(false);
+          return;
+        }
+        setError(`Не удалось изменить настройку: ${result.error.codeOrStatus()}`);
         return;
       }
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(`Не удалось изменить настройку: ${body.error ?? res.status}`);
-        return;
-      }
-      const body = (await res.json()) as ClanSettingsResponse;
-      setIsProtected(body.is_tag_protected);
+      setIsProtected(result.data.is_tag_protected);
     } catch (e) {
-      setError((e as Error).message);
+      setError(describeHttpError(e));
     } finally {
       setSaving(false);
     }

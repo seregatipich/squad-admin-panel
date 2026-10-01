@@ -20,6 +20,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
 
 interface ClanStatsChartPoint {
   day: string;
@@ -165,19 +166,18 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
     setError(null);
     try {
       const query = new URLSearchParams({ from: statsWindow.from, to: statsWindow.to });
-      const res = await fetch(`/api/v1/clans/${clanId}/stats?${query.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`Не удалось загрузить статистику (${res.status})`);
-      const body: unknown = await res.json();
+      const body = await apiFetch<unknown>(`/api/v1/clans/${clanId}/stats?${query.toString()}`);
       if (!isClanStatsResponse(body)) throw new Error('Некорректный ответ сервера');
       // Ответ на устаревший период (7/30/90) не должен перезаписать актуальный.
       if (requestId !== latestLoadRef.current) return;
       setData(body);
     } catch (e) {
       if (requestId !== latestLoadRef.current) return;
-      setError((e as Error).message);
+      setError(
+        e instanceof ApiError
+          ? `Не удалось загрузить статистику (${e.status})`
+          : describeHttpError(e),
+      );
     } finally {
       if (requestId === latestLoadRef.current) setLoading(false);
     }

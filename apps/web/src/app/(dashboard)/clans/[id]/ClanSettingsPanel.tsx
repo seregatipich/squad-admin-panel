@@ -18,6 +18,7 @@ import {
   Textarea,
   TextInput,
 } from '@/components/ui';
+import { type ApiError, apiResult } from '@/lib/api';
 
 export interface ClanSettingsInitial {
   name: string;
@@ -51,6 +52,10 @@ const API_ERROR_MESSAGES: Record<string, string> = {
 };
 
 const NETWORK_ERROR_MESSAGE = 'Не удалось связаться с сервером. Повторите попытку.';
+
+function errorBody(error: ApiError): { error?: string } {
+  return error.jsonBody<{ error?: string }>() ?? {};
+}
 
 function errorMessage(prefix: string, body: { error?: string }): string {
   const reason = (body.error && API_ERROR_MESSAGES[body.error]) ?? 'неизвестная ошибка';
@@ -144,11 +149,10 @@ export default function ClanSettingsPanel({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}`, {
+      const result = await apiResult<unknown>(`/api/v1/clans/${clanId}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        discardBody: true,
+        json: {
           name: trimmedName,
           description: description.trim() ? description.trim() : null,
           tags: tags
@@ -157,11 +161,10 @@ export default function ClanSettingsPanel({
             .filter((tag) => tag.length > 0),
           max_priority_slots: Number.isFinite(slots) ? slots : undefined,
           primary_server_id: primaryServerId || null,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(errorMessage('Не удалось сохранить изменения', body));
+      if (!result.ok) {
+        setError(errorMessage('Не удалось сохранить изменения', errorBody(result.error)));
         return;
       }
       onSaved();
@@ -179,15 +182,13 @@ export default function ClanSettingsPanel({
       const priorityExpiresAt =
         days === null ? null : new Date(Date.now() + days * 86_400_000).toISOString();
       try {
-        const res = await fetch(`/api/v1/clans/${clanId}/expire`, {
+        const result = await apiResult<unknown>(`/api/v1/clans/${clanId}/expire`, {
           method: 'PATCH',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ priority_expires_at: priorityExpiresAt }),
+          discardBody: true,
+          json: { priority_expires_at: priorityExpiresAt },
         });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(errorMessage('Не удалось изменить срок приоритета', body));
+        if (!result.ok) {
+          setError(errorMessage('Не удалось изменить срок приоритета', errorBody(result.error)));
           return;
         }
         onSaved();
@@ -205,15 +206,13 @@ export default function ClanSettingsPanel({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}/settings`, {
+      const result = await apiResult<unknown>(`/api/v1/clans/${clanId}/settings`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ is_public: next }),
+        discardBody: true,
+        json: { is_public: next },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(errorMessage('Не удалось изменить видимость', body));
+      if (!result.ok) {
+        setError(errorMessage('Не удалось изменить видимость', errorBody(result.error)));
         return;
       }
       setIsPublic(next);
@@ -235,13 +234,12 @@ export default function ClanSettingsPanel({
     setDisbanding(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}`, {
+      const result = await apiResult<unknown>(`/api/v1/clans/${clanId}`, {
         method: 'DELETE',
-        credentials: 'include',
+        discardBody: true,
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(errorMessage('Не удалось расформировать клан', body));
+      if (!result.ok) {
+        setError(errorMessage('Не удалось расформировать клан', errorBody(result.error)));
         setDisbanding(false);
         setConfirmOpen(false);
         return;
