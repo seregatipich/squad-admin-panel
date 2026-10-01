@@ -29,6 +29,12 @@ export interface RequestOptions<T = unknown> extends Omit<RequestInit, 'body'> {
    * malformed body. Without it the body is only asserted to be `T`.
    */
   parse?: (body: unknown) => T;
+  /**
+   * Do not read the response body: a 2xx answer resolves to `undefined` even
+   * when the body is empty or not JSON. For a mutation (through
+   * {@link apiResult}) whose answer the caller only checks for success.
+   */
+  discardBody?: boolean;
 }
 
 /** A 2xx response whose body is not JSON, or does not match the caller's `parse` check. */
@@ -150,7 +156,14 @@ async function request(path: string, opts: RequestOptions<unknown>): Promise<Res
   if (body && !headers.has('content-type')) headers.set('content-type', 'application/json');
 
   const url = typeof window === 'undefined' ? `${API_URL}${path}` : path;
-  const { parse: _parse, json: _json, timeoutMs: _timeoutMs, cookie: _cookie, ...init } = opts;
+  const {
+    parse: _parse,
+    json: _json,
+    timeoutMs: _timeoutMs,
+    cookie: _cookie,
+    discardBody: _discardBody,
+    ...init
+  } = opts;
   const res = await fetch(url, {
     credentials: 'include',
     ...init,
@@ -188,6 +201,7 @@ async function request(path: string, opts: RequestOptions<unknown>): Promise<Res
  */
 export async function apiFetch<T>(path: string, opts: RequestOptions<T> = {}): Promise<T> {
   const res = await request(path, opts);
+  if (opts.discardBody) return undefined as T;
   let body: unknown;
   if (res.status !== 204) {
     try {
@@ -204,6 +218,28 @@ export async function apiFetch<T>(path: string, opts: RequestOptions<T> = {}): P
   }
 }
 
+/** Outcome of {@link apiResult}: the decoded body, or the API's error answer. */
+export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError };
+
+/**
+ * {@link apiFetch} for a caller that branches on the answer instead of
+ * catching: an error status comes back as `{ ok: false, error }` (the status
+ * is `error.status`, the body `error.jsonBody()`), so a page that shows a
+ * caption per status reads like the `if (res.ok)` code it replaces. Only a
+ * transport failure, an abort or a malformed 2xx body still throws.
+ */
+export async function apiResult<T>(
+  path: string,
+  opts: RequestOptions<T> = {},
+): Promise<ApiResult<T>> {
+  try {
+    return { ok: true, data: await apiFetch<T>(path, opts) };
+  } catch (error) {
+    if (error instanceof ApiError) return { ok: false, error };
+    throw error;
+  }
+}
+
 /**
  * Sends a request whose response body the caller does not use (a mutation
  * that only needs to know it succeeded). The body is never read, so an empty
@@ -213,5 +249,5 @@ export async function apiFetch<T>(path: string, opts: RequestOptions<T> = {}): P
  * @throws {DOMException} `TimeoutError`/`AbortError` when the request was aborted.
  */
 export async function apiSend(path: string, opts: RequestOptions<never> = {}): Promise<void> {
-  await request(path, opts);
+  await apiFetch<void>(path, { ...opts, discardBody: true });
 }

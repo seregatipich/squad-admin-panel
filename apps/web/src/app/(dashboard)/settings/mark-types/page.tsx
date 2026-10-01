@@ -27,17 +27,19 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 import { getLiveBus } from '@/lib/live-bus';
 import {
   isSameOrder,
   isValidSlug,
   type MarkType,
   moveItem,
-  RequestFailure,
   requestFailureText,
   severityLabel,
   sortByOrder,
 } from './helpers';
+
+const MARK_TYPES_WITH_INACTIVE = '/api/v1/mark-types?include_inactive=true';
 
 interface Me {
   permissions: string[];
@@ -88,28 +90,18 @@ export default function MarkTypesPage() {
   const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
 
   const loadTypes = useCallback(async () => {
-    const res = await fetch('/api/v1/mark-types?include_inactive=true', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new RequestFailure(res.status);
-    setTypes(sortByOrder((await res.json()) as MarkType[]));
+    setTypes(sortByOrder(await apiFetch<MarkType[]>(MARK_TYPES_WITH_INACTIVE)));
   }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [meRes, typesRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/mark-types?include_inactive=true', {
-          credentials: 'include',
-          cache: 'no-store',
-        }),
+      const [loadedMe, loadedTypes] = await Promise.all([
+        apiFetch<Me>('/api/v1/me'),
+        apiFetch<MarkType[]>(MARK_TYPES_WITH_INACTIVE),
       ]);
-      if (!meRes.ok) throw new RequestFailure(meRes.status);
-      if (!typesRes.ok) throw new RequestFailure(typesRes.status);
-      setMe((await meRes.json()) as Me);
-      setTypes(sortByOrder((await typesRes.json()) as MarkType[]));
+      setMe(loadedMe);
+      setTypes(sortByOrder(loadedTypes));
       setMsg(null);
     } catch (e) {
       setMsg({ kind: 'err', text: requestFailureText(e), retryable: true });
@@ -164,23 +156,24 @@ export default function MarkTypesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch('/api/v1/mark-types', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          slug: draft.slug.trim(),
-          label_en: draft.label_en.trim(),
-          label_ru: draft.label_ru.trim(),
-          icon: draft.icon,
-          severity: draft.severity,
-        }),
-      });
-      if (res.status === 409) {
-        setMsg({ kind: 'err', text: 'Тип с таким идентификатором уже существует.' });
-        return;
+      try {
+        await apiSend('/api/v1/mark-types', {
+          method: 'POST',
+          json: {
+            slug: draft.slug.trim(),
+            label_en: draft.label_en.trim(),
+            label_ru: draft.label_ru.trim(),
+            icon: draft.icon,
+            severity: draft.severity,
+          },
+        });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          setMsg({ kind: 'err', text: 'Тип с таким идентификатором уже существует.' });
+          return;
+        }
+        throw e;
       }
-      if (!res.ok) throw new RequestFailure(res.status);
       setDraft(EMPTY_DRAFT);
       await reloadAfterMutation('Тип метки создан и уже доступен в модалке установки.');
     } catch (err) {
@@ -209,18 +202,15 @@ export default function MarkTypesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/mark-types/${id}`, {
+      await apiSend(`/api/v1/mark-types/${id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           label_en: editDraft.label_en.trim(),
           label_ru: editDraft.label_ru.trim(),
           icon: editDraft.icon,
           severity: editDraft.severity,
-        }),
+        },
       });
-      if (!res.ok) throw new RequestFailure(res.status);
       setEditingId(null);
       await reloadAfterMutation('Тип метки обновлён.');
     } catch (err) {
@@ -234,13 +224,10 @@ export default function MarkTypesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/mark-types/${type.id}`, {
+      await apiSend(`/api/v1/mark-types/${type.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ is_active: !type.is_active }),
+        json: { is_active: !type.is_active },
       });
-      if (!res.ok) throw new RequestFailure(res.status);
       await reloadAfterMutation(
         type.is_active
           ? 'Тип деактивирован: скрыт из модалки, но сохранён в истории и фильтрах.'
@@ -259,13 +246,10 @@ export default function MarkTypesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch('/api/v1/mark-types/reorder', {
+      await apiSend('/api/v1/mark-types/reorder', {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ordered_ids: next.map((t) => t.id) }),
+        json: { ordered_ids: next.map((t) => t.id) },
       });
-      if (!res.ok) throw new RequestFailure(res.status);
       await loadTypes();
     } catch (err) {
       setTypes(previous);

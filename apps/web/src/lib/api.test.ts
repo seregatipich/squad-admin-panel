@@ -4,6 +4,7 @@ import {
   ApiError,
   ApiResponseError,
   apiFetch,
+  apiResult,
   apiSend,
   describeHttpError,
   nullOnHttpError,
@@ -394,6 +395,45 @@ describe('ApiError.codeOrStatus', () => {
     expect(new ApiError('/x', 502, '<html>').codeOrStatus()).toBe(502);
     expect(new ApiError('/x', 503, 'null').codeOrStatus()).toBe(503);
     expect(new ApiError('/x', 400, '{"error":{"nested":1}}').codeOrStatus()).toBe(400);
+  });
+});
+
+describe('apiResult', () => {
+  it('wraps a decoded body as ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ a: 1 })));
+    await expect(apiResult('/api/v1/x')).resolves.toEqual({ ok: true, data: { a: 1 } });
+  });
+
+  it('returns an error status as a value carrying the ApiError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{"error":"nope"}', { status: 422 })),
+    );
+    const result = await apiResult('/api/v1/x');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBeInstanceOf(ApiError);
+    expect(result.error.status).toBe(422);
+    expect(result.error.jsonBody()).toEqual({ error: 'nope' });
+  });
+
+  it('with discardBody accepts an empty or non-JSON 2xx answer and strips the option from fetch', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response('not json', { status: 200 }));
+    vi.stubGlobal('fetch', mockFetch);
+    await expect(apiResult('/api/v1/x', { method: 'DELETE', discardBody: true })).resolves.toEqual({
+      ok: true,
+      data: undefined,
+    });
+    expect(mockFetch.mock.calls[0]?.[1]).not.toHaveProperty('discardBody');
+  });
+
+  it('still throws a network failure, an abort and a malformed 2xx body', async () => {
+    const failure = new TypeError('Failed to fetch');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure));
+    await expect(apiResult('/api/v1/x')).rejects.toBe(failure);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 200 })));
+    await expect(apiResult('/api/v1/x')).rejects.toBeInstanceOf(ApiResponseError);
   });
 });
 
