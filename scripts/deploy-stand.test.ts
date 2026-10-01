@@ -22,9 +22,8 @@ import {
   runAsync,
   shimDirectory,
 } from './test-helpers/ops.ts';
+import { IMAGE_REPO, imageRef, RELEASE_SHA } from './test-helpers/stand-release.ts';
 
-const IMAGE_REPO = 'ghcr.io/seregatipich/squad-panel';
-const RELEASE_SHA = 'a'.repeat(40);
 const NEXT_SHA = 'c'.repeat(40);
 const IMAGES = [
   ['API_IMAGE', 'api'],
@@ -33,10 +32,6 @@ const IMAGES = [
   ['CADDY_IMAGE', 'caddy'],
 ] as const;
 type ImageKey = (typeof IMAGES)[number][0];
-
-function imageRef(name: string, fill: string): string {
-  return `${IMAGE_REPO}-${name}@sha256:${fill.repeat(64)}`;
-}
 
 /** The four image variables of a release, each digest filled with `fill` unless overridden. */
 function releaseImages(

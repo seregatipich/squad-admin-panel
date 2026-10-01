@@ -32,7 +32,7 @@
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
     "solve:issues": "tsx scripts/solve-issues-parallel.ts",
     "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
-    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/deploy-workflow.test.ts scripts/bootstrap.test.ts scripts/deploy-stand.test.ts scripts/operations-scripts.test.ts scripts/dev-app.test.ts scripts/verify-audit-chain.test.ts",
+    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/deploy-workflow.test.ts scripts/bootstrap.test.ts scripts/deploy-stand.test.ts scripts/deploy-entry.test.ts scripts/operations-scripts.test.ts scripts/dev-app.test.ts scripts/verify-audit-chain.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {
