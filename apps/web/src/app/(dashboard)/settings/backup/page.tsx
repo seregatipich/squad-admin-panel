@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { BackupTriggerButton } from '@/components/BackupTriggerButton';
 import { RestoreSnapshotButton } from '@/components/RestoreSnapshotButton';
 import {
@@ -18,6 +18,8 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { ApiError } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 const POLL_MS = 30_000;
 
@@ -28,6 +30,10 @@ interface Snapshot {
   hostname: string;
   paths: string[];
   tags: string[];
+}
+
+interface BackupList {
+  snapshots: Snapshot[];
 }
 
 type Load =
@@ -41,69 +47,40 @@ function formatDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU');
 }
 
-export default function BackupPage() {
-  const [state, setState] = useState<Load>({ kind: 'loading' });
-  // Guards against overlapping polls: a slow request must not race the next
-  // tick's request over the same `state` (#675).
-  const loadingRef = useRef(false);
-  // Mirrors `state.kind` so the poll tick can stop after a 403 and a failed
-  // background refresh can keep the last good list (#675).
-  const kindRef = useRef<Load['kind']>('loading');
-  const show = useCallback((next: Load) => {
-    kindRef.current = next.kind;
-    setState(next);
-  }, []);
+function isForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
 
-  const load = useCallback(async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    try {
-      const res = await fetch('/api/v1/host/backups', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 403) {
-        show({ kind: 'forbidden' });
-        return;
-      }
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { detail?: string };
-        if (kindRef.current === 'ready') return;
-        show({ kind: 'error', text: j.detail ?? `HTTP ${res.status}` });
-        return;
-      }
-      const body = (await res.json()) as { snapshots: Snapshot[] };
+function describeLoadFailure(error: Error): string {
+  if (error instanceof ApiError) {
+    return error.jsonBody<{ detail?: string }>()?.detail ?? `HTTP ${error.status}`;
+  }
+  return error.message;
+}
+
+export default function BackupPage() {
+  // A 403 stops the poll (every later tick would repeat it); a hidden tab has
+  // nobody to show the list to, so the bridge is not hit for it either (#675).
+  const { data, error, refresh } = useApiResource<BackupList>('/api/v1/host/backups', {
+    intervalMs: POLL_MS,
+    pauseWhenHidden: true,
+    stopPolling: isForbidden,
+  });
+
+  const state = useMemo<Load>(() => {
+    if (isForbidden(error)) return { kind: 'forbidden' };
+    // A failed background refresh keeps the last good list (#675).
+    if (data) {
       // The bridge/restic contract for a taggless snapshot plausibly omits
       // `tags` or sends null; normalize so `.length`/`.map` never throws.
-      show({
+      return {
         kind: 'ready',
-        snapshots: body.snapshots.map((s) => ({ ...s, tags: s.tags ?? [] })),
-      });
-    } catch (e) {
-      if (kindRef.current === 'ready') return;
-      show({ kind: 'error', text: (e as Error).message });
-    } finally {
-      loadingRef.current = false;
+        snapshots: data.snapshots.map((s) => ({ ...s, tags: s.tags ?? [] })),
+      };
     }
-  }, [show]);
-
-  useEffect(() => {
-    void load();
-    // Paused while the tab is hidden — no point hammering the bridge for a
-    // page nobody is looking at (#675).
-    const t = setInterval(() => {
-      if (document.hidden || kindRef.current === 'forbidden') return;
-      void load();
-    }, POLL_MS);
-    const onVisibilityChange = () => {
-      if (!document.hidden) void load();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [load]);
+    if (error) return { kind: 'error', text: describeLoadFailure(error) };
+    return { kind: 'loading' };
+  }, [data, error]);
 
   return (
     <>
@@ -114,7 +91,7 @@ export default function BackupPage() {
           <BackupTriggerButton
             disabled={state.kind === 'forbidden'}
             disabledReason="Нет прав на управление хостом"
-            onBackedUp={() => void load()}
+            onBackedUp={() => void refresh()}
           />
         }
       />
@@ -132,7 +109,7 @@ export default function BackupPage() {
           tone="crit"
           title={`Не удалось загрузить список бэкапов: ${state.text}`}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void refresh()}>
               Повторить
             </Button>
           }
@@ -192,7 +169,7 @@ export default function BackupPage() {
                       <RestoreSnapshotButton
                         shortId={s.short_id}
                         time={formatDate(s.time)}
-                        onRestored={() => void load()}
+                        onRestored={() => void refresh()}
                       />
                     </Td>
                   </TableRow>

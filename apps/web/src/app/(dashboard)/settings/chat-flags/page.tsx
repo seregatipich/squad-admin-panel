@@ -24,6 +24,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import {
   CHAT_FLAG_LOCALES,
   CHAT_FLAG_PATTERN_TYPES,
@@ -70,13 +71,10 @@ export default function ChatFlagsPage() {
   const patternId = useId();
 
   const loadRules = useCallback(async () => {
-    const res = await fetch('/api/v1/settings/chat-flag-rules', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = await res.json();
-    setRules(body.items as ChatFlagRule[]);
+    const body = await apiFetch<{ items: ChatFlagRule[]; can_mutate?: unknown }>(
+      '/api/v1/settings/chat-flag-rules',
+    );
+    setRules(body.items);
     setCanEdit(Boolean(body.can_mutate));
   }, []);
 
@@ -86,7 +84,7 @@ export default function ChatFlagsPage() {
       await loadRules();
       setMsg(null);
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setLoading(false);
     }
@@ -127,31 +125,24 @@ export default function ChatFlagsPage() {
       enabled: draft.enabled,
     };
     try {
-      const res = await fetch(
+      await apiSend(
         editingId
           ? `/api/v1/settings/chat-flag-rules/${editingId}`
           : '/api/v1/settings/chat-flag-rules',
-        {
-          method: editingId ? 'PATCH' : 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
+        { method: editingId ? 'PATCH' : 'POST', json: payload },
       );
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        if (res.status === 422) {
-          throw new Error(`Недопустимый паттерн: ${body.detail ?? 'ошибка валидации'}`);
-        }
-        if (res.status === 409) {
-          throw new Error('Такое правило уже существует.');
-        }
-        throw new Error(`HTTP ${res.status}: ${body.error ?? 'ошибка'}`);
-      }
       await loadRules();
       resetDraft();
       setMsg({ kind: 'ok', text: editingId ? 'Правило обновлено.' : 'Правило создано.' });
     } catch (e) {
+      if (e instanceof ApiError) {
+        const body = e.jsonBody<Record<string, unknown>>() ?? {};
+        let text = `HTTP ${e.status}: ${body.error ?? 'ошибка'}`;
+        if (e.status === 422) text = `Недопустимый паттерн: ${body.detail ?? 'ошибка валидации'}`;
+        else if (e.status === 409) text = 'Такое правило уже существует.';
+        setMsg({ kind: 'err', text });
+        return;
+      }
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusy(false);
@@ -162,16 +153,13 @@ export default function ChatFlagsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/settings/chat-flag-rules/${rule.id}`, {
+      await apiSend(`/api/v1/settings/chat-flag-rules/${rule.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !rule.enabled }),
+        json: { enabled: !rule.enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await loadRules();
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -181,18 +169,14 @@ export default function ChatFlagsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/settings/chat-flag-rules/${rule.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/settings/chat-flag-rules/${rule.id}`, { method: 'DELETE' });
       if (editingId === rule.id) resetDraft();
       setPendingDelete(null);
       await loadRules();
       setMsg({ kind: 'ok', text: 'Правило удалено.' });
     } catch (e) {
       setPendingDelete(null);
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -202,20 +186,17 @@ export default function ChatFlagsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch('/api/v1/settings/chat-flag-rules/reindex', {
+      const summary = await apiFetch<ReindexSummary>('/api/v1/settings/chat-flag-rules/reindex', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ days: clampReindexDays(reindexDaysInput) }),
+        json: { days: clampReindexDays(reindexDaysInput) },
       });
-      if (res.status === 409) {
-        throw new Error('Переиндексация уже выполняется — дождитесь её завершения.');
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const summary = (await res.json()) as ReindexSummary;
       setMsg({ kind: 'ok', text: summarizeReindex(summary) });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      const text =
+        e instanceof ApiError && e.status === 409
+          ? 'Переиндексация уже выполняется — дождитесь её завершения.'
+          : describeHttpError(e);
+      setMsg({ kind: 'err', text });
     } finally {
       setBusy(false);
     }

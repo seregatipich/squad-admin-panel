@@ -1,6 +1,5 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
   GroupedList,
@@ -10,6 +9,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import { NAV_GROUPS, type NavItem } from '@/lib/nav';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface Me {
   permissions: string[];
@@ -39,23 +39,8 @@ const SETTINGS_COLUMNS: NavItem[] =
  * экономики, поэтому фильтр по `requiresEconomy` здесь не нужен.
  */
 export default function SettingsIndexPage() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setMe((await res.json()) as Me);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { data, errorMessage: error, refresh } = useApiResource<Me>('/api/v1/me');
+  const me = data ?? null;
 
   const visibleColumns = me
     ? SETTINGS_COLUMNS.map((column) => ({
@@ -81,7 +66,7 @@ export default function SettingsIndexPage() {
           title="Не удалось загрузить список настроек"
           description={error}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void refresh()}>
               Повторить
             </Button>
           }

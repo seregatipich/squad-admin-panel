@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { AlertDialog, Button, InlineBanner } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 type Phase = 'idle' | 'confirming' | 'running' | 'done' | 'error';
 
@@ -35,19 +36,17 @@ export function BackupTriggerButton({ disabled, disabledReason, onBackedUp }: Pr
     setPhase('running');
     setErrorText(null);
     try {
-      const res = await fetch('/api/v1/host/backups', {
+      const res = await apiResult<unknown>('/api/v1/host/backups', {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
+        discardBody: true,
       });
-      if (res.status === 403) {
-        setErrorText('Нет прав на эту операцию.');
-        setPhase('error');
-        return;
-      }
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { detail?: string };
-        setErrorText(`Не удалось создать бэкап: ${j.detail ?? `HTTP ${res.status}`}`);
+        if (res.error.status === 403) {
+          setErrorText('Нет прав на эту операцию.');
+        } else {
+          const j = res.error.jsonBody<{ detail?: string }>();
+          setErrorText(`Не удалось создать бэкап: ${j?.detail ?? `HTTP ${res.error.status}`}`);
+        }
         setPhase('error');
         return;
       }

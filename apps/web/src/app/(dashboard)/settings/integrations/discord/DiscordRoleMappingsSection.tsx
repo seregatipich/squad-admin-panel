@@ -21,6 +21,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { type ApiError, apiResult } from '@/lib/api';
 
 /**
  * Panel role → Discord role mapping management (DISCORD-5, #152) on
@@ -77,9 +78,9 @@ const CREATE_ERRORS: Record<string, string> = {
 
 const BASE = '/api/v1/integrations/discord/role-mappings';
 
-async function readError(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string };
-  return (body.error && CREATE_ERRORS[body.error]) ?? 'Не удалось сохранить маппинг';
+function describeSaveError(error: ApiError): string {
+  const body = error.jsonBody<{ error?: string }>();
+  return (body?.error && CREATE_ERRORS[body.error]) ?? 'Не удалось сохранить маппинг';
 }
 
 export default function DiscordRoleMappingsSection() {
@@ -100,25 +101,21 @@ export default function DiscordRoleMappingsSection() {
   const load = useCallback(async () => {
     try {
       const [mappingsRes, rolesRes] = await Promise.all([
-        fetch(BASE, { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+        apiResult<{ items: RoleMappingRow[]; status: RoleSyncStatus | null }>(BASE),
+        apiResult<RoleOption[]>('/api/v1/roles'),
       ]);
-      if (mappingsRes.status === 403) {
-        setHidden(true);
-        return;
-      }
       if (!mappingsRes.ok) {
+        if (mappingsRes.error.status === 403) {
+          setHidden(true);
+          return;
+        }
         setError('Не удалось загрузить маппинги ролей');
         setLoaded(true);
         return;
       }
-      const body = (await mappingsRes.json()) as {
-        items: RoleMappingRow[];
-        status: RoleSyncStatus | null;
-      };
-      setItems(body.items);
-      setStatus(body.status);
-      if (rolesRes.ok) setRoleOptions((await rolesRes.json()) as RoleOption[]);
+      setItems(mappingsRes.data.items);
+      setStatus(mappingsRes.data.status);
+      if (rolesRes.ok) setRoleOptions(rolesRes.data);
       setError(null);
       setLoaded(true);
     } catch {
@@ -145,14 +142,13 @@ export default function DiscordRoleMappingsSection() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(BASE, {
+      const res = await apiResult<unknown>(BASE, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_id: formRoleId, discord_role_id: formDiscordRoleId }),
+        json: { role_id: formRoleId, discord_role_id: formDiscordRoleId },
+        discardBody: true,
       });
       if (!res.ok) {
-        setError(await readError(res));
+        setError(describeSaveError(res.error));
         return;
       }
       setFormRoleId('');
@@ -169,14 +165,13 @@ export default function DiscordRoleMappingsSection() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${BASE}/${row.id}`, {
+      const res = await apiResult<unknown>(`${BASE}/${row.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !row.enabled }),
+        json: { enabled: !row.enabled },
+        discardBody: true,
       });
       if (!res.ok) {
-        setError(await readError(res));
+        setError(describeSaveError(res.error));
         return;
       }
       await load();
@@ -191,9 +186,12 @@ export default function DiscordRoleMappingsSection() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${BASE}/${row.id}`, { method: 'DELETE', credentials: 'include' });
+      const res = await apiResult<unknown>(`${BASE}/${row.id}`, {
+        method: 'DELETE',
+        discardBody: true,
+      });
       if (!res.ok) {
-        setError(await readError(res));
+        setError(describeSaveError(res.error));
         return;
       }
       await load();
@@ -209,7 +207,10 @@ export default function DiscordRoleMappingsSection() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`${BASE}/reconcile`, { method: 'POST', credentials: 'include' });
+      const res = await apiResult<unknown>(`${BASE}/reconcile`, {
+        method: 'POST',
+        discardBody: true,
+      });
       if (!res.ok) {
         setError('Не удалось запустить синхронизацию');
         return;

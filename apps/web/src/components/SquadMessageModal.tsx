@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
 import { AlertDialog, Button, InlineBanner, Modal, Textarea } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
 
@@ -50,11 +51,8 @@ export function SquadMessageModal({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/v1/message-templates', {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (res.ok && !cancelled) setTemplates((await res.json()) as MessageTemplate[]);
+        const list = await apiFetch<MessageTemplate[]>('/api/v1/message-templates');
+        if (!cancelled) setTemplates(list);
       } catch {
         // Template list is best-effort — the free-text input still works.
       }
@@ -74,23 +72,19 @@ export function SquadMessageModal({
     setBusy(true);
     setFeedback(null);
     try {
-      const res = await fetch(
+      await apiSend(
         `/api/v1/servers/${target.serverId}/squads/${target.squadId}/message?team_id=${target.teamId}`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ message: trimmed }),
-        },
+        { method: 'POST', json: { message: trimmed } },
       );
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
       setFeedback({ kind: 'ok', text: 'Сообщение отправлено' });
       setMessage('');
     } catch (err) {
-      setFeedback({ kind: 'err', text: (err as Error).message });
+      if (err instanceof ApiError) {
+        const body = err.jsonBody<{ error?: string }>();
+        setFeedback({ kind: 'err', text: body?.error ?? `HTTP ${err.status}` });
+      } else {
+        setFeedback({ kind: 'err', text: (err as Error).message });
+      }
     } finally {
       setBusy(false);
       setConfirming(false);

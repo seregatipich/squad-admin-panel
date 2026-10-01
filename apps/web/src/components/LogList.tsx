@@ -24,6 +24,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { apiFetch } from '@/lib/api';
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type Level = (typeof LEVELS)[number];
@@ -128,12 +129,7 @@ export function LogList(props: {
     const controller = new AbortController();
     void (async () => {
       try {
-        const r = await fetch(buildUrl(), { credentials: 'include', signal: controller.signal });
-        if (!r.ok) {
-          setLoadFailed(true);
-          return;
-        }
-        const body = (await r.json()) as LogsResponse;
+        const body = await apiFetch<LogsResponse>(buildUrl(), { signal: controller.signal });
         setEntries(body.entries);
         setLoaded(true);
         // Tail from the newest entry the server scanned, not the newest match:
@@ -156,9 +152,7 @@ export function LogList(props: {
       // polling forever — fall back to the plain query so the first log to
       // appear is still picked up, matching the "в реальном времени" promise.
       try {
-        const r = await fetch(buildUrl(after ? { after } : {}), { credentials: 'include' });
-        if (!r.ok) return;
-        const body = (await r.json()) as LogsResponse;
+        const body = await apiFetch<LogsResponse>(buildUrl(after ? { after } : {}));
         lastIdRef.current = body.newest_scanned_id ?? body.entries[0]?.id ?? after;
         if (body.entries.length === 0) return;
         setEntries((prev) => (after ? [...body.entries, ...prev] : body.entries).slice(0, 1000));

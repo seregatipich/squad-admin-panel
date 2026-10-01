@@ -4,6 +4,7 @@ import { unpackHostMetrics } from '@squad/shared-config/metrics-pack';
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import { Button, EmptyState, InlineBanner, Modal, Skeleton } from '@/components/ui';
+import { apiFetch, describeHttpError } from '@/lib/api';
 import type { MetricKey, MetricPoint } from './MetricHistoryChart';
 
 const Chart = dynamic(() => import('./MetricHistoryChart'), {
@@ -53,12 +54,9 @@ export function MetricHistoryModal(props: {
     const controller = new AbortController();
     void (async () => {
       try {
-        const r = await fetch('/api/v1/host/metrics/history?seconds=86400', {
-          credentials: 'include',
+        const body = await apiFetch<HistoryResponse>('/api/v1/host/metrics/history?seconds=86400', {
           signal: controller.signal,
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const body = (await r.json()) as HistoryResponse;
         const points: MetricPoint[] = body.ts.map((t, i) => {
           const m = unpackHostMetrics(body.v[i] ?? []);
           return {
@@ -73,7 +71,7 @@ export function MetricHistoryModal(props: {
         setData(points);
       } catch (e) {
         if ((e as Error).name === 'AbortError') return;
-        setError((e as Error).message);
+        setError(describeHttpError(e));
       }
     })();
     return () => controller.abort();

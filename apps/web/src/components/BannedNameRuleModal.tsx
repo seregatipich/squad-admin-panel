@@ -20,6 +20,7 @@ import {
   Select,
   TextInput,
 } from '@/components/ui';
+import { ApiError, apiFetch } from '@/lib/api';
 
 export interface BannedNameRule {
   id: string;
@@ -158,24 +159,18 @@ export function BannedNameRuleModal({
       is_active: form.is_active,
     };
     try {
-      const res = await fetch(
+      const rule = await apiFetch<BannedNameRule>(
         editingId ? `/api/v1/banned-names/${editingId}` : '/api/v1/banned-names',
-        {
-          method: editingId ? 'PATCH' : 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
+        { method: editingId ? 'PATCH' : 'POST', json: payload },
       );
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        const detail = body.detail ?? body.error ?? `HTTP ${res.status}`;
-        throw new Error(String(detail));
-      }
-      const rule = (await res.json()) as BannedNameRule;
       onSaved(rule);
     } catch (submitError) {
-      setError((submitError as Error).message);
+      if (submitError instanceof ApiError) {
+        const body = submitError.jsonBody<Record<string, unknown>>() ?? {};
+        setError(String(body.detail ?? body.error ?? `HTTP ${submitError.status}`));
+      } else {
+        setError((submitError as Error).message);
+      }
     } finally {
       setSubmitting(false);
     }

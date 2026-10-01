@@ -149,4 +149,26 @@ describe('MediaPublishingIntegrationPage', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'reloads the status when the error banner Повторить button is pressed',
+    async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 500 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(status({ telegram_configured: true })), { status: 200 }),
+        );
+      vi.stubGlobal('fetch', fetchImpl);
+      render(<MediaPublishingIntegrationPage />);
+
+      await screen.findByText(/Не удалось загрузить настройки публикации/);
+      fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+      await screen.findByText('настроено');
+      expect(screen.queryByText(/Не удалось загрузить настройки публикации/)).toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

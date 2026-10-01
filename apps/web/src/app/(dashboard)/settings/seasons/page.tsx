@@ -22,6 +22,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 /** Mirrors the `Season` payload of `GET /api/v1/seasons` (LEAD-7, #178). */
 export interface Season {
@@ -119,14 +120,15 @@ export default function SeasonsSettingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/seasons', { credentials: 'include', cache: 'no-store' });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
+      const res = await apiResult<{ items: Season[] }>('/api/v1/seasons');
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        throw new Error(`Ошибка ${res.error.status}`);
       }
-      if (!res.ok) throw new Error(`Ошибка ${res.status}`);
-      const body = (await res.json()) as { items: Season[] };
-      setSeasons(body.items);
+      setSeasons(res.data.items);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -177,19 +179,17 @@ export default function SeasonsSettingsPage() {
         ends_at: dayToIso(form.endsAt),
         status: form.status,
       };
-      const res = await fetch(editingId ? `/api/v1/seasons/${editingId}` : '/api/v1/seasons', {
-        method: editingId ? 'PATCH' : 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.status === 401 || res.status === 403) {
-        setCanManage(false);
-        return;
-      }
+      const res = await apiResult<unknown>(
+        editingId ? `/api/v1/seasons/${editingId}` : '/api/v1/seasons',
+        { method: editingId ? 'PATCH' : 'POST', json: payload, discardBody: true },
+      );
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: unknown };
-        setError(describeError(body.error, res.status));
+        if (res.error.status === 401 || res.error.status === 403) {
+          setCanManage(false);
+          return;
+        }
+        const body = res.error.jsonBody<{ error?: unknown }>();
+        setError(describeError(body?.error, res.error.status));
         return;
       }
       setNotice(editingId ? 'Сезон обновлён.' : 'Сезон создан.');
@@ -207,19 +207,18 @@ export default function SeasonsSettingsPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/v1/seasons/${season.id}`, {
+      const res = await apiResult<unknown>(`/api/v1/seasons/${season.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ status: 'closed' }),
+        json: { status: 'closed' },
+        discardBody: true,
       });
-      if (res.status === 401 || res.status === 403) {
-        setCanManage(false);
-        return;
-      }
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: unknown };
-        setError(describeError(body.error, res.status));
+        if (res.error.status === 401 || res.error.status === 403) {
+          setCanManage(false);
+          return;
+        }
+        const body = res.error.jsonBody<{ error?: unknown }>();
+        setError(describeError(body?.error, res.error.status));
         return;
       }
       setNotice('Сезон закрыт.');

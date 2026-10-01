@@ -21,6 +21,7 @@ import {
   TextInput,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiResult } from '@/lib/api';
 import { describeApiError, eventLabel } from './discord-events';
 
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -157,19 +158,16 @@ export default function DiscordTemplatesSection() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch('/api/v1/integrations/discord/templates', {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (res.status === 401 || res.status === 403) {
-          setForbidden(true);
-          return;
-        }
+        const res = await apiResult<TemplateRow[]>('/api/v1/integrations/discord/templates');
         if (!res.ok) {
-          setError(`Не удалось загрузить шаблоны: ${res.status}`);
+          if (res.error.status === 401 || res.error.status === 403) {
+            setForbidden(true);
+            return;
+          }
+          setError(`Не удалось загрузить шаблоны: ${res.error.status}`);
           return;
         }
-        const body = (await res.json()) as TemplateRow[];
+        const body = res.data;
         setRows(body);
         const first = body[0];
         if (first) setForm(toForm(first));
@@ -182,26 +180,24 @@ export default function DiscordTemplatesSection() {
 
   useEffect(() => {
     if (!form) return;
-    const body = JSON.stringify({ template: toTemplate(form), context: PREVIEW_CONTEXT });
+    const body = { template: toTemplate(form), context: PREVIEW_CONTEXT };
     const eventType = form.eventType;
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`/api/v1/integrations/discord/templates/${eventType}/preview`, {
+      apiFetch<PreviewResponse>(`/api/v1/integrations/discord/templates/${eventType}/preview`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body,
+        json: body,
+        signal: controller.signal,
       })
-        .then(async (res) => (res.ok ? ((await res.json()) as PreviewResponse) : null))
         .then((parsed) => {
-          if (!cancelled) setPreview(parsed);
+          if (!controller.signal.aborted) setPreview(parsed);
         })
         .catch(() => {
-          if (!cancelled) setPreview(null);
+          if (!controller.signal.aborted) setPreview(null);
         });
     }, PREVIEW_DEBOUNCE_MS);
     return () => {
-      cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [form]);
@@ -219,18 +215,21 @@ export default function DiscordTemplatesSection() {
   }, []);
 
   const mutate = useCallback(
-    async (request: () => Promise<Response>, failure: string, setBusy: (busy: boolean) => void) => {
+    async (
+      request: () => Promise<TemplateRow>,
+      failure: string,
+      setBusy: (busy: boolean) => void,
+    ) => {
       setBusy(true);
       setError(null);
       try {
-        const res = await request();
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(`${failure}: ${describeApiError(res.status, body.error)}`);
+        applyRow(await request());
+      } catch (e) {
+        if (e instanceof ApiError) {
+          const body = e.jsonBody<{ error?: string }>();
+          setError(`${failure}: ${describeApiError(e.status, body?.error)}`);
           return;
         }
-        applyRow((await res.json()) as TemplateRow);
-      } catch (e) {
         setError((e as Error).message);
       } finally {
         setBusy(false);
@@ -249,11 +248,9 @@ export default function DiscordTemplatesSection() {
   function save(current: FormState) {
     return mutate(
       () =>
-        fetch(`/api/v1/integrations/discord/templates/${current.eventType}`, {
+        apiFetch<TemplateRow>(`/api/v1/integrations/discord/templates/${current.eventType}`, {
           method: 'PUT',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ template: toTemplate(current), locale: current.locale }),
+          json: { template: toTemplate(current), locale: current.locale },
         }),
       'Не удалось сохранить шаблон',
       setSaving,
@@ -263,9 +260,8 @@ export default function DiscordTemplatesSection() {
   function resetToDefault(current: FormState) {
     return mutate(
       () =>
-        fetch(`/api/v1/integrations/discord/templates/${current.eventType}/reset`, {
+        apiFetch<TemplateRow>(`/api/v1/integrations/discord/templates/${current.eventType}/reset`, {
           method: 'POST',
-          credentials: 'include',
         }),
       'Не удалось сбросить шаблон',
       setResetting,

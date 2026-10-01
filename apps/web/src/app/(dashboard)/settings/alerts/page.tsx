@@ -29,6 +29,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, apiResult, apiSend, describeHttpError } from '@/lib/api';
 
 interface AlertRule {
   id: string;
@@ -155,19 +156,19 @@ export default function AlertsPage() {
   const refresh = useCallback(async () => {
     try {
       const [rulesRes, eventsRes, meRes] = await Promise.all([
-        fetch('/api/v1/alert-rules', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/alerts', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<AlertRule[]>('/api/v1/alert-rules'),
+        apiResult<AlertEvent[]>('/api/v1/alerts'),
+        apiResult<Me>('/api/v1/me'),
       ]);
       // A failed leg falls back to whatever was already loaded (or an empty
       // list on the very first load) instead of leaving its state null
       // forever — otherwise `loading` below never clears and the retry
       // banner sits behind a permanent skeleton (#670).
-      if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
+      if (rulesRes.ok) setRules(rulesRes.data);
       else setRules((prev) => prev ?? []);
-      if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
+      if (eventsRes.ok) setEvents(eventsRes.data);
       else setEvents((prev) => prev ?? []);
-      if (meRes.ok) setMe((await meRes.json()) as Me);
+      if (meRes.ok) setMe(meRes.data);
       else setMe((prev) => prev ?? { permissions: [] });
       setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
     } catch {
@@ -209,26 +210,25 @@ export default function AlertsPage() {
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/alert-rules', {
+      await apiSend('/api/v1/alert-rules', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           name: form.name.trim(),
           type: form.type,
           config: buildConfig(form),
           channels: form.channels,
           enabled: true,
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.message ?? body.error ?? res.status));
-      }
       setForm({ ...EMPTY_FORM });
       await refresh();
     } catch (err) {
-      setError(`Не удалось создать правило: ${(err as Error).message}`);
+      let reason = (err as Error).message;
+      if (err instanceof ApiError) {
+        const body = err.jsonBody<Record<string, unknown>>() ?? {};
+        reason = String(body.message ?? body.error ?? err.status);
+      }
+      setError(`Не удалось создать правило: ${reason}`);
     } finally {
       setCreating(false);
     }
@@ -239,16 +239,13 @@ export default function AlertsPage() {
     setBusyId(rule.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/alert-rules/${rule.id}`, {
+      await apiSend(`/api/v1/alert-rules/${rule.id}`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !rule.enabled }),
+        json: { enabled: !rule.enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refresh();
     } catch (err) {
-      setError(`Не удалось изменить статус: ${(err as Error).message}`);
+      setError(`Не удалось изменить статус: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }
@@ -259,14 +256,10 @@ export default function AlertsPage() {
     setBusyId(rule.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/alert-rules/${rule.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/alert-rules/${rule.id}`, { method: 'DELETE' });
       await refresh();
     } catch (err) {
-      setError(`Не удалось удалить: ${(err as Error).message}`);
+      setError(`Не удалось удалить: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
       setPendingDelete(null);

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { AlertDialog, Button, InlineBanner } from '@/components/ui';
+import { apiResult } from '@/lib/api';
 
 type Phase = 'idle' | 'confirming' | 'restarting' | 'restarted' | 'error';
 
@@ -31,18 +32,16 @@ export function RestartBridgeButton({ disabled, disabledReason }: Props) {
     setPhase('restarting');
     setErrorText(null);
     try {
-      const res = await fetch('/api/v1/host/restart', {
+      const res = await apiResult<unknown>('/api/v1/host/restart', {
         method: 'POST',
-        credentials: 'include',
-        cache: 'no-store',
+        discardBody: true,
       });
-      if (res.status === 403) {
-        setErrorText('Нет прав на эту операцию.');
-        setPhase('error');
-        return;
-      }
       if (!res.ok) {
-        setErrorText('Не удалось дотянуться до агента. Проверьте логи systemd.');
+        setErrorText(
+          res.error.status === 403
+            ? 'Нет прав на эту операцию.'
+            : 'Не удалось дотянуться до агента. Проверьте логи systemd.',
+        );
         setPhase('error');
         return;
       }

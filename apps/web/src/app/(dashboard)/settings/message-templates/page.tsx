@@ -27,6 +27,7 @@ import {
   Th,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import {
   CATEGORY_LABELS,
   LOCALE_LABELS,
@@ -82,37 +83,29 @@ export default function MessageTemplatesPage() {
   );
 
   async function loadTemplates() {
-    const res = await fetch('/api/v1/message-templates', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setTemplates((await res.json()) as MessageTemplate[]);
+    setTemplates(await apiFetch<MessageTemplate[]>('/api/v1/message-templates'));
   }
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     async function load() {
       try {
-        const [meRes, tplRes] = await Promise.all([
-          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/message-templates', { credentials: 'include', cache: 'no-store' }),
+        const [freshMe, freshTemplates] = await Promise.all([
+          apiFetch<Me>('/api/v1/me', { signal }),
+          apiFetch<MessageTemplate[]>('/api/v1/message-templates', { signal }),
         ]);
-        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-        if (!tplRes.ok) throw new Error(`HTTP ${tplRes.status}`);
-        if (cancelled) return;
-        setMe((await meRes.json()) as Me);
-        setTemplates((await tplRes.json()) as MessageTemplate[]);
+        if (signal.aborted) return;
+        setMe(freshMe);
+        setTemplates(freshTemplates);
       } catch (e) {
-        if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
+        if (!signal.aborted) setMsg({ kind: 'err', text: describeHttpError(e) });
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!signal.aborted) setLoading(false);
       }
     }
     void load();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   function resetDraft() {
@@ -164,23 +157,19 @@ export default function MessageTemplatesPage() {
       sort_order: draft.sortOrder,
     };
     try {
-      const res = await fetch(
+      await apiSend(
         editingId ? `/api/v1/message-templates/${editingId}` : '/api/v1/message-templates',
-        {
-          method: editingId ? 'PATCH' : 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
+        { method: editingId ? 'PATCH' : 'POST', json: payload },
       );
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(`HTTP ${res.status}: ${body.error ?? 'ошибка'}`);
-      }
       await loadTemplates();
       resetDraft();
       setMsg({ kind: 'ok', text: editingId ? 'Шаблон обновлён.' : 'Шаблон создан.' });
     } catch (e) {
+      if (e instanceof ApiError) {
+        const body = e.jsonBody<Record<string, unknown>>() ?? {};
+        setMsg({ kind: 'err', text: `HTTP ${e.status}: ${body.error ?? 'ошибка'}` });
+        return;
+      }
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusy(false);
@@ -191,16 +180,13 @@ export default function MessageTemplatesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/message-templates/${template.id}`, {
+      await apiSend(`/api/v1/message-templates/${template.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ is_enabled: !template.is_enabled }),
+        json: { is_enabled: !template.is_enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await loadTemplates();
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -210,16 +196,12 @@ export default function MessageTemplatesPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/v1/message-templates/${template.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/message-templates/${template.id}`, { method: 'DELETE' });
       if (editingId === template.id) resetDraft();
       await loadTemplates();
       setMsg({ kind: 'ok', text: 'Шаблон удалён.' });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
+      setMsg({ kind: 'err', text: describeHttpError(e) });
     } finally {
       setBusy(false);
       setPendingDelete(null);

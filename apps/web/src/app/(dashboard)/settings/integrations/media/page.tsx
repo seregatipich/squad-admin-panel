@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Badge,
   Button,
@@ -10,6 +10,8 @@ import {
   PageHeader,
   Switch,
 } from '@/components/ui';
+import { ApiError, apiFetch } from '@/lib/api';
+import { useApiResource } from '@/lib/use-polled-resource';
 
 interface MediaPublishingStatus {
   youtube_configured: boolean;
@@ -41,54 +43,42 @@ function ConfiguredBadge({ configured }: { configured: boolean }) {
  * and are read exclusively by `worker-media-publisher`.
  */
 export default function MediaPublishingIntegrationPage() {
-  const [status, setStatus] = useState<MediaPublishingStatus | null>(null);
-  const [hidden, setHidden] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data: status,
+    error: loadError,
+    errorMessage: loadErrorMessage,
+    refresh,
+    setData: setStatus,
+  } = useApiResource<MediaPublishingStatus>(ENDPOINT);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(ENDPOINT, { credentials: 'include', cache: 'no-store' });
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setStatus((await res.json()) as MediaPublishingStatus);
-      setError(null);
-    } catch (err) {
-      setError(`Не удалось загрузить настройки публикации: ${(err as Error).message}`);
-    }
-  }, []);
+  const hidden =
+    loadError instanceof ApiError && (loadError.status === 401 || loadError.status === 403);
+  const error =
+    loadError && !hidden ? `Не удалось загрузить настройки публикации: ${loadErrorMessage}` : null;
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const setReleaseLocalFile = useCallback(async (next: boolean) => {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const res = await fetch(ENDPOINT, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ release_local_file: next }),
-      });
-      if (!res.ok) {
+  const setReleaseLocalFile = useCallback(
+    async (next: boolean) => {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        setStatus(
+          await apiFetch<MediaPublishingStatus>(ENDPOINT, {
+            method: 'PATCH',
+            json: { release_local_file: next },
+          }),
+        );
+      } catch {
         // Leave the previously stored value on screen — pretending the switch
         // moved would misrepresent what the worker will actually do.
         setSaveError('Не удалось сохранить настройку.');
-        return;
+      } finally {
+        setSaving(false);
       }
-      setStatus((await res.json()) as MediaPublishingStatus);
-    } catch {
-      setSaveError('Не удалось сохранить настройку.');
-    } finally {
-      setSaving(false);
-    }
-  }, []);
+    },
+    [setStatus],
+  );
 
   if (hidden) return null;
 
@@ -104,7 +94,7 @@ export default function MediaPublishingIntegrationPage() {
           tone="crit"
           title={error}
           action={
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void refresh()}>
               Повторить
             </Button>
           }

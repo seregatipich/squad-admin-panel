@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
+import { apiResult } from '@/lib/api';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
@@ -72,15 +73,10 @@ export function ServerBar() {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
-    fetch('/api/v1/servers', {
-      credentials: 'include',
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { items?: ServerChip[] } | null) => {
+    apiResult<{ items?: ServerChip[] }>('/api/v1/servers', { signal: controller.signal })
+      .then((res) => {
         if (controller.signal.aborted) return;
-        setServers(data?.items ?? []);
+        setServers(res.ok ? (res.data.items ?? []) : []);
       })
       .catch(() => {});
   }, []);

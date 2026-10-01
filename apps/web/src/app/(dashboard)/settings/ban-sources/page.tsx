@@ -23,6 +23,7 @@ import {
   TextInput,
   TrashIcon,
 } from '@/components/ui';
+import { ApiError, apiResult, apiSend, describeHttpError } from '@/lib/api';
 import { PublicationSection } from './PublicationSection';
 
 interface BanSource {
@@ -131,16 +132,16 @@ export default function BanSourcesPage() {
   const refresh = useCallback(async () => {
     try {
       const [sourcesRes, meRes] = await Promise.all([
-        fetch('/api/v1/ban-sources', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        apiResult<BanSource[]>('/api/v1/ban-sources'),
+        apiResult<Me>('/api/v1/me'),
       ]);
       if (sourcesRes.ok) {
-        setSources((await sourcesRes.json()) as BanSource[]);
+        setSources(sourcesRes.data);
         setError(null);
       } else {
-        setError(`Не удалось загрузить источники (HTTP ${sourcesRes.status})`);
+        setError(`Не удалось загрузить источники (HTTP ${sourcesRes.error.status})`);
       }
-      if (meRes.ok) setMe((await meRes.json()) as Me);
+      if (meRes.ok) setMe(meRes.data);
     } catch (err) {
       setError(`Не удалось загрузить источники: ${(err as Error).message}`);
     }
@@ -161,11 +162,9 @@ export default function BanSourcesPage() {
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/ban-sources', {
+      await apiSend('/api/v1/ban-sources', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           name: form.name.trim(),
           url: form.url.trim(),
           format: form.format,
@@ -174,17 +173,18 @@ export default function BanSourcesPage() {
           discord_url: form.discord_url.trim() || null,
           auth_header: form.auth_header.trim() || null,
           poll_interval_minutes: clampPollIntervalMinutes(pollIntervalInput),
-        }),
+        },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        throw new Error(String(body.message ?? body.error ?? res.status));
-      }
       setForm({ ...EMPTY_FORM });
       setPollIntervalInput(String(EMPTY_FORM.poll_interval_minutes));
       await refresh();
     } catch (err) {
-      setError(`Не удалось создать источник: ${(err as Error).message}`);
+      let reason = (err as Error).message;
+      if (err instanceof ApiError) {
+        const body = err.jsonBody<Record<string, unknown>>() ?? {};
+        reason = String(body.message ?? body.error ?? err.status);
+      }
+      setError(`Не удалось создать источник: ${reason}`);
     } finally {
       setCreating(false);
     }
@@ -195,16 +195,13 @@ export default function BanSourcesPage() {
     setBusyId(source.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/ban-sources/${source.id}`, {
+      await apiSend(`/api/v1/ban-sources/${source.id}`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: !source.enabled }),
+        json: { enabled: !source.enabled },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refresh();
     } catch (err) {
-      setError(`Не удалось изменить статус: ${(err as Error).message}`);
+      setError(`Не удалось изменить статус: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }
@@ -215,14 +212,10 @@ export default function BanSourcesPage() {
     setBusyId(source.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/ban-sources/${source.id}/sync`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/ban-sources/${source.id}/sync`, { method: 'POST' });
       await refresh();
     } catch (err) {
-      setError(`Синхронизация не удалась: ${(err as Error).message}`);
+      setError(`Синхронизация не удалась: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }
@@ -233,16 +226,12 @@ export default function BanSourcesPage() {
     setBusyId(source.id);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/ban-sources/${source.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/ban-sources/${source.id}`, { method: 'DELETE' });
       setPendingDelete(null);
       await refresh();
     } catch (err) {
       setPendingDelete(null);
-      setError(`Не удалось удалить: ${(err as Error).message}`);
+      setError(`Не удалось удалить: ${describeHttpError(err)}`);
     } finally {
       setBusyId(null);
     }

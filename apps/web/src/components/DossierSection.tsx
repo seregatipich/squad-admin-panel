@@ -11,6 +11,7 @@ import {
   Select,
   SkeletonTable,
 } from '@/components/ui';
+import { ApiError, apiFetch, describeHttpError } from '@/lib/api';
 import { DossierKitsTab } from './DossierKitsTab';
 import { DossierSkillTab } from './DossierSkillTab';
 import { DossierVehiclesTab } from './DossierVehiclesTab';
@@ -84,25 +85,14 @@ export function DossierSection({
     setLoading(true);
     setError(null);
     const query = buildDossierQuery({ serverId, monthsBack, now: new Date() });
-    fetch(`/api/v1/players/${playerId}/dossier${query}`, {
-      credentials: 'include',
-      cache: 'no-store',
-    })
-      .then((res) => {
-        if (res.status === 401 || res.status === 403) return null;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<DossierResponse>;
-      })
+    apiFetch<DossierResponse>(`/api/v1/players/${playerId}/dossier${query}`)
       .then((body) => {
-        if (cancelled) return;
-        if (body === null) {
-          setHidden(true);
-          return;
-        }
-        setData(body);
+        if (!cancelled) setData(body);
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message);
+        if (cancelled) return;
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setHidden(true);
+        else setError(describeHttpError(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -118,10 +108,9 @@ export function DossierSection({
   useEffect(() => {
     if (!serverFilter) return;
     let cancelled = false;
-    fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body: { items?: ServerOption[] } | null) => {
-        if (!cancelled) setServers(body?.items ?? []);
+    apiFetch<{ items?: ServerOption[] }>('/api/v1/servers')
+      .then((body) => {
+        if (!cancelled) setServers(body.items ?? []);
       })
       .catch(() => {
         if (!cancelled) setServers([]);

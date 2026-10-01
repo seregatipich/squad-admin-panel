@@ -12,6 +12,7 @@ import {
   PageHeader,
   Skeleton,
 } from '@/components/ui';
+import { apiFetch, apiSend } from '@/lib/api';
 import { describeLoadError } from '@/lib/load-error';
 
 type SeedChannel = 'email' | 'webpush';
@@ -43,16 +44,10 @@ export default function SeedNotificationsPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [serversResponse, subscriptionsResponse] = await Promise.all([
-        fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/v1/seed-subscriptions', { credentials: 'include', cache: 'no-store' }),
+      const [serverBody, subscriptionBody] = await Promise.all([
+        apiFetch<{ items: ServerItem[] }>('/api/v1/servers'),
+        apiFetch<{ subscriptions: Subscription[] }>('/api/v1/seed-subscriptions'),
       ]);
-      if (!serversResponse.ok) throw new Error(`HTTP ${serversResponse.status}`);
-      if (!subscriptionsResponse.ok) throw new Error(`HTTP ${subscriptionsResponse.status}`);
-      const serverBody = (await serversResponse.json()) as { items: ServerItem[] };
-      const subscriptionBody = (await subscriptionsResponse.json()) as {
-        subscriptions: Subscription[];
-      };
       setServers(serverBody.items);
       setSubscriptions(subscriptionBody.subscriptions);
     } catch (err) {
@@ -76,13 +71,10 @@ export default function SeedNotificationsPage() {
     setError(null);
     const enabled = !isSubscribed(serverId, channel);
     try {
-      const response = await fetch(`/api/v1/servers/${serverId}/seed-subscription`, {
+      await apiSend(`/api/v1/servers/${serverId}/seed-subscription`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ channel, enabled }),
+        json: { channel, enabled },
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setSubscriptions((current) =>
         enabled
           ? [...current, { server_id: serverId, server_name: '', channel }]

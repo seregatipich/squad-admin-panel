@@ -22,6 +22,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiResult, apiSend } from '@/lib/api';
 import {
   type AltDetectionSettingsForm,
   isValidIpOrCidr,
@@ -44,12 +45,13 @@ interface AltDetectionSettingsView extends AltDetectionSettingsForm {
 
 type Banner = { kind: 'ok' | 'err'; text: string } | null;
 
-async function readJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
+/** Banner text for a failed call: the HTTP status plus the API's `error` code. */
+function describeFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    const body = error.jsonBody<Record<string, unknown>>() ?? {};
+    return `HTTP ${error.status}: ${body.error ?? 'unknown'}`;
   }
-  return (await res.json()) as T;
+  return (error as Error).message;
 }
 
 export default function AltDetectionPage() {
@@ -72,22 +74,21 @@ export default function AltDetectionPage() {
   const noteInputId = useId();
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/v1/settings/alt-detection', {
-      credentials: 'include',
-      cache: 'no-store',
-    });
-    if (res.status === 401 || res.status === 403) {
-      setForbidden(true);
-      return;
-    }
-    const body = await readJson<{
+    const result = await apiResult<{
       settings: AltDetectionSettingsView;
       ignored_ips: IgnoredIp[];
       can_edit: boolean;
-    }>(res);
-    setSettings(body.settings);
-    setIgnoredIps(body.ignored_ips);
-    setCanEdit(body.can_edit);
+    }>('/api/v1/settings/alt-detection');
+    if (!result.ok) {
+      if (result.error.status === 401 || result.error.status === 403) {
+        setForbidden(true);
+        return;
+      }
+      throw result.error;
+    }
+    setSettings(result.data.settings);
+    setIgnoredIps(result.data.ignored_ips);
+    setCanEdit(result.data.can_edit);
   }, []);
 
   const reload = useCallback(async () => {
@@ -96,7 +97,7 @@ export default function AltDetectionPage() {
       await load();
       setBanner(null);
     } catch (e) {
-      setBanner({ kind: 'err', text: (e as Error).message });
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setLoading(false);
     }
@@ -116,23 +117,20 @@ export default function AltDetectionPage() {
     setAddingIp(true);
     setBanner(null);
     try {
-      const res = await fetch('/api/v1/settings/alt-detection/ignored-ips', {
+      await apiSend('/api/v1/settings/alt-detection/ignored-ips', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cidr, note: newNote.trim() || undefined }),
+        json: { cidr, note: newNote.trim() || undefined },
       });
-      if (res.status === 409) {
-        setBanner({ kind: 'err', text: 'Этот адрес уже добавлен в исключения.' });
-        return;
-      }
-      await readJson(res);
       setNewCidr('');
       setNewNote('');
       await load();
       setBanner({ kind: 'ok', text: 'Исключение добавлено.' });
     } catch (e) {
-      setBanner({ kind: 'err', text: (e as Error).message });
+      if (e instanceof ApiError && e.status === 409) {
+        setBanner({ kind: 'err', text: 'Этот адрес уже добавлен в исключения.' });
+        return;
+      }
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setAddingIp(false);
     }
@@ -142,17 +140,13 @@ export default function AltDetectionPage() {
     setDeleting(true);
     setBanner(null);
     try {
-      const res = await fetch(`/api/v1/settings/alt-detection/ignored-ips/${row.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      await readJson(res);
+      await apiSend(`/api/v1/settings/alt-detection/ignored-ips/${row.id}`, { method: 'DELETE' });
       setPendingDelete(null);
       await load();
       setBanner({ kind: 'ok', text: 'Исключение удалено.' });
     } catch (e) {
       setPendingDelete(null);
-      setBanner({ kind: 'err', text: (e as Error).message });
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setDeleting(false);
     }
@@ -169,11 +163,9 @@ export default function AltDetectionPage() {
     setSavingSettings(true);
     setBanner(null);
     try {
-      const res = await fetch('/api/v1/settings/alt-detection', {
+      const updated = await apiFetch<AltDetectionSettingsView>('/api/v1/settings/alt-detection', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           weight_shared_ip: settings.weight_shared_ip,
           weight_shared_name: settings.weight_shared_name,
           weight_young_account: settings.weight_young_account,
@@ -183,13 +175,12 @@ export default function AltDetectionPage() {
           medium_threshold: settings.medium_threshold,
           high_threshold: settings.high_threshold,
           coplay_overlap_threshold_seconds: settings.coplay_overlap_threshold_seconds,
-        }),
+        },
       });
-      const updated = await readJson<AltDetectionSettingsView>(res);
       setSettings(updated);
       setBanner({ kind: 'ok', text: 'Параметры сохранены.' });
     } catch (e) {
-      setBanner({ kind: 'err', text: (e as Error).message });
+      setBanner({ kind: 'err', text: describeFailure(e) });
     } finally {
       setSavingSettings(false);
     }

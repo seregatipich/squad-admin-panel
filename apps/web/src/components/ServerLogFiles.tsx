@@ -18,6 +18,7 @@ import {
   Th,
 } from '@/components/ui';
 import { useIntlLocale } from '@/i18n/LocaleProvider';
+import { apiFetch, describeHttpError } from '@/lib/api';
 
 interface LogFile {
   name: string;
@@ -70,18 +71,13 @@ export function ServerLogFiles({
     setLoading(true);
     void (async () => {
       try {
-        const r = await fetch(`/api/v1/servers/${serverId}/logs/files`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const body = (await r.json()) as { files: LogFile[] };
+        const body = await apiFetch<{ files: LogFile[] }>(`/api/v1/servers/${serverId}/logs/files`);
         if (!cancelled) {
           setFiles(body.files);
           setError(null);
         }
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setError(describeHttpError(e));
       } finally {
         if (!cancelled) setLoading(false);
       }

@@ -11,6 +11,7 @@ import {
   Select,
   Textarea,
 } from '@/components/ui';
+import { ApiError, apiFetch, apiSend } from '@/lib/api';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
 
@@ -90,11 +91,8 @@ export function DirectMessageModal({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/v1/message-templates', {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (res.ok && !cancelled) setTemplates((await res.json()) as MessageTemplate[]);
+        const list = await apiFetch<MessageTemplate[]>('/api/v1/message-templates');
+        if (!cancelled) setTemplates(list);
       } catch {
         // Template list is best-effort — the free-text input still works.
       }
@@ -109,9 +107,7 @@ export function DirectMessageModal({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok || cancelled) return;
-        const body = (await res.json()) as { items?: ServerOption[] };
+        const body = await apiFetch<{ items?: ServerOption[] }>('/api/v1/servers');
         if (body.items && !cancelled) setServers(body.items);
       } catch {
         // Without the list the select stays empty and send stays disabled.
@@ -133,20 +129,19 @@ export function DirectMessageModal({
     setBusy(true);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/v1/servers/${serverId}/players/${target.playerId}/message`, {
+      await apiSend(`/api/v1/servers/${serverId}/players/${target.playerId}/message`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: trimmed, log_to_card: logToCard }),
+        json: { message: trimmed, log_to_card: logToCard },
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(describeSendError(body.error, res.status));
-      }
       setFeedback({ kind: 'ok', text: 'Сообщение отправлено' });
       setMessage('');
     } catch (err) {
-      setFeedback({ kind: 'err', text: (err as Error).message });
+      if (err instanceof ApiError) {
+        const body = err.jsonBody<{ error?: string }>();
+        setFeedback({ kind: 'err', text: describeSendError(body?.error, err.status) });
+      } else {
+        setFeedback({ kind: 'err', text: (err as Error).message });
+      }
     } finally {
       setBusy(false);
       setConfirming(false);
