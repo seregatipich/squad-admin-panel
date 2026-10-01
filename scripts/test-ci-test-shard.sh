@@ -75,6 +75,51 @@ for i in 1 2 3; do
 done
 [ "$(dry packages 1 1)" = "$packages" ] || fail 'packages 1 1 differs from the unsharded slice'
 
+# --- The WEIGHTS table: current, and the shards it produces are balanced. ---
+weights=$(sed -n '/^WEIGHTS=($/,/^)$/p' "$shard_script" | sed '1d;$d' | tr -d ' ')
+[ -n "$weights" ] || fail 'ci-test-shard.sh has no WEIGHTS table'
+printf '%s\n' "$weights" | grep -Evq '^[^=]+=[0-9]+$' && fail 'a WEIGHTS entry is not <package>=<seconds>'
+[ "$(printf '%s\n' "$weights" | cut -d= -f1 | sort | uniq -d)" = '' ] || fail 'a package has two WEIGHTS entries'
+unknown=$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$weights" | cut -d= -f1 | sort))
+[ -z "$unknown" ] || fail "WEIGHTS names packages test:cov no longer lists: $unknown"
+
+# Longest-processing-time-first leaves the heaviest and the lightest shard at
+# most one package's weight apart, however the table is refreshed.
+loads=''
+for i in $(seq 1 $shard_count); do
+  loads="$loads$(dry packages "$i" $shard_count | while read -r name; do
+    printf '%s\n' "$weights" | sed -n "s|^$name=||p"
+  done | awk '{ s += $1 } END { print s + 0 }')"$'\n'
+done
+heaviest_entry=$(printf '%s\n' "$weights" | cut -d= -f2 | sort -n | tail -n 1)
+spread=$(printf '%s' "$loads" | sort -n | awk 'NR == 1 { low = $1 } { high = $1 } END { print high - low }')
+[ "$spread" -le "$heaviest_entry" ] ||
+  fail "packages shards are unbalanced: loads $(printf '%s' "$loads" | tr '\n' ' ')differ by ${spread}s"
+
+# --- Weighted assignment on a known package list. ---
+# p-a..p-e carry weights 10/7/6/5/4 and p-f none, so it weighs their median (6).
+# Heaviest first, each package goes to the least-loaded shard (the lowest index
+# on a tie): p-a -> 1, p-b -> 2, p-c -> 2, p-f -> 1, p-d -> 2, p-e -> 1.
+mkdir -p "$fixture/weighted/scripts"
+cp "$shard_script" "$fixture/weighted/scripts/ci-test-shard.sh"
+printf '%s\n' '{"scripts":{"test:cov":"pnpm --filter @squad/api --filter @squad/web --filter p-f --filter p-e --filter p-d --filter p-c --filter p-b --filter p-a exec vitest run --coverage"}}' \
+  >"$fixture/weighted/package.json"
+weighted() {
+  CI_TEST_SHARD_DRY_RUN=1 CI_TEST_SHARD_WEIGHTS='p-a=10 p-b=7 p-c=6 p-d=5 p-e=4' \
+    bash "$fixture/weighted/scripts/ci-test-shard.sh" packages "$@"
+}
+[ "$(weighted 1 2 | tr '\n' ' ')" = 'p-a p-f p-e ' ] || fail "weighted shard 1/2 selected '$(weighted 1 2 | tr '\n' ' ')'"
+[ "$(weighted 2 2 | tr '\n' ' ')" = 'p-b p-c p-d ' ] || fail "weighted shard 2/2 selected '$(weighted 2 2 | tr '\n' ' ')'"
+[ "$(weighted | tr '\n' ' ')" = 'p-a p-b p-c p-f p-d p-e ' ] || fail "weighted unsharded slice ran '$(weighted | tr '\n' ' ')'"
+# A weight beats declaration order: the last-listed package is heaviest here.
+[ "$(CI_TEST_SHARD_DRY_RUN=1 CI_TEST_SHARD_WEIGHTS='p-a=1 p-b=1 p-c=1 p-d=1 p-e=1 p-f=99' \
+  bash "$fixture/weighted/scripts/ci-test-shard.sh" packages 1 2 | head -n 1)" = 'p-f' ] ||
+  fail 'the heaviest package is not first in its shard'
+# More shards than packages leaves the extra shards empty rather than failing.
+[ "$(weighted 6 6 | tr '\n' ' ')" = 'p-e ' ] || fail "weighted shard 6/6 selected '$(weighted 6 6 | tr '\n' ' ')'"
+CI_TEST_SHARD_DRY_RUN=1 CI_TEST_SHARD_WEIGHTS='p-a=ten' bash "$shard_script" packages >/dev/null 2>&1
+[ $? -eq 2 ] || fail 'a malformed CI_TEST_SHARD_WEIGHTS entry does not exit 2'
+
 # --- Bad arguments exit 2. ---
 expect_usage_error packages 1
 expect_usage_error packages 0 3
@@ -144,6 +189,15 @@ started=$(sed -n 's/^--filter \([^ ]*\) exec vitest run --coverage$/\1/p' "$fixt
 $(cat "$fixture/pnpm.log")"
 [ "$(wc -l <"$fixture/pnpm.log")" -eq "$(printf '%s\n' "$packages" | wc -l)" ] ||
   fail 'packages slice ran a package with unexpected arguments'
+
+# Every passed package logs its duration and lands in the closing list that is
+# pasted into the WEIGHTS table.
+[ "$(grep -c '^ci-test-shard: .* passed in [0-9]*s$' "$fixture/out.log")" -eq "$(printf '%s\n' "$packages" | wc -l)" ] ||
+  fail 'a passed package does not log its duration'
+grep -Fxq 'ci-test-shard: measured seconds, ready for the WEIGHTS table:' "$fixture/out.log" ||
+  fail 'the run does not end with the measured-seconds list'
+[ "$(sed -n 's/^  \(.*\)=[0-9][0-9]*$/\1/p' "$fixture/out.log" | sort)" = "$(printf '%s\n' "$packages" | sort)" ] ||
+  fail 'the measured-seconds list does not name every package once'
 
 # A sharded slice runs only its own packages.
 PNPM_WORKSPACE_CONCURRENCY=1 run_stubbed packages 2 3 || fail 'packages shard 2/3 failed with a passing pnpm'

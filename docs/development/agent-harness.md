@@ -164,8 +164,9 @@ its template database from the SQL migrations itself. One shard cannot meet its
 package's thresholds, so [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh)
 switches them off per shard and writes a blob report, and `gate` applies them to the
 merged coverage. [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
-fails CI if the slices stop adding up to the `test:cov` list exactly or the shard
-arguments drift.
+fails CI if the slices stop adding up to the `test:cov` list exactly, the shard
+arguments drift, or the weighted package assignment stops balancing the shards
+(its `WEIGHTS` table must also name only packages that `test:cov` still lists).
 
 The PostgreSQL and Redis service containers keep their data on bounded `tmpfs` mounts
 (1 GiB and 128 MiB), so an interrupted job never leaves anonymous volumes behind, and
