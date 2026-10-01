@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-pre-push-checklist.sh — regression suite for the local git hooks with
-# real git and gitleaks (scripts/operations-scripts.test.ts covers the rest of
+# real git and gitleaks (scripts/pre-push-checklist.test.ts covers the rest of
 # scripts/pre-push-checklist.sh with shims).
 #
 #   A/B. The checklist's real, extracted `gitleaks git ...` invocation

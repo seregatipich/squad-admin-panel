@@ -45,7 +45,18 @@ describe('operation script static contracts', () => {
     assert.match(testScripts, /--test-concurrency=1/);
     for (const testFile of [
       'scripts/deploy-workflow.test.ts',
-      'scripts/operations-scripts.test.ts',
+      'scripts/bootstrap.test.ts',
+      'scripts/deploy-stand.test.ts',
+      'scripts/deploy-entry.test.ts',
+      'scripts/rebuild.test.ts',
+      'scripts/restore.test.ts',
+      'scripts/uninstall.test.ts',
+      'scripts/verify-bridge.test.ts',
+      'scripts/backup-restore-wait-pg.test.ts',
+      'scripts/full-stack-down.test.ts',
+      'scripts/new-test-db.test.ts',
+      'scripts/pre-push-checklist.test.ts',
+      'scripts/static-contracts.test.ts',
       'scripts/verify-audit-chain.test.ts',
     ]) {
       assert.match(testScripts, new RegExp(testFile.replaceAll('.', '\\.')));

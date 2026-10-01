@@ -68,6 +68,18 @@ pnpm --filter @squad/api test
 - `verify-audit-chain.ts` и реальные миграционные триггеры `audit_log` через
   отдельные временные PostgreSQL-БД.
 
+Контракты управляющих скриптов разложены по одному файлу на скрипт
+(`scripts/bootstrap.test.ts`, `deploy-stand.test.ts`, `deploy-entry.test.ts`,
+`rebuild.test.ts`, `restore.test.ts`, `uninstall.test.ts`, `verify-bridge.test.ts`,
+`pre-push-checklist.test.ts`, `new-test-db.test.ts` и другие). Общий каркас
+(`run`, `runAsync`, подмены хост-команд, временные каталоги) лежит в
+`scripts/test-helpers/ops.ts`. Новый файл нужно добавить в команду `test:scripts`
+в `package.json`: `scripts/static-contracts.test.ts` проверяет этот список.
+Файлы идут строго последовательно (`--test-concurrency=1`): каждый запуск
+скрипта в них ограничен 15 секундами, а внутри файлов блоки `deploy` и
+`rollback` уже работают параллельно, поэтому запуск файлов параллельно сделал бы
+этот лимит зависимым от нагрузки машины.
+
 Для полного локального запуска передайте обе пары адресов. Audit-набор
 допускает отсутствие PostgreSQL только вне CI; в CI отсутствие БД завершает
 набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
