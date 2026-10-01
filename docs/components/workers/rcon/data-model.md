@@ -49,7 +49,7 @@ Downstream, `worker-presence-daily` recomputes `player_daily_presence` and `play
 
 ### `events` (squad history)
 
-`squad.created`, `squad.leader_changed` and `squad.disbanded` rows are inserted directly by `PerServerSupervisor.emitSquadEvent`, the same way as the seeding transitions (`onConflictDoNothing` on `(event_id, occurred_at)`). `actor_kind = 'player'`, `actor_id` = the EOS id of the squad's creator (`created`, `disbanded`) or of the leader who gave up command (`leader_changed`), so `events_actor_occurred_idx` serves per-player lookups. Payload schemas: `packages/shared-types/src/events.ts` (`squadCreatedPayload`, `squadLeaderChangedPayload`, `squadDisbandedPayload`). Retention follows the `events` partitions (24 months).
+`squad.created`, `squad.leader_changed` and `squad.disbanded` rows are inserted directly by `SquadHistory.emitSquadEvent`, the same way as the seeding transitions (`onConflictDoNothing` on `(event_id, occurred_at)`). `actor_kind = 'player'`, `actor_id` = the EOS id of the squad's creator (`created`, `disbanded`) or of the leader who gave up command (`leader_changed`), so `events_actor_occurred_idx` serves per-player lookups. Payload schemas: `packages/shared-types/src/events.ts` (`squadCreatedPayload`, `squadLeaderChangedPayload`, `squadDisbandedPayload`). Retention follows the `events` partitions (24 months).
 
 ## Postgres tables read
 

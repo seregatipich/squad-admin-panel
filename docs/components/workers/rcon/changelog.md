@@ -1,5 +1,11 @@
 # Changelog — worker-rcon
 
+## 2026-10-01 — `supervisor.ts` разбит на модули (B3)
+
+### Changed
+
+- Код `RconSupervisor`/`PerServerSupervisor` перенесён без изменения поведения в `src/supervisor/`: жизненный цикл соединения (`per-server.ts`), опрос и подсказки (`server-poller.ts`), публикация статуса, сидинг, история сквадов, очередь команд, события и A2S-проба — отдельные модули. `src/supervisor.ts` по-прежнему экспортирует `RconSupervisor`, `Target`, `SupervisorOptions`, `DEFAULT_ROSTER_INTERVAL_MS` и `DEFAULT_INFO_INTERVAL_MS`.
+
 ## 2026-09-30 — Список разрешённых частных сетей для внешних серверов (#30, #333)
 
 ### Security

@@ -33,7 +33,17 @@ The dial target is `resolveRconHost(server_credentials.rcon_host)`: `NULL` (pane
 apps/workers/rcon/
   src/
     index.ts          — entry point, reconcile loop, shutdown, createDiag wiring
-    supervisor.ts     — RconSupervisor + PerServerSupervisor (diag emits)
+    supervisor.ts     — RconSupervisor (reconcile, hints); re-exports Target, SupervisorOptions
+    supervisor/
+      types.ts              — Target, SupervisorOptions
+      per-server.ts         — PerServerSupervisor: connect loop, backoff, chat/broadcast ingest
+      server-poller.ts      — ServerPoller: roster/info/full-poll refreshes, refresh hints, sessions
+      status-publisher.ts   — rcon:status / rcon:roster / rcon:squads writes and live-bus events
+      seeding-tracker.ts    — seeding state machine, seeding events and notifications
+      squad-history.ts      — squad lifecycle events and the squad-crowns hash
+      admin-command-queue.ts — per-connection RconCommandQueue and its Redis connection
+      server-events.ts      — lifecycle events on the server stream and diag emits
+      a2s-probe.ts          — best-effort A2S status cache
     client.ts         — RconClient (TCP + multi-packet framing)
     commands.ts       — Redis Stream command queue for P0 operator commands
     protocol.ts       — Valve RCON encoder/decoder, RconPacketStream
