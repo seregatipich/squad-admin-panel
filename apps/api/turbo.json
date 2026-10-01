@@ -5,11 +5,11 @@
     "test": {
       "dependsOn": ["^build"]
     },
-    "test:unit": {
-      "dependsOn": ["^build"]
-    },
     "test:integration": {
       "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "outputs": [".cache/typecheck.tsbuildinfo"]
     }
   }
 }

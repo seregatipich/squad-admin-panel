@@ -4,6 +4,12 @@
   "tasks": {
     "test": {
       "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "outputs": [".cache/typecheck.tsbuildinfo"]
+    },
+    "test:unit": {
+      "dependsOn": ["^build"]
     }
   }
 }
