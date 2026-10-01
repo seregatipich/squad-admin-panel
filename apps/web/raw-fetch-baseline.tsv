@@ -1,8 +1,3 @@
-src/app/(dashboard)/all-players/[id]/IssueLinksSection.tsx	1
-src/app/(dashboard)/all-players/[id]/MediaPublishControl.tsx	3
-src/app/(dashboard)/all-players/[id]/ModerationHistorySection.tsx	3
-src/app/(dashboard)/all-players/[id]/NickBanSection.tsx	2
-src/app/(dashboard)/all-players/[id]/NotesSection.tsx	5
 src/app/(dashboard)/all-players/[id]/PlayerTeamkillsSection.tsx	1
 src/app/(dashboard)/all-players/[id]/PlaysWithSection.tsx	1
 src/app/(dashboard)/all-players/[id]/PresenceChart.tsx	1

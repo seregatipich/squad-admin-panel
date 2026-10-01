@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
 import { AlertDialog, Badge, Button, ButtonLink, InlineBanner } from '@/components/ui';
+import { apiResult, apiSend, describeHttpError } from '@/lib/api';
 import { buildCheckUrl, type NickBanCheckResponse, ruleHref } from './nick-ban';
 
 /**
@@ -37,19 +38,19 @@ export function NickBanSection({
     const isCurrent = () => requestId === latestRequest.current;
     setHidden(false);
     try {
-      const res = await fetch(buildCheckUrl(nick), { credentials: 'include', cache: 'no-store' });
+      const res = await apiResult<NickBanCheckResponse>(buildCheckUrl(nick));
       if (!isCurrent()) return;
-      if (res.status === 401 || res.status === 403) {
-        setHidden(true);
-        return;
+      if (!res.ok) {
+        if (res.error.status === 401 || res.error.status === 403) {
+          setHidden(true);
+          return;
+        }
+        throw res.error;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as NickBanCheckResponse;
-      if (!isCurrent()) return;
-      setCheck(body);
+      setCheck(res.data);
       setLoadError(null);
     } catch (err) {
-      if (isCurrent()) setLoadError((err as Error).message);
+      if (isCurrent()) setLoadError(describeHttpError(err));
     }
   }, [nick]);
 
@@ -82,17 +83,14 @@ export function NickBanSection({
     setUnbanning(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/banned-names/${check.rule.id}`, {
+      await apiSend(`/api/v1/banned-names/${check.rule.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ is_active: false }),
+        json: { is_active: false },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setUnbanOpen(false);
       await load();
     } catch (unbanError) {
-      setError((unbanError as Error).message);
+      setError(describeHttpError(unbanError));
     } finally {
       setUnbanning(false);
     }

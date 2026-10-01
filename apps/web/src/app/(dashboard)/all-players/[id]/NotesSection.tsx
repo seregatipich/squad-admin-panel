@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   AlertDialog,
@@ -14,6 +13,7 @@ import {
   Skeleton,
   Textarea,
 } from '@/components/ui';
+import { apiFetch, apiSend, describeHttpError } from '@/lib/api';
 import type { LiveEvent, PlayerNote } from '@/lib/live-bus';
 import {
   formatRelativeNote,
@@ -97,14 +97,10 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
     liveCreatedRef.current = [];
     liveDeletedRef.current = new Set();
     try {
-      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/notes`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      applyPage(readNotesPage(await res.json()), false);
+      const body = await apiFetch<unknown>(`/api/v1/players/${encodeURIComponent(playerId)}/notes`);
+      applyPage(readNotesPage(body), false);
     } catch (e) {
-      setLoadError((e as Error).message);
+      setLoadError(describeHttpError(e));
     } finally {
       setLoading(false);
     }
@@ -160,14 +156,10 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
     setBusy(true);
     setMutationError(null);
     try {
-      const res = await fetch(`/api/v1/players/${encodeURIComponent(playerId)}/notes`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const created = (await res.json()) as PlayerNote;
+      const created = await apiFetch<PlayerNote>(
+        `/api/v1/players/${encodeURIComponent(playerId)}/notes`,
+        { method: 'POST', json: { body } },
+      );
       if (!idsRef.current.has(created.id)) {
         idsRef.current.add(created.id);
         setNotes((prev) => prependNote(prev, created));
@@ -175,7 +167,7 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
       }
       setDraft('');
     } catch (e) {
-      setMutationError({ title: 'Не удалось отправить заметку', message: (e as Error).message });
+      setMutationError({ title: 'Не удалось отправить заметку', message: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -185,16 +177,14 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
     if (!nextCursor || busy) return;
     setBusy(true);
     try {
-      const res = await fetch(
+      const body = await apiFetch<unknown>(
         `/api/v1/players/${encodeURIComponent(playerId)}/notes?cursor=${encodeURIComponent(nextCursor)}`,
-        { credentials: 'include', cache: 'no-store' },
       );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      applyPage(readNotesPage(await res.json()), true);
+      applyPage(readNotesPage(body), true);
     } catch (e) {
       setMutationError({
         title: 'Не удалось загрузить ещё заметки',
-        message: (e as Error).message,
+        message: describeHttpError(e),
       });
     } finally {
       setBusy(false);
@@ -323,17 +313,14 @@ function NoteItem({
     if (!body || busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/v1/notes/${note.id}`, {
+      const updated = await apiFetch<PlayerNote>(`/api/v1/notes/${note.id}`, {
         method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body }),
+        json: { body },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onChanged((await res.json()) as PlayerNote);
+      onChanged(updated);
       setEditing(false);
     } catch (e) {
-      onError({ title: 'Не удалось сохранить заметку', message: (e as Error).message });
+      onError({ title: 'Не удалось сохранить заметку', message: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
@@ -343,16 +330,12 @@ function NoteItem({
     if (busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/v1/notes/${note.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await apiSend(`/api/v1/notes/${note.id}`, { method: 'DELETE' });
       setConfirmOpen(false);
       onRemoved(note.id);
     } catch (e) {
       setConfirmOpen(false);
-      onError({ title: 'Не удалось удалить заметку', message: (e as Error).message });
+      onError({ title: 'Не удалось удалить заметку', message: describeHttpError(e) });
     } finally {
       setBusy(false);
     }
