@@ -1,5 +1,3 @@
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   accrueDailyBonuses,
   daysInWindow,
@@ -10,16 +8,11 @@ import {
   recomputeDailyPresence,
   recomputeServerDailyStats,
 } from '@squad/db';
-import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
-import Redis from 'ioredis';
-import pino from 'pino';
-import postgres from 'postgres';
+import type { Diag } from '@squad/diag';
+import { createWorkerLog, runWorker } from '@squad/worker-kit';
+import type postgres from 'postgres';
 
-const log = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { service: 'worker-presence-daily' },
-});
+const log = createWorkerLog('presence-daily');
 
 const COMPONENT = 'worker-presence-daily';
 const TICK_INTERVAL_MS = 60 * 60 * 1000;
@@ -196,81 +189,26 @@ export async function runCoplayFullRebuild(deps: PresenceTickDeps): Promise<void
   }
 }
 
-async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    log.fatal('DATABASE_URL is required');
-    process.exit(1);
-  }
-  const sql = postgres(url, { max: 1 });
-  const redisUrl = process.env.REDIS_URL;
-  const redis = redisUrl
-    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
-    : null;
-  const stopHeartbeat = redis
-    ? startHeartbeat({
-        redis,
-        name: 'presence-daily',
-        statusFn: () => 'idle',
-        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
-      })
-    : () => {};
-
-  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
-
-  let interval: NodeJS.Timeout | null = null;
-  const shutdown = createGracefulShutdownController({
-    cleanup: async (sig) => {
-      log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
-      await diag.emit({
-        component: COMPONENT,
-        kind: 'presence_daily.stopped',
-        severity: 'info',
-        message: `presence-daily received ${sig}`,
-        payload: { sig },
-      });
-      stopHeartbeat();
-      await sql.end({ timeout: 5 });
-      await redis?.quit().catch(() => undefined);
+runWorker({
+  name: 'presence-daily',
+  log,
+  entrypoint: import.meta.url,
+  postgres: { options: { max: 1 } },
+  redis: { optional: true },
+  heartbeatStatus: 'idle',
+  setup: ({ sql, diag }) => ({
+    beforeFirstTick: async () => {
+      if (process.env.COPLAY_FULL_REBUILD === '1') {
+        await runCoplayFullRebuild({ sql, diag });
+      }
     },
-    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
-  });
-
-  await diag.emit({
-    component: COMPONENT,
-    kind: 'presence_daily.started',
-    severity: 'info',
-    message: 'presence-daily started',
-    payload: { pid: process.pid },
-  });
-
-  if (process.env.COPLAY_FULL_REBUILD === '1') {
-    await runCoplayFullRebuild({ sql, diag });
-  }
-
-  await runPresenceDailyTick({ sql, diag });
-  await shutdown.markReady();
-  if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(() => {
-    runPresenceDailyTick({ sql, diag }).catch((err) =>
-      log.error({ err: (err as Error).message }, 'presence tick failed'),
-    );
-  }, TICK_INTERVAL_MS);
-}
-
-function isMainEntrypoint(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainEntrypoint()) {
-  main().catch((err) => {
-    log.fatal({ err: (err as Error).message }, 'fatal');
-    process.exit(1);
-  });
-}
+    ticks: [
+      {
+        intervalMs: TICK_INTERVAL_MS,
+        overlap: 'allow',
+        failureMessage: 'presence tick failed',
+        run: () => runPresenceDailyTick({ sql, diag }),
+      },
+    ],
+  }),
+});

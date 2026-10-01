@@ -1,16 +1,9 @@
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { createDiag, type Diag } from '@squad/diag';
-import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
-import Redis from 'ioredis';
-import pino from 'pino';
-import postgres from 'postgres';
+import type { Diag } from '@squad/diag';
+import { createWorkerLog, runWorker } from '@squad/worker-kit';
+import type postgres from 'postgres';
 import { pruneJournalTables } from './retention.js';
 
-const log = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { service: 'worker-event-partition' },
-});
+const log = createWorkerLog('event-partition');
 
 const COMPONENT = 'worker-event-partition';
 
@@ -317,80 +310,21 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
   }
 }
 
-async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    log.fatal('DATABASE_URL is required');
-    process.exit(1);
-  }
-  const sql = postgres(url, { max: 1 });
-  const redisUrl = process.env.REDIS_URL;
-  const redis = redisUrl
-    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
-    : null;
-  const stopHeartbeat = redis
-    ? startHeartbeat({
-        redis,
-        name: 'event-partition',
-        statusFn: () => 'idle',
-        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
-      })
-    : () => {};
-
-  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
-
-  let interval: NodeJS.Timeout | null = null;
-  const shutdown = createGracefulShutdownController({
-    cleanup: async (sig) => {
-      log.info({ sig }, 'shutdown');
-      if (interval) clearInterval(interval);
-      await diag.emit({
-        component: COMPONENT,
-        kind: 'event_partition.stopped',
-        severity: 'info',
-        message: `event-partition received ${sig}`,
-        payload: { sig },
-      });
-      stopHeartbeat();
-      await sql.end({ timeout: 5 });
-      await redis?.quit().catch(() => undefined);
-    },
-    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
-  });
-
-  await diag.emit({
-    component: COMPONENT,
-    kind: 'event_partition.started',
-    severity: 'info',
-    message: 'event-partition started',
-    payload: { pid: process.pid },
-  });
-
-  await runPartitionTick({ sql, diag });
-  await shutdown.markReady();
-  if (shutdown.isShutdownRequested()) return;
-  interval = setInterval(
-    () => {
-      runPartitionTick({ sql, diag }).catch((err) =>
-        log.error({ err: (err as Error).message }, 'partition failed'),
-      );
-    },
-    60 * 60 * 1000,
-  );
-}
-
-function isMainEntrypoint(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainEntrypoint()) {
-  main().catch((err) => {
-    log.fatal({ err: (err as Error).message }, 'fatal');
-    process.exit(1);
-  });
-}
+runWorker({
+  name: 'event-partition',
+  log,
+  entrypoint: import.meta.url,
+  postgres: { options: { max: 1 } },
+  redis: { optional: true },
+  heartbeatStatus: 'idle',
+  setup: ({ sql, diag }) => ({
+    ticks: [
+      {
+        intervalMs: 60 * 60 * 1000,
+        overlap: 'allow',
+        failureMessage: 'partition failed',
+        run: () => runPartitionTick({ sql, diag }),
+      },
+    ],
+  }),
+});
