@@ -144,7 +144,7 @@ Never bypass hooks with `--no-verify` unless explicitly instructed.
 
 All project documentation lives under `docs/`. After every code change, check whether the documentation needs to be updated. A task is not complete until documentation matches the final code.
 
-See `CLAUDE.md` (project root) for the full documentation workflow and required structure.
+See the "Documentation" rule in [`CLAUDE.md`](../../CLAUDE.md#documentation) and the table of contents in [`docs/README.md`](../README.md).
 
 ## See also
 

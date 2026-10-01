@@ -11,7 +11,7 @@ For component-specific issues, see [`components/bridge/troubleshooting.md`](../c
 
 ## "bridge: disconnected" banner
 
-See [`components/bridge/troubleshooting.md`](../components/bridge/troubleshooting.md#bridge-disconnected-banner-in-the-dashboard).
+See [`components/bridge/troubleshooting.md`](../components/bridge/troubleshooting.md).
 
 ## Squad server doesn't appear in the Steam community browser
 

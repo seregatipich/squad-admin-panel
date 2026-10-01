@@ -6,7 +6,7 @@
 |---|---|---|
 | `api` | `apps/api` | HTTP REST + WebSocket. Auth, RBAC, route handlers, audit logging, status reconciliation, install orchestration. |
 | `web` | `apps/web` | Next.js 15 + React 19 dashboard. Server components for auth gates, client components for polling. UI is in Russian. |
-| `bridge` | `apps/bridge` | Go daemon, only privileged component. 25 whitelisted RPC methods. Composes `docker run` from structured params; never accepts raw flags. |
+| `bridge` | `apps/bridge` | Go daemon, only privileged component. 27 whitelisted RPC methods (`packages/shared-config/src/bridge-methods.ts`). Composes `docker run` from structured params; never accepts raw flags. |
 | `worker-rcon` | `apps/workers/rcon` | Connects to each running server's RCON port (`127.0.0.1:<rcon_port>` for panel-hosted containers, `server_credentials.rcon_host:<rcon_port>` for external servers), polls `ListPlayers` every 30 s and `ShowServerInfo` every 90 s, publishes `rcon.players_polled` events to Redis. |
 | `worker-log-ingest` | `apps/workers/log-ingest` | Tails `docker logs -f squad-{uuid}` via the bridge, regex-parses `SquadGame.log` lines, emits `EventEnvelope` to `events:server:{id}`, and asks the bridge to sweep expired rotated Squad logs. |
 | `worker-audit-archiver` | `apps/workers/audit-archiver` | Cold-archives `audit_log` rows older than 90 days. |
@@ -14,7 +14,7 @@
 | `worker-metrics-sampler` | `apps/workers/metrics-sampler` | Polls `bridge.host_metrics` and writes packed samples into the `host:metrics` Redis Stream. Powers the dashboard's 24 h history chart. |
 | `worker-discord` | `apps/workers/discord` | Three loops: relays Squad server events to Discord webhooks, syncs panel roles to a Discord guild, and renames a live status channel plus serves read-only slash commands. |
 | `worker-stats` | `apps/workers/stats` | Nightly dossier-aggregate reconcile guard: recomputes per-weapon/per-vehicle stats from recent `combat_events` and alerts on drift, report-only. |
-| Other workers | `apps/workers/{automation,backup,config-sync,scheduler}` | Stubs for post-P0 features. Not wired into the install flow. |
+| Other workers | `apps/workers/*` | The rest of the fleet (config-sync, scheduler, automation, discord, aggregation, moderation and integration workers) is listed in the [architecture map](map.md) and [components/workers](../components/workers/README.md). `apps/workers/backup` is an idle placeholder; backups run in the `restic` compose service. |
 | `packages/db` | Drizzle schema + SQL migrations + seed data. |
 | `packages/shared-types` | Zod schemas, including the canonical [EventEnvelope](../components/shared-types/data-model.md). |
 | `packages/shared-config` | Permission keys, bridge-method allowlist, heartbeat util. |

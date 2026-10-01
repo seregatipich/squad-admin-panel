@@ -5,8 +5,7 @@ const RETENTION_BATCH_SIZE = 5_000;
 
 /**
  * Retention windows for the unpartitioned journal tables (issue #77). Each is a
- * Postgres interval literal; `docs/architecture/map.md` §8.9 lists the same
- * values.
+ * Postgres interval literal.
  */
 export const JOURNAL_RETENTION = {
   /** Delivered alerts; undelivered ones are kept longer for investigation. */
