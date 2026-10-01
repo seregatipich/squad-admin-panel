@@ -1,4 +1,3 @@
-src/app/(dashboard)/(account)/settings/account/page.tsx	5
 src/app/(dashboard)/all-players/[id]/AltsSection.tsx	3
 src/app/(dashboard)/all-players/[id]/BonusSection.tsx	6
 src/app/(dashboard)/all-players/[id]/ChatHistorySection.tsx	4
@@ -33,9 +32,7 @@ src/app/(dashboard)/banned-names/page.tsx	2
 src/app/(dashboard)/chat/ChatArchive.tsx	4
 src/app/(dashboard)/clans/[id]/ClanSettingsPanel.tsx	4
 src/app/(dashboard)/clans/[id]/ClanStatsPanel.tsx	1
-src/app/(dashboard)/clans/[id]/RosterPanel.tsx	8
 src/app/(dashboard)/clans/[id]/TagProtectionCard.tsx	1
-src/app/(dashboard)/clans/[id]/page.tsx	5
 src/app/(dashboard)/clans/page.tsx	4
 src/app/(dashboard)/combat-log/CombatLog.tsx	4
 src/app/(dashboard)/dashboard/ServersTable.tsx	1
@@ -84,7 +81,6 @@ src/app/(dashboard)/settings/groups/[id]/members/page.tsx	1
 src/app/(dashboard)/settings/integrations/discord/DiscordRoleMappingsSection.tsx	6
 src/app/(dashboard)/settings/integrations/discord/DiscordStatusChannelsSection.tsx	2
 src/app/(dashboard)/settings/integrations/discord/DiscordTemplatesSection.tsx	4
-src/app/(dashboard)/settings/integrations/discord/page.tsx	7
 src/app/(dashboard)/settings/integrations/geoip/page.tsx	3
 src/app/(dashboard)/settings/integrations/media/page.tsx	2
 src/app/(dashboard)/settings/mark-types/page.tsx	7
@@ -92,7 +88,6 @@ src/app/(dashboard)/settings/message-templates/page.tsx	6
 src/app/(dashboard)/settings/page.tsx	1
 src/app/(dashboard)/settings/seasons/page.tsx	3
 src/app/(dashboard)/settings/seed-notifications/page.tsx	3
-src/app/(dashboard)/settings/tokens/page.tsx	4
 src/app/(dashboard)/settings/whitelist/ApplicationsSection.tsx	5
 src/app/(dashboard)/settings/whitelist/page.tsx	5
 src/app/(dashboard)/statistics/StatisticsBrowser.tsx	2

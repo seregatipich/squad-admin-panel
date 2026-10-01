@@ -21,7 +21,9 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { ApiError, apiFetch } from '@/lib/api';
 import { formatMatchDuration } from '@/lib/format';
+import { useApiResource } from '@/lib/use-polled-resource';
 import type { MeResponse, ServerOption } from '../helpers';
 import { priorityBadge } from '../helpers';
 import { PRIORITY_TONE } from '../priority-tone';
@@ -103,6 +105,8 @@ interface ClanMatchesResponse {
 }
 
 const ONLINE_POLL_MS = 8000;
+
+const NO_SERVERS: ServerOption[] = [];
 const MATCHES_PAGE_LIMIT = 20;
 const ROLE_LABELS: Record<string, string> = {
   leader: 'Глава',
@@ -164,7 +168,13 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const { id: clanId } = use(params);
   const clanIdValid = CLAN_ID_RE.test(clanId);
   const [clan, setClan] = useState<ClanDetail | null>(null);
-  const [online, setOnline] = useState<OnlineResponse | null>(null);
+  // Скрытая вкладка не бьёт в API каждые ONLINE_POLL_MS — только читает
+  // актуальное состояние, когда вернётся на передний план. On a transient
+  // failure the previous snapshot stays.
+  const { data: online = null } = useApiResource<OnlineResponse>(
+    clanIdValid ? `/api/v1/clans/${clanId}/online` : null,
+    { intervalMs: ONLINE_POLL_MS, pauseWhenHidden: true },
+  );
   const [err, setErr] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [matchRows, setMatchRows] = useState<ClanMatch[]>([]);
@@ -176,9 +186,13 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [matchServerOptions, setMatchServerOptions] = useState<Array<{ id: string; name: string }>>(
     [],
   );
-  const [allServers, setAllServers] = useState<ServerOption[]>([]);
+  // Server names are a display nicety only: a failed read leaves the list empty.
+  const { data: serversBody } = useApiResource<{ items: ServerOption[] }>('/api/v1/servers');
+  const allServers = serversBody?.items ?? NO_SERVERS;
   // null until /me answers; RosterPanel waits for it instead of fetching /me itself.
-  const [canManageClans, setCanManageClans] = useState<boolean | null>(null);
+  // A failed read leaves the settings panel hidden.
+  const { data: me, loading: meLoading } = useApiResource<MeResponse>('/api/v1/me');
+  const canManageClans = meLoading ? null : (me?.can_manage_clans ?? false);
   // The filter lists every known server (not only those seen on the loaded
   // history pages, finding #523); servers found in matches but no longer
   // listed are appended so their matches stay filterable.
@@ -200,33 +214,16 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       return;
     }
     try {
-      const res = await fetch(`/api/v1/clans/${clanId}?include=none`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 404) {
+      setClan(await apiFetch<ClanDetail>(`/api/v1/clans/${clanId}?include=none`));
+      setErr(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
         setErr('Клан не найден.');
         return;
       }
-      if (!res.ok) throw new Error(`Не удалось загрузить клан (${res.status})`);
-      setClan((await res.json()) as ClanDetail);
-      setErr(null);
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, [clanId, clanIdValid]);
-
-  const loadOnline = useCallback(async () => {
-    if (!clanIdValid) return;
-    try {
-      const res = await fetch(`/api/v1/clans/${clanId}/online`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (!res.ok) return;
-      setOnline((await res.json()) as OnlineResponse);
-    } catch {
-      /* keep the previous snapshot on transient failures */
+      setErr(
+        e instanceof ApiError ? `Не удалось загрузить клан (${e.status})` : (e as Error).message,
+      );
     }
   }, [clanId, clanIdValid]);
 
@@ -239,12 +236,9 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         const query = new URLSearchParams({ limit: String(MATCHES_PAGE_LIMIT) });
         if (cursor) query.set('cursor', cursor);
         if (serverId) query.set('server_id', serverId);
-        const res = await fetch(`/api/v1/clans/${clanId}/matches?${query.toString()}`, {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!res.ok) return;
-        const body = (await res.json()) as ClanMatchesResponse;
+        const body = await apiFetch<ClanMatchesResponse>(
+          `/api/v1/clans/${clanId}/matches?${query.toString()}`,
+        );
         if (matchesRequestIdRef.current !== requestId) return;
         setMatchRows((prev) => (replace ? body.items : [...prev, ...body.items]));
         setMatchCursor(body.next_cursor);
@@ -275,55 +269,10 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   }, [loadClan]);
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok) return;
-        const body = (await res.json()) as { items: ServerOption[] };
-        setAllServers(body.items);
-      } catch {
-        /* server names are a display nicety only */
-      }
-    })();
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!res.ok) {
-          setCanManageClans(false);
-          return;
-        }
-        const body = (await res.json()) as MeResponse;
-        setCanManageClans(body.can_manage_clans);
-      } catch {
-        /* leave the settings panel hidden on failure */
-        setCanManageClans(false);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
     void loadMatches(null, matchServerFilter, true);
   }, [loadMatches, matchServerFilter]);
 
   const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
-
-  useEffect(() => {
-    void loadOnline();
-    // Скрытая вкладка не бьёт в API каждые ONLINE_POLL_MS — только читает
-    // актуальное состояние, когда вернётся на передний план (см. эффект ниже).
-    const poll = setInterval(() => {
-      if (document.visibilityState === 'visible') void loadOnline();
-    }, ONLINE_POLL_MS);
-    return () => clearInterval(poll);
-  }, [loadOnline]);
-
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') void loadOnline();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [loadOnline]);
 
   useEffect(() => {
     // Секундный тик нужен только строке «В сессии» — без единого участника
