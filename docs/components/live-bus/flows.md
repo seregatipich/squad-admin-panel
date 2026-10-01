@@ -54,7 +54,7 @@ Latency budget: < 1 ms in-process; 1–5 ms cross-process via Redis on a healthy
 
 ## 3. RCON status fan-out (worker → API)
 
-1. `PerServerSupervisor.writeStatus(state, extra)` runs after every state edge AND every successful poll.
+1. `StatusPublisher.writeStatus(state, extra)` runs after every state edge AND every successful poll.
 2. It `SET`s `rcon:status:{server_id}` with TTL 300 s (existing behavior, source of truth).
 3. It additionally `PUBLISH`es to `rcon:status:changed` with `{server_id, state, player_count?}`.
 4. Every API replica's `live-bus` subscriber sees the publish, wraps it as `{type: 'rcon.status', ts: <fresh>, data: {...}}`, and emits it locally so attached WS clients see it.

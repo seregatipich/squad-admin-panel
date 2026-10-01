@@ -4,7 +4,7 @@ The worker has no HTTP surface. Its public contracts are Redis keys and stream e
 
 ## Redis key: `rcon:status:{serverId}`
 
-Written by `PerServerSupervisor.writeStatus()` after every state transition and every successful poll.
+Written by `StatusPublisher.writeStatus()` after every state transition and every successful poll.
 
 **TTL:** 300 s. Absence means the server is not being polled (stopped or worker crashed).
 

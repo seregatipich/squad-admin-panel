@@ -7,7 +7,7 @@ These are not user-tunable today; change them by editing the source. Trade-offs 
 | Constant | Value | File | Rationale |
 |---|---|---|---|
 | `LIVE_BUS_CHANNEL` | `'live-bus'` | `apps/api/src/plugins/live-bus.ts` | Cross-replica fan-out channel for full `LiveEvent` JSON. |
-| `RCON_STATUS_CHANNEL` | `'rcon:status:changed'` | `apps/api/src/plugins/live-bus.ts` | Worker-rcon → API edge channel. Also used by `worker-rcon` `PerServerSupervisor.writeStatus`. |
+| `RCON_STATUS_CHANNEL` | `'rcon:status:changed'` | `apps/api/src/plugins/live-bus.ts` | Worker-rcon → API edge channel. Also used by `worker-rcon` `StatusPublisher.writeStatus`. |
 | `setMaxListeners` | `1024` | `apps/api/src/plugins/live-bus.ts` | One listener per open WebSocket; lifted from default 10 so 200+ concurrent tabs do not warn. |
 | `PING_INTERVAL_MS` | `10_000` | `apps/api/src/routes/live.ts` | Server-side liveness ping. Short enough that proxies (Caddy, nginx) don't see idle silence. |
 | `PONG_TIMEOUT_MS` | `30_000` | `apps/api/src/routes/live.ts` | Allows a missed ping plus normal jitter before declaring the client gone. |

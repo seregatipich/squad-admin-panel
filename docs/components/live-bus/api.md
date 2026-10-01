@@ -103,7 +103,7 @@ export type LiveEvent =
 | Channel | Direction | Producer | Consumer | Payload |
 |---|---|---|---|---|
 | `live-bus` | API → API replicas | `app.liveBus.publish()` | `live-bus` plugin subscriber | Full `LiveEvent` JSON. |
-| `rcon:status:changed` | worker-rcon → API | `PerServerSupervisor.writeStatus` | `live-bus` plugin subscriber | `{server_id, state, player_count?}`; the plugin wraps it into a `rcon.status` `LiveEvent` with a fresh `ts`. Published on every state change and whenever a rendered connected-state field changes (player/squad count, map, next layer, mode, queue) — not on every refresh. |
+| `rcon:status:changed` | worker-rcon → API | `StatusPublisher.writeStatus` | `live-bus` plugin subscriber | `{server_id, state, player_count?}`; the plugin wraps it into a `rcon.status` `LiveEvent` with a fresh `ts`. Published on every state change and whenever a rendered connected-state field changes (player/squad count, map, next layer, mode, queue) — not on every refresh. |
 | `rcon:refresh` | worker-log-ingest → worker-rcon | `publishRconRefreshHint` | worker-rcon hint subscriber | `{server_id, scopes: ("roster"\|"info")[], reason?}` — re-poll that server now. |
 
 `server.events.appended` does not travel over Redis from a worker: every API replica LISTENs on the Postgres channel `events_appended` (trigger `trg_events_notify_appended`, migration 0116) and publishes the frame locally. Frames carry no event rows; clients refetch `GET /api/v1/events`.

@@ -18,7 +18,7 @@
 | Constant | Value | Source |
 |---|---|---|
 | Reconcile interval | 15 000 ms | `apps/workers/rcon/src/index.ts` |
-| Poll interval (full, DB-backed) | 30 000 ms | `PerServerSupervisor.schedulePoll` |
+| Poll interval (full, DB-backed) | 30 000 ms | `ServerPoller.schedulePoll` |
 | Roster refresh interval | 2 000 ms (`RCON_ROSTER_INTERVAL_MS`) | `DEFAULT_ROSTER_INTERVAL_MS` |
 | Server-info refresh interval | 5 000 ms (`RCON_INFO_INTERVAL_MS`) | `DEFAULT_INFO_INTERVAL_MS` |
 | Refresh-hint debounce | 100 ms | `DEFAULT_HINT_DEBOUNCE_MS` |
@@ -32,10 +32,10 @@
 | Command queue pending reclaim interval | 30 000 ms | `RconCommandQueue` |
 | Initial reconnect backoff | 1 000 ms | `PerServerSupervisor` |
 | Max reconnect backoff | 60 000 ms | `PerServerSupervisor` |
-| `rcon:status` TTL | 300 s | `PerServerSupervisor.writeStatus` |
+| `rcon:status` TTL | 300 s | `StatusPublisher.writeStatus` |
 | Heartbeat interval | 5 000 ms | `startHeartbeat` default |
 | Heartbeat TTL | 30 s | `HEARTBEAT_TTL_SECONDS` |
-| Event stream MAXLEN | ~10 000 | `PerServerSupervisor.emitEvent` |
+| Event stream MAXLEN | ~10 000 | `ServerEvents.emitEvent` |
 
 ## Compose user requirement
 

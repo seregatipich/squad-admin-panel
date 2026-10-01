@@ -40,7 +40,15 @@ apps/workers/scheduler/
     scheduled-task-tick.ts      — AUTO-2 tasks + MSG-4 broadcast rotation/echo
     map-vote-tick.ts            — GAME-1 per-match map auto-selection
     season-finalize-tick.ts     — LEAD-7 closes + freezes expired seasons
-    deps.ts                     — DB/Redis/bridge wiring for every tick
+    deps.ts                     — re-exports the deps/ modules (stable import path)
+    deps/
+      shared.ts                 — Redis depot check, RCON command enqueue, system audit write
+      seed-schedule.ts          — SEED-3 loaders, seed-call notification, tick deps
+      rotation-schedule.ts      — ROT-4 one-off loaders and tick deps
+      rotation-profile.ts       — ROT-4 weekly profile loaders and tick deps
+      scheduled-task.ts         — AUTO-2 task loaders, runs, restart, tick deps
+      map-vote.ts               — GAME-1 loaders, pick writes, tick deps
+      season-finalize.ts        — LEAD-7 season recompute/finalize, cache invalidation
 ```
 
 ## Related docs
