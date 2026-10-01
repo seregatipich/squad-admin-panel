@@ -3069,6 +3069,17 @@ describe('new-test-db provisioning', () => {
     assert.match(result.stderr, /no running postgres container found/);
   });
 
+  it('prints the chosen container for --container and applies the same ambiguity check', () => {
+    const fixture = newTestDbFixture(DOTENV);
+    const single = provision(fixture, ['--container']);
+    assert.equal(single.status, 0, single.stderr);
+    assert.equal(single.stdout, 'squad-admin-panel-postgres-1\n');
+
+    const ambiguous = provision(fixture, ['--container'], { NTD_CONTAINERS: TWO_STACKS });
+    assert.equal(ambiguous.status, 1);
+    assert.match(ambiguous.stderr, /several postgres containers are running/);
+  });
+
   it('applies the same container choice to --drop', () => {
     const fixture = newTestDbFixture(DOTENV);
     const ambiguous = provision(fixture, ['--drop', 'wave3'], { NTD_CONTAINERS: TWO_STACKS });

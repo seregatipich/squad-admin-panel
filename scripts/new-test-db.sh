@@ -16,6 +16,9 @@
 #   eval "$(bash scripts/new-test-db.sh <slug>)"     # provision + export the vars
 #   bash scripts/new-test-db.sh <slug>               # just print the export lines
 #   bash scripts/new-test-db.sh --drop <slug>        # drop a database this created
+#   bash scripts/new-test-db.sh --container          # print the postgres container it would use
+#
+# scripts/prune-test-dbs.sh removes the databases of worktrees that no longer exist.
 #
 # Progress goes to stderr; ONLY the three `export …` lines go to stdout, so the
 # command is safe to `eval`. Idempotent: re-running for the same slug reuses the DB.
@@ -108,6 +111,12 @@ dbname_for_slug() {
   fi
   printf '%s' "$dbname"
 }
+
+if [ "${1:-}" = "--container" ]; then
+  resolve_pg_container
+  printf '\n'
+  exit 0
+fi
 
 if [ "${1:-}" = "--drop" ]; then
   slug=${2:-}
