@@ -146,11 +146,11 @@ the newest SHA matters and nothing deploys from it.
 
 | Job | What it runs |
 |---|---|
-| `branch-guard` | the master ancestry audit (on `master` pushes) and the harness's own contract suites |
+| `branch-guard` | the master ancestry audit (on `master` pushes), then every repository-contract suite through `scripts/test-repo-contracts.sh` (see below) |
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
 | `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
 | `test-web` (2 shards) | half of the web suite each — no services, no build |
-| `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; each shard takes every third package of that order, so each starts with one of the three longest suites; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
+| `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; the packages are spread over the shards by measured weight (longest-processing-time-first onto the least-loaded shard), so each starts with one of the three longest suites and the shards finish together; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
@@ -167,6 +167,18 @@ merged coverage. [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-sh
 fails CI if the slices stop adding up to the `test:cov` list exactly, the shard
 arguments drift, or the weighted package assignment stops balancing the shards
 (its `WEIGHTS` table must also name only packages that `test:cov` still lists).
+
+`branch-guard` runs its contract suites through one script,
+[`scripts/test-repo-contracts.sh`](../../scripts/test-repo-contracts.sh), rather than
+one workflow step per suite. The script runs every suite in its `SUITES` list in order,
+keeps going after a failure, and ends by listing the failed (or missing) suites and
+exiting 1, so one run reports every broken contract. It follows the gitleaks install
+step because the pre-push-checklist suite needs `gitleaks` on `PATH`; locally,
+`bash scripts/test-repo-contracts.sh` runs them all. To add a suite, append it to
+`SUITES` and to the list in
+[`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh), which
+also fails CI if `ci.yml` runs a contract suite as a separate step or the runner stops
+running to the end after a failure.
 
 The PostgreSQL and Redis service containers keep their data on bounded `tmpfs` mounts
 (1 GiB and 128 MiB), so an interrupted job never leaves anonymous volumes behind, and
