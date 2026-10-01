@@ -68,6 +68,18 @@ scripts that do not belong to a single workspace package. It verifies:
 - `verify-audit-chain.ts` and the real `audit_log` migration triggers against
   separate temporary PostgreSQL databases.
 
+The operations-script contracts are laid out one file per script
+(`scripts/bootstrap.test.ts`, `deploy-stand.test.ts`, `deploy-entry.test.ts`,
+`rebuild.test.ts`, `restore.test.ts`, `uninstall.test.ts`, `verify-bridge.test.ts`,
+`pre-push-checklist.test.ts`, `new-test-db.test.ts` and others). The shared scaffolding
+(`run`, `runAsync`, host-command shims, temporary directories) lives in
+`scripts/test-helpers/ops.ts`. A new file must be added to the `test:scripts` command
+in `package.json`: `scripts/static-contracts.test.ts` checks that list.
+The files run strictly one after another (`--test-concurrency=1`): every script
+invocation in them is limited to 15 seconds, and inside the files the `deploy` and
+`rollback` blocks already run in parallel, so running the files in parallel would make
+that limit depend on machine load.
+
 For a full local run, pass both pairs of URLs. The audit suite
 tolerates a missing PostgreSQL only outside CI; in CI a missing database fails
 the suite. The workflow first applies the migrations and only then runs

@@ -235,7 +235,8 @@ done
 The self-hosted `stand-deploy` runner and the `production` environment are no
 longer used; unregister the runner and delete the environment with its secrets.
 
-Contracts: `scripts/operations-scripts.test.ts` (part of `pnpm test:scripts`) and
+Contracts: `scripts/deploy-stand.test.ts`, `scripts/deploy-entry.test.ts`, `scripts/rebuild.test.ts`,
+`scripts/restore.test.ts` and `scripts/uninstall.test.ts` (part of `pnpm test:scripts`) and
 `apps/api/test/compose-stand-*.test.ts`.
 
 ## Sign-in with Steam
