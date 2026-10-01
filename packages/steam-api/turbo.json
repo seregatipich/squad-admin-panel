@@ -2,10 +2,6 @@
   "$schema": "https://turborepo.org/schema.json",
   "extends": ["//"],
   "tasks": {
-    "build": {
-      "env": ["API_URL"],
-      "inputs": ["$TURBO_EXTENDS$", "!src/test-setup.ts", "!next.config.test.mjs"]
-    },
     "test": {
       "dependsOn": ["^build"]
     }

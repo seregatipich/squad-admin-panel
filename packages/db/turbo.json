@@ -3,10 +3,12 @@
   "extends": ["//"],
   "tasks": {
     "build": {
-      "env": ["API_URL"],
-      "inputs": ["$TURBO_EXTENDS$", "!src/test-setup.ts", "!next.config.test.mjs"]
+      "inputs": ["$TURBO_EXTENDS$", "!drizzle/**", "!sql/**", "!drizzle.config.ts"]
     },
     "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:unit": {
       "dependsOn": ["^build"]
     }
   }

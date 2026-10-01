@@ -16,7 +16,19 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "public/monaco/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "public/monaco/**"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!**/*.test.{ts,tsx,mjs}",
+        "!**/__tests__/**",
+        "!test/**",
+        "!tests/**",
+        "!e2e/**",
+        "!vitest*.config.*",
+        "!tsconfig.test.json",
+        "!stryker.config.json",
+        "!playwright.config.ts"
+      ]
     },
     "dev": {
       "cache": false,
@@ -31,15 +43,33 @@
     },
     "test": {
       "dependsOn": ["build", "^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/packages/db/drizzle/**",
+        "$TURBO_ROOT$/packages/db/sql/**"
+      ]
     },
     "test:unit": {
       "dependsOn": ["build", "^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/packages/db/drizzle/**",
+        "$TURBO_ROOT$/packages/db/sql/**"
+      ]
     },
     "test:integration": {
       "dependsOn": ["build", "^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/packages/db/drizzle/**",
+        "$TURBO_ROOT$/packages/db/sql/**"
+      ]
     },
     "test:e2e": {
       "dependsOn": ["build", "^build"],

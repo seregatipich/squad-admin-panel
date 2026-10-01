@@ -3,8 +3,10 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "dependsOn": [],
-      "outputs": []
+      "dependsOn": []
+    },
+    "test:unit": {
+      "dependsOn": []
     }
   }
 }
