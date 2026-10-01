@@ -153,8 +153,8 @@ the match closed keep `null`.
 SVG `SquadCrown` component. Grey uses the muted ink token, red the danger
 token (both themes). Tooltip and `aria-label` in Russian, one line per squad:
 
-- «Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10)»
-- «Создал отряд "Alpha" в 21:04 и покинул его, будучи командиром (21:12)»
+- «Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10)» (Created squad "Alpha" at 21:04, passed command to: Ivan (21:10))
+- «Создал отряд "Alpha" в 21:04 и покинул его, будучи командиром (21:12)» (Created squad "Alpha" at 21:04 and left it while being the leader (21:12))
 
 No other UI changes.
 

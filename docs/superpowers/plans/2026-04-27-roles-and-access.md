@@ -1,4 +1,4 @@
-# Roles and Access (Эпик 2 Phase 2) — Implementation Plan
+# Roles and Access (Epic 2 Phase 2) — Implementation Plan
 
 **Goal:** Implement the unified role model from the spec — name + hex color + 21 Squad permissions + 3 access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) — wire it through the API, the config-sync worker that synthesizes the managed `Admins.cfg` segment with marker-fenced atomic writes, and the `/settings/groups` editor + `/settings/groups/:id/members` listing UI. Keep existing fine-grained panel permission keys as derived view of the 3 flags so existing route guards keep working.
 

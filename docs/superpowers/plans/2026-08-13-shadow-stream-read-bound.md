@@ -1,37 +1,37 @@
-# Ограниченное чтение shadow-потоков RNSquadJS — план реализации
+# Bounded reads of RNSquadJS shadow streams — implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ограничить объём каждого `XRANGE` в ручной проверке RNSquadJS и отклонять невалидные параметры до подключения к Redis.
+**Goal:** Bound the size of every `XRANGE` in the manual RNSquadJS check and reject invalid parameters before connecting to Redis.
 
-**Architecture:** Сценарий остаётся одним CLI-файлом. Входные параметры нормализуются до создания клиента, `readStream` запрашивает `limit + 1`, передаёт сравнению не более `limit` записей и поднимает общий флаг переполнения. Наличие флага завершает проверку fail-closed отдельным gate.
+**Architecture:** The script stays a single CLI file. Input parameters are normalized before the client is created, `readStream` requests `limit + 1`, hands the comparison at most `limit` records, and raises a shared overflow flag. When the flag is set, a dedicated gate ends the check fail-closed.
 
-**Tech Stack:** Node.js 22, ESM, Redis Streams через ioredis, встроенный `node:test`, Biome.
+**Tech Stack:** Node.js 22, ESM, Redis Streams via ioredis, the built-in `node:test`, Biome.
 
 ## Global Constraints
 
-- `MAX_STREAM_RECORDS` по умолчанию равен `100000`, допустимый диапазон — `1..1000000`.
-- `sinceMs` и `minEvents` — безопасные целые числа не меньше нуля.
-- Ошибка параметра даёт exit `2` до создания Redis-клиента.
-- Переполнение любого потока даёт gate `input-limit-exceeded` и exit `1`.
-- Частичная выборка никогда не может дать `pass`.
-- Семантика envelope, список sidecar-событий и пороги parity/extras не меняются.
+- `MAX_STREAM_RECORDS` defaults to `100000`; the allowed range is `1..1000000`.
+- `sinceMs` and `minEvents` are safe integers that are at least zero.
+- A parameter error exits with `2` before the Redis client is created.
+- Overflow of either stream yields the gate `input-limit-exceeded` and exit `1`.
+- A partial sample can never yield `pass`.
+- The envelope semantics, the list of sidecar events, and the parity/extras thresholds do not change.
 
 ---
 
-### Task 1: Строгая проверка числовых параметров
+### Task 1: Strict validation of numeric parameters
 
 **Files:**
 - Modify: `scripts/rnsquadjs-shadow-diff.test.ts`
 - Modify: `scripts/rnsquadjs-shadow-diff.mjs`
 
 **Interfaces:**
-- Consumes: позиционные `sinceMsRaw`, `minEventsRaw` и `process.env.MAX_STREAM_RECORDS`.
-- Produces: нормализованные `sinceMs`, `minEvents`, `maxStreamRecords`; ошибки CLI с exit `2`.
+- Consumes: the positional `sinceMsRaw` and `minEventsRaw`, and `process.env.MAX_STREAM_RECORDS`.
+- Produces: normalized `sinceMs`, `minEvents`, `maxStreamRecords`; CLI errors with exit `2`.
 
-- [ ] **Step 1: Добавить красные проверки окна и предела**
+- [ ] **Step 1: Add red checks for the window and the limit**
 
-Расширить тестовый запуск явным окружением:
+Extend the test runner with an explicit environment:
 
 ```ts
 function runCli(args: string[], env: NodeJS.ProcessEnv = {}): CliResult {
@@ -46,7 +46,7 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): CliResult {
 }
 ```
 
-Добавить два независимых сценария:
+Add two independent scenarios:
 
 ```ts
 it('rejects non-integer, negative, and non-numeric lookback windows with exit 2', () => {
@@ -73,7 +73,7 @@ it('rejects unsafe stream record limits with exit 2', () => {
 });
 ```
 
-- [ ] **Step 2: Запустить только новые сценарии и подтвердить красное состояние**
+- [ ] **Step 2: Run only the new scenarios and confirm the red state**
 
 Run:
 
@@ -82,11 +82,11 @@ pnpm --filter panel-bridge build
 pnpm exec tsx --test --test-name-pattern='lookback windows|stream record limits' scripts/rnsquadjs-shadow-diff.test.ts
 ```
 
-Expected: FAIL — текущий CLI не отклоняет `sinceMs` до Redis и игнорирует `MAX_STREAM_RECORDS`.
+Expected: FAIL — the current CLI does not reject `sinceMs` before Redis and ignores `MAX_STREAM_RECORDS`.
 
-- [ ] **Step 3: Добавить минимальную нормализацию до создания Redis-клиента**
+- [ ] **Step 3: Add minimal normalization before the Redis client is created**
 
-В `scripts/rnsquadjs-shadow-diff.mjs` заменить нестрогое вычисление окна и добавить предел:
+In `scripts/rnsquadjs-shadow-diff.mjs`, replace the lenient window computation and add the limit:
 
 ```js
 const sinceMs = Number(sinceMsRaw ?? 24 * 3600 * 1000);
@@ -111,7 +111,7 @@ if (
 const since = Math.max(0, Date.now() - sinceMs);
 ```
 
-- [ ] **Step 4: Подтвердить зелёное состояние новых и существующих проверок параметров**
+- [ ] **Step 4: Confirm the green state of the new and existing parameter checks**
 
 Run:
 
@@ -119,30 +119,30 @@ Run:
 pnpm exec tsx --test --test-name-pattern='minimums|lookback windows|stream record limits' scripts/rnsquadjs-shadow-diff.test.ts
 ```
 
-Expected: 3 сценария PASS, 0 FAIL.
+Expected: 3 scenarios PASS, 0 FAIL.
 
-- [ ] **Step 5: Зафиксировать цикл**
+- [ ] **Step 5: Commit the cycle**
 
 ```bash
 git add scripts/rnsquadjs-shadow-diff.mjs scripts/rnsquadjs-shadow-diff.test.ts
 git commit -m 'fix(ops): валидировать параметры shadow-diff (#282)'
 ```
 
-### Task 2: Ограниченный `XRANGE` и fail-closed gate
+### Task 2: Bounded `XRANGE` and the fail-closed gate
 
 **Files:**
 - Modify: `scripts/rnsquadjs-shadow-diff.test.ts`
 - Modify: `scripts/rnsquadjs-shadow-diff.mjs`
 
 **Interfaces:**
-- Consumes: `maxStreamRecords` из Task 1.
-- Produces: `maxStreamRecords`, `inputLimitExceeded` в JSON-вердикте и gate `input-limit-exceeded`.
+- Consumes: `maxStreamRecords` from Task 1.
+- Produces: `maxStreamRecords` and `inputLimitExceeded` in the JSON verdict, and the gate `input-limit-exceeded`.
 
-- [ ] **Step 1: Добавить красную граничную проверку**
+- [ ] **Step 1: Add a red boundary check**
 
-Добавить две совпадающие записи в оба потока, запустить CLI с пределом `2` и
-проверить обычный `pass`; затем добавить третью пару и проверить усечённые
-счётчики и fail-closed:
+Add two matching records to both streams, run the CLI with a limit of `2` and
+check for a normal `pass`; then add a third pair and check the truncated
+counters and the fail-closed result:
 
 ```ts
 it('fails closed after a bounded number of records', async () => {
@@ -171,14 +171,14 @@ it('fails closed after a bounded number of records', async () => {
 });
 ```
 
-Во все полные ожидаемые JSON добавить литералы:
+Add these literals to all full expected JSON objects:
 
 ```ts
 maxStreamRecords: 100_000,
 inputLimitExceeded: false,
 ```
 
-- [ ] **Step 2: Запустить граничный сценарий и подтвердить красное состояние**
+- [ ] **Step 2: Run the boundary scenario and confirm the red state**
 
 Run:
 
@@ -186,11 +186,11 @@ Run:
 pnpm exec tsx --test --test-name-pattern='bounded number of records' scripts/rnsquadjs-shadow-diff.test.ts
 ```
 
-Expected: FAIL — текущий CLI читает третью запись и не возвращает `inputLimitExceeded`.
+Expected: FAIL — the current CLI reads the third record and does not return `inputLimitExceeded`.
 
-- [ ] **Step 3: Реализовать один ограниченный запрос на поток**
+- [ ] **Step 3: Implement one bounded request per stream**
 
-Добавить общий флаг и ограничить `readStream`:
+Add a shared flag and bound `readStream`:
 
 ```js
 let badRecords = 0;
@@ -200,25 +200,25 @@ async function readStream(name) {
   if (raw.length > maxStreamRecords) inputLimitExceeded = true;
   const events = [];
   for (const [, fields] of raw.slice(0, maxStreamRecords)) {
-    // существующая семантическая проверка envelope без изменений
+    // existing semantic envelope check, unchanged
   }
   return events;
 }
 ```
 
-Перед другими причинами отказа поставить:
+Put this before the other failure reasons:
 
 ```js
 if (inputLimitExceeded) {
   gate = 'input-limit-exceeded';
 } else if (badRecords > 0) {
-  // текущие ветки gate без изменений
+  // current gate branches, unchanged
 }
 ```
 
-В JSON-вердикт добавить `maxStreamRecords` и `inputLimitExceeded`.
+Add `maxStreamRecords` and `inputLimitExceeded` to the JSON verdict.
 
-- [ ] **Step 4: Запустить весь профильный набор**
+- [ ] **Step 4: Run the whole relevant suite**
 
 Run:
 
@@ -226,9 +226,9 @@ Run:
 pnpm test:scripts
 ```
 
-Expected: 10 сценариев PASS, 0 FAIL.
+Expected: 10 scenarios PASS, 0 FAIL.
 
-- [ ] **Step 5: Проверить формат и разницу**
+- [ ] **Step 5: Check formatting and the diff**
 
 Run:
 
@@ -238,25 +238,25 @@ git diff --check
 git diff origin/dev...HEAD
 ```
 
-Expected: Biome и `diff --check` PASS; разница ограничена #282 и документами.
+Expected: Biome and `diff --check` PASS; the diff is limited to #282 and the docs.
 
-- [ ] **Step 6: Зафиксировать реализацию**
+- [ ] **Step 6: Commit the implementation**
 
 ```bash
 git add scripts/rnsquadjs-shadow-diff.mjs scripts/rnsquadjs-shadow-diff.test.ts
 git commit -m 'fix(ops): ограничить чтение shadow-потоков (#282)'
 ```
 
-### Task 3: Полная приёмка рабочей ветки
+### Task 3: Full acceptance of the working branch
 
 **Files:**
-- Verify only: весь репозиторий
+- Verify only: the whole repository
 
 **Interfaces:**
-- Consumes: два зелёных цикла Tasks 1–2.
-- Produces: чистая отправленная ветка, пригодная к независимой приёмке и последующему слиянию в `dev`.
+- Consumes: the two green cycles of Tasks 1–2.
+- Produces: a clean pushed branch, ready for independent acceptance and a subsequent merge into `dev`.
 
-- [ ] **Step 1: Запустить полный локальный барьер**
+- [ ] **Step 1: Run the full local gate**
 
 Run:
 
@@ -264,9 +264,9 @@ Run:
 bash scripts/pre-push-checklist.sh
 ```
 
-Expected: все доступные обязательные шаги PASS; тесты не пропущены из-за отсутствия БД.
+Expected: all available mandatory steps PASS; no tests skipped because of a missing database.
 
-- [ ] **Step 2: Проверить механическое состояние**
+- [ ] **Step 2: Check the mechanical state**
 
 Run:
 
@@ -276,9 +276,9 @@ git log --oneline origin/dev..HEAD
 git diff --check origin/dev...HEAD
 ```
 
-Expected: дерево чистое, только коммиты #282, ошибок разницы нет.
+Expected: the tree is clean, only #282 commits, no diff errors.
 
-- [ ] **Step 3: Отправить ветку и выполнить feature-проверку**
+- [ ] **Step 3: Push the branch and run the feature check**
 
 Run:
 
@@ -287,10 +287,10 @@ git push -u origin fix/282-shadow-stream-bound
 bash scripts/verify-done.sh --feature
 ```
 
-Expected: точный `HEAD` равен удалённой ветке, происхождение от `dev` подтверждено.
+Expected: the exact `HEAD` equals the remote branch, and the origin from `dev` is confirmed.
 
-- [ ] **Step 4: Оставить доказательства в #282**
+- [ ] **Step 4: Leave the evidence in #282**
 
-Указать красные и зелёные команды, точный SHA, полный локальный барьер,
-независимый вердикт и внешний блокер `dev` CI #281. Перевести задачу в Review,
-но не вливать ветку до восстановления self-hosted runner.
+List the red and green commands, the exact SHA, the full local gate,
+the independent verdict and the external blocker, `dev` CI #281. Move the task to Review,
+but do not merge the branch until the self-hosted runner is restored.

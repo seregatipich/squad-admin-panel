@@ -1989,7 +1989,7 @@ export default function CreateServerPage() {
 }
 ```
 
-- [ ] **Step 2: Add "Создать сервер" link to server list page**
+- [ ] **Step 2: Add "Создать сервер" (Create server) link to server list page**
 
 In `apps/web/src/app/(dashboard)/servers/page.tsx`, add a link near the page header:
 
@@ -3063,7 +3063,7 @@ if (body.license_id !== undefined || body.license_key !== undefined) {
 
 - [ ] **Step 4: Add license section to settings page**
 
-In `apps/web/src/app/(dashboard)/servers/[id]/settings/page.tsx`, add a "Лицензия" section:
+In `apps/web/src/app/(dashboard)/servers/[id]/settings/page.tsx`, add a "Лицензия" (License) section:
 
 ```typescript
 <section className="mb-6">
@@ -3243,7 +3243,7 @@ export function TagInput({ tags, onChange, maxTags = 20 }: Props) {
 
 - [ ] **Step 2: Add to settings page**
 
-In `apps/web/src/app/(dashboard)/servers/[id]/settings/page.tsx`, add a tags section after the header and before the Сеть section:
+In `apps/web/src/app/(dashboard)/servers/[id]/settings/page.tsx`, add a tags section after the header and before the Сеть (Network) section:
 
 ```typescript
 import { TagInput } from '@/components/TagInput';
@@ -3435,7 +3435,7 @@ app.register(serverUpdateRoutes);
 
 - [ ] **Step 3: Add button to server detail page**
 
-In `apps/web/src/app/(dashboard)/servers/[id]/page.tsx`, add an "Обновить игру" button visible only when stopped:
+In `apps/web/src/app/(dashboard)/servers/[id]/page.tsx`, add an "Обновить игру" (Update game) button visible only when stopped:
 
 ```typescript
 {data?.server.status === 'stopped' && (

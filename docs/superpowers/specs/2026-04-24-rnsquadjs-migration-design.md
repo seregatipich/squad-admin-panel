@@ -124,7 +124,7 @@ These contracts are read by the UI, status-reconciler, audit, and `worker-event-
 1. API issues `AdminBroadcast` + `AdminEndMatch` via `rcon.exec` (i.e. HTTP into sidecar).
 2. `container_stop squad-{uuid}` (unchanged).
 3. **NEW:** `container_stop rnsquadjs-{uuid}` immediately after.
-4. status-reconciler flips both rows; `rcon:status:{id}` ages out → UI renders `"— (сервер не запущен)"` (unchanged copy).
+4. status-reconciler flips both rows; `rcon:status:{id}` ages out → UI renders `"— (сервер не запущен)"` ("— (server not running)") (unchanged copy).
 
 ### 5.3. Delete (`DELETE /servers/:id`)
 1. **NEW:** `container_rm rnsquadjs-{uuid}` first (so it stops trying to RCON a dying server).

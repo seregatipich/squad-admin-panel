@@ -226,7 +226,7 @@ Stream is built incrementally — never holds full bundle in memory. For each se
 
 ### 7.4 Nav
 
-A "Логи" link in the existing dashboard layout (`apps/web/src/app/(dashboard)/layout.tsx`), shown if the current user has `host:view`. UI copy stays Russian per CLAUDE.md.
+A "Логи" (Logs) link in the existing dashboard layout (`apps/web/src/app/(dashboard)/layout.tsx`), shown if the current user has `host:view`. UI copy stays Russian per CLAUDE.md.
 
 ## 8. Testing
 

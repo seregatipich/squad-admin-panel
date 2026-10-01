@@ -2799,8 +2799,8 @@ In `roster-format.ts`, add at the top `import type { SquadCrown } from '@squad/s
 ```ts
   first_seen_at: string | null;
   /**
-   * Корона создателя отряда в текущем матче (история отрядов). Отсутствует в
-   * ответе API, собранного до этой возможности.
+   * The squad creator's crown in the current match (squad history). Absent from
+   * API responses built before this feature existed.
    */
   squad_crown?: SquadCrown | null;
 }
@@ -2809,17 +2809,17 @@ In `roster-format.ts`, add at the top `import type { SquadCrown } from '@squad/s
 Append after `formatTimeOnServer`:
 
 ```ts
-/** «21:04» по местному времени зрителя. */
+/** "21:04" in the viewer's local time. */
 export function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
 /**
- * Подсказка короны: одна строка на каждый отряд, созданный игроком в этом
- * матче. Сначала время создания (если воркер его видел), затем передачи
- * командования товарищам по отряду, в конце уход с поста командира.
+ * Crown tooltip: one line per squad the player created in this
+ * match. First the creation time (if the worker saw it), then the handoffs of
+ * command to squadmates, and finally leaving the post of leader.
  *
- * @param formatTime - Форматирует ISO-время; в тестах подставляется UTC.
+ * @param formatTime - Formats an ISO time; tests substitute UTC.
  */
 export function crownTooltipLines(
   crown: SquadCrown,
@@ -2847,16 +2847,16 @@ Create `squad-crown.tsx`:
 import type { SquadCrown as SquadCrownData } from '@squad/shared-types';
 import { crownTooltipLines } from './roster-format';
 
-/** Серая корона — приглушённый текст, красная — тон опасности; оба токена есть в каждой теме. */
+/** The grey crown uses muted text and the red one the danger tone; both tokens exist in every theme. */
 const CROWN_TONE: Record<SquadCrownData['color'], string> = {
   grey: 'text-ink-3',
   red: 'text-crit',
 };
 
 /**
- * Корона создателя отряда в строке ростера: серая — передал командование и
- * остался в отряде, красная — ушёл из отряда или вышел с сервера, будучи
- * командиром. Подсказка и `aria-label` перечисляют отряды построчно.
+ * The squad creator's crown in a roster row: grey — passed command and
+ * stayed in the squad, red — left the squad or left the server while
+ * being the leader. The tooltip and `aria-label` list the squads line by line.
  */
 export function SquadCrown({ crown }: { crown: SquadCrownData }) {
   const label = crownTooltipLines(crown).join('\n');
@@ -2915,7 +2915,7 @@ git -c user.name=Claude -c user.email=noreply@anthropic.com commit -m "feat(web/
 
 **Interfaces:**
 - Consumes: event kinds from Task 1.
-- Produces: `kindLabel('squad.created') === 'Отряд создан'`, `kindLabel('squad.leader_changed') === 'Смена командира отряда'`, `kindLabel('squad.disbanded') === 'Отряд распущен'`. All three appear in `kindOptionsFromEvents([])`.
+- Produces: `kindLabel('squad.created') === 'Отряд создан'` (Squad created), `kindLabel('squad.leader_changed') === 'Смена командира отряда'` (Squad leader changed), `kindLabel('squad.disbanded') === 'Отряд распущен'` (Squad disbanded). All three appear in `kindOptionsFromEvents([])`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2942,7 +2942,7 @@ Expected: FAIL. `expected 'squad.created' to be 'Отряд создан'`.
 
 - [ ] **Step 3: Implement**
 
-In `KNOWN_EVENT_KINDS`, after `{ value: 'banname.matched', label: 'Совпадение по запрещённому нику' },` add:
+In `KNOWN_EVENT_KINDS`, after `{ value: 'banname.matched', label: 'Совпадение по запрещённому нику' },` (Banned-name match) add:
 
 ```ts
   { value: 'squad.created', label: 'Отряд создан' },
@@ -3664,13 +3664,13 @@ Emitted by squad history (see `flows.md`) and also inserted into `events`. `acto
 `docs/components/workers/rcon/changelog.md`: insert after `# Changelog — worker-rcon`:
 
 ```markdown
-## 2026-09-27 — История отрядов и короны создателей
+## 2026-09-27 — Squad history and creator crowns
 
 ### Added
 
-- Воркер записывает создание отрядов, смену командира и роспуск отрядов в `events` (`squad.created`, `squad.leader_changed`, `squad.disbanded`) и в поток `events:server:{id}`. Создание отряда датируется RCON-сообщением `has created Squad`, которое раньше отбрасывалось. Смена командира и роспуск вычисляются сравнением соседних снимков состава (раз в 2 с).
-- Хэш `rcon:squad-crowns:{id}` хранит короны создателей текущего матча: серую (передал командование товарищу) и красную (ушёл из отряда или с сервера, будучи командиром). Хэш удаляется на смене матча, TTL 6 ч.
-- Подсказка `rcon:refresh` теперь передаёт супервизору `reason`: `match.started` / `match.ended` сбрасывают историю отрядов без ложных «роспусков».
+- The worker records squad creation, leader changes and squad disbanding in `events` (`squad.created`, `squad.leader_changed`, `squad.disbanded`) and in the `events:server:{id}` stream. Squad creation is dated by the RCON message `has created Squad`, which used to be discarded. Leader changes and disbanding are computed by comparing adjacent roster snapshots (every 2 s).
+- The `rcon:squad-crowns:{id}` hash holds the creator crowns of the current match: grey (passed command to a squadmate) and red (left the squad or the server while being the leader). The hash is deleted on match change, TTL 6 h.
+- The `rcon:refresh` hint now passes `reason` to the supervisor: `match.started` / `match.ended` reset the squad history without false "disbands".
 ```
 
 - [ ] **Step 2: Write the log-ingest, API, shared-types, web and architecture docs**
@@ -3718,12 +3718,12 @@ Each player also carries `squad_crown`: `null`, or `{ color: 'grey' | 'red', squ
 `docs/components/web/changelog.md`: insert after `# Changelog`:
 
 ```markdown
-## 2026-09-27 — Короны создателей отрядов
+## 2026-09-27 — Squad creator crowns
 
 ### Added
 
-- В «Игроки онлайн» после звезды командира появляется корона создателя отряда. Серая: игрок создал отряд и передал командование, оставшись в нём. Красная: ушёл из отряда или с сервера, будучи командиром (красная важнее серой). Подсказка перечисляет отряды построчно, например «Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10)».
-- Журнал событий подписывает `squad.created`, `squad.leader_changed` и `squad.disbanded` как «Отряд создан», «Смена командира отряда», «Отряд распущен».
+- In «Игроки онлайн» (Players online), a squad creator's crown appears after the leader's star. Grey: the player created a squad and passed command while staying in it. Red: left the squad or the server while being the leader (red takes precedence over grey). The tooltip lists the squads line by line, for example «Создал отряд "Alpha" в 21:04, передал командование: Ivan (21:10)» (Created squad "Alpha" at 21:04, passed command to: Ivan (21:10)).
+- The event log labels `squad.created`, `squad.leader_changed` and `squad.disbanded` as «Отряд создан», «Смена командира отряда», «Отряд распущен» (Squad created, Squad leader changed, Squad disbanded).
 ```
 
 `docs/architecture/map.md` §9.3: replace the `rcon:squads:<id>` row with:

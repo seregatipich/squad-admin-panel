@@ -2472,10 +2472,10 @@ git commit -m "feat(web/setup): two-step wizard (env-check + org), no owner form
 
 Append a section that:
 1. Calls `GET /api/v1/me/sessions` on mount.
-2. Renders a table with columns `IP | User-Agent | Активность | Истекает | Действия`.
-3. Marks the row with `current: true` with a badge "текущая".
-4. Each row has a "Завершить" button → `DELETE /api/v1/me/sessions/:id`.
-5. Above the table, a button "Завершить все остальные" → iterates non-current ids and DELETE each (or use the bulk endpoint if extending). Use `DELETE /api/v1/me/sessions` for "all".
+2. Renders a table with columns `IP | User-Agent | Активность | Истекает | Действия` (Activity | Expires | Actions).
+3. Marks the row with `current: true` with a badge "текущая" (current).
+4. Each row has a "Завершить" (End) button → `DELETE /api/v1/me/sessions/:id`.
+5. Above the table, a button "Завершить все остальные" (End all others) → iterates non-current ids and DELETE each (or use the bulk endpoint if extending). Use `DELETE /api/v1/me/sessions` for "all".
 
 The structure mirrors existing client-component patterns in `apps/web/src/app/(dashboard)/players/page.tsx`. Russian copy throughout.
 
@@ -2499,13 +2499,13 @@ git commit -m "feat(web/account): drop TOTP UI, add active-sessions list with re
 cat 'apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx'
 ```
 
-- [ ] **Step 2: Add a "Доступ к панели" section**
+- [ ] **Step 2: Add a "Доступ к панели" (Panel access) section**
 
 Add an SSR-loaded subcomponent that:
 1. Server-side fetches `me` to know whether the viewer has `user:manage_roles`. If not — render nothing.
 2. Fetches `roles` and the player's current `playerRoleAssignments`.
 3. Renders the current roles as a list with `[×]` buttons.
-4. Renders a `<select>` of unselected roles + "Назначить" button.
+4. Renders a `<select>` of unselected roles + "Назначить" (Assign) button.
 
 Use existing data-access patterns from `apps/web/src/lib/dal.ts` for SSR fetch with cookie-forwarding.
 

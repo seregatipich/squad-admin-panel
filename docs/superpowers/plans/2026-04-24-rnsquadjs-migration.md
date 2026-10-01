@@ -1676,7 +1676,7 @@ The `.catch` for both is intentional — operator-initiated stop must not be blo
 
 - [ ] **Step 3: Update `app.rcon` calls inside `stop`**
 
-The current stop flow opens a direct RCON socket to issue `AdminBroadcast` + `AdminEndMatch`. Replace with `app.rcon.exec(id, 'AdminBroadcast', ['Сервер останавливается'])` and `app.rcon.exec(id, 'AdminEndMatch', [])`. Decorate `app.rcon` in `apps/api/src/server.ts`:
+The current stop flow opens a direct RCON socket to issue `AdminBroadcast` + `AdminEndMatch`. Replace with `app.rcon.exec(id, 'AdminBroadcast', ['Сервер останавливается'])` (the broadcast text means "The server is stopping") and `app.rcon.exec(id, 'AdminEndMatch', [])`. Decorate `app.rcon` in `apps/api/src/server.ts`:
 
 ```ts
 import { createRconClient } from './lib/rcon.js';

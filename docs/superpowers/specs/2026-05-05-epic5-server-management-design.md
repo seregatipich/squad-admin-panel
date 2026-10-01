@@ -24,7 +24,7 @@
 
 **2-step wizard:**
 
-**Step 1 — "Новый сервер":**
+**Step 1 — "Новый сервер" (New server):**
 - Display name (required, unique slug auto-derived)
 - Game port (default 7787)
 - Query port (default 27165)
@@ -33,14 +33,14 @@
 - Port conflict validation: API checks all ports against existing servers' `server_settings` and rejects duplicates
 - Each field shows the default; operator only changes what they need
 
-**Step 2 — "Подтверждение":**
+**Step 2 — "Подтверждение" (Confirmation):**
 - Review card showing name and all ports
-- Note: "Конфигурация будет создана из стандартных файлов Squad. Настройки ресурсов можно изменить после создания."
+- Note: "Конфигурация будет создана из стандартных файлов Squad. Настройки ресурсов можно изменить после создания." (The configuration will be created from the standard Squad files. Resource settings can be changed after creation.)
 - Submit → `POST /api/v1/servers` → redirect to `/servers/:id` (existing install WS kicks in)
 
 **No new API endpoints needed.** Existing `POST /api/v1/servers` + `POST /api/v1/servers/:id/install` + install WebSocket handle the backend.
 
-**Navigation:** Dashboard "+" button and "Создать сервер" button in server list empty state.
+**Navigation:** Dashboard "+" button and "Создать сервер" (Create server) button in server list empty state.
 
 ---
 
@@ -66,12 +66,12 @@
 
 **UFW sync:** If ports changed, API calls `ufw_rule` to remove old rules and add new ones.
 
-**Web UI:** New "Настройки" tab on server detail page (`/servers/:id/settings`).
+**Web UI:** New "Настройки" (Settings) tab on server detail page (`/servers/:id/settings`).
 
 Three sections:
-1. **Сеть** — port fields (disabled with message when server is running)
-2. **Игра** — maxPlayers, tickrate
-3. **Ресурсы** — resource limit fields, each with toggle (off = no limit, on = input). Label: "Применяется при следующем запуске"
+1. **Сеть** (Network) — port fields (disabled with message when server is running)
+2. **Игра** (Game) — maxPlayers, tickrate
+3. **Ресурсы** (Resources) — resource limit fields, each with toggle (off = no limit, on = input). Label: "Применяется при следующем запуске" (Applied on next start)
 
 ---
 
@@ -86,8 +86,8 @@ Three sections:
 **Why `container_rm` not `container_stop -t 0`?** The scenario for force-stop is a hung server where graceful stop already timed out. `container_rm -f` is the reliable kill. The start flow already handles "no container exists" by calling `container_run`.
 
 **Web UI:** Stop button becomes a split-button dropdown:
-- Primary: "Остановить" (graceful, existing)
-- Dropdown: "Принудительная остановка" → confirmation dialog: "Сервер будет немедленно остановлен без сохранения. Все игроки будут отключены. Продолжить?" → red "Остановить принудительно" button
+- Primary: "Остановить" (Stop) (graceful, existing)
+- Dropdown: "Принудительная остановка" (Force stop) → confirmation dialog: "Сервер будет немедленно остановлен без сохранения. Все игроки будут отключены. Продолжить?" (The server will be stopped immediately without saving. All players will be disconnected. Continue?) → red "Остановить принудительно" (Force stop) button
 
 Visible only with `server:force_stop` permission.
 
@@ -107,7 +107,7 @@ Empty array or omitted = update depot only (no server stop/start).
 **Orchestration steps (streamed via existing depot progress WebSocket):**
 
 1. **Validate** — listed servers exist and are stoppable (`running` or `starting`)
-2. **Broadcast** — RCON `AdminBroadcast` to each selected server: "Сервер будет остановлен для обновления через 60 секунд"
+2. **Broadcast** — RCON `AdminBroadcast` to each selected server: "Сервер будет остановлен для обновления через 60 секунд" (The server will be stopped for an update in 60 seconds)
 3. **Wait 60s** — countdown streamed to WebSocket
 4. **Graceful stop** — existing stop logic for each server (parallel), stream per-server status
 5. **Run SteamCMD** — `depot_update` RPC, stream output
@@ -121,7 +121,7 @@ Empty array or omitted = update depot only (no server stop/start).
 
 **Web UI enhancement:**
 - Current build ID displayed on depot page
-- "Обновить Squad" button → modal with checkboxes per running server
+- "Обновить Squad" (Update Squad) button → modal with checkboxes per running server
 - Server checkboxes show player counts from RCON status
 - Progress view: stopping → updating → restarting phases
 
@@ -167,8 +167,8 @@ Empty array or omitted = update depot only (no server stop/start).
 
 **Web UI:**
 - Server card: orange badge with crash count (crashes in last hour). Red pulsing badge for crash loop.
-- Server detail: "Стабильность" section with crash timeline (24h). Crash loop: red banner "Сервер в цикле аварий — автоперезапуск отключён. Проверьте логи и запустите вручную."
-- Toast: "Сервер {name} аварийно перезапустился" when panel is open.
+- Server detail: "Стабильность" (Stability) section with crash timeline (24h). Crash loop: red banner "Сервер в цикле аварий — автоперезапуск отключён. Проверьте логи и запустите вручную." (The server is in a crash loop — auto-restart is disabled. Check the logs and start it manually.)
+- Toast: "Сервер {name} аварийно перезапустился" (Server {name} restarted after a crash) when panel is open.
 
 ---
 
@@ -184,10 +184,10 @@ Empty array or omitted = update depot only (no server stop/start).
 - Returns array: `{ timestamp, cpu_percent, mem_bytes, mem_percent, pids }`
 - Cap 1000 points; downsample by skipping entries evenly if range exceeds
 
-**Web UI:** New "Мониторинг" tab on server detail page:
+**Web UI:** New "Мониторинг" (Monitoring) tab on server detail page:
 - CPU % line chart (0–100%)
 - Memory usage line chart (bytes, human-readable labels)
-- Time range selector: 1ч / 6ч / 24ч
+- Time range selector: 1ч / 6ч / 24ч (1h / 6h / 24h)
 - Current values as large numbers above charts
 
 ---
@@ -202,7 +202,7 @@ Empty array or omitted = update depot only (no server stop/start).
 
 **Container launch:** `container_run` passes `?LicenseId=X?LicenseKey=Y` in launch args when present.
 
-**Web UI:** "Лицензия" section on settings page. Two fields (License ID, License Key masked). "Привязать" / "Отвязать" buttons. Label: requires restart.
+**Web UI:** "Лицензия" (License) section on settings page. Two fields (License ID, License Key masked). "Привязать" / "Отвязать" (Bind / Unbind) buttons. Label: requires restart.
 
 ---
 
@@ -227,7 +227,7 @@ Empty array or omitted = update depot only (no server stop/start).
 - Calls `depot_update`, then restarts server
 - Progress via WebSocket: `GET /api/v1/servers/:id/update/ws`
 
-**Web UI:** "Обновить игру" button on server detail, visible only when stopped.
+**Web UI:** "Обновить игру" (Update game) button on server detail, visible only when stopped.
 
 ---
 
@@ -239,7 +239,7 @@ Empty array or omitted = update depot only (no server stop/start).
 
 **Lag spike detection:** Tickrate below 80% of configured target for 3+ consecutive polls (90s) → publish `performance_degraded` event on `server:events:{serverId}`.
 
-**Web UI:** Tickrate line added to Мониторинг charts. Yellow warning badge on server card when degraded. No external alerting.
+**Web UI:** Tickrate line added to Мониторинг (Monitoring) charts. Yellow warning badge on server card when degraded. No external alerting.
 
 ---
 

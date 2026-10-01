@@ -11,83 +11,83 @@
 
 ### Goals
 
-- Steam OpenID 2.0 — единственный способ входа в панель.
-- Первый Steam-логин после fresh-install автоматически становится Owner ровно один раз; повторный trick невозможен даже после drop-and-restore БД (двойной якорь: DB-flag + sentinel-file через bridge).
-- Wizard первой инициализации создаёт **organization**; пользователь Owner создаётся через первый Steam-логин, не через wizard.
-- Sliding session TTL 6 часов с обновлением не чаще раза в 60 секунд per session.
-- Session management UI: список активных сессий, logout одной/всех.
-- Steam_id64 — паспорт пользователя везде: audit-log актор, role-assignments, server-credentials author, config_versions author.
+- Steam OpenID 2.0 is the only way to log in to the panel.
+- The first Steam login after a fresh install automatically becomes Owner exactly once; the trick cannot be repeated even after a DB drop-and-restore (double anchor: DB flag + sentinel file via the bridge).
+- The first-run wizard creates an **organization**; the Owner user is created via the first Steam login, not via the wizard.
+- Sliding session TTL of 6 hours, refreshed at most once per 60 seconds per session.
+- Session management UI: a list of active sessions, log out one/all.
+- Steam_id64 is the user's passport everywhere: audit-log actor, role-assignments, server-credentials author, config_versions author.
 
 ### Non-goals
 
-- Email/password login — **полностью удаляется**.
-- TOTP / backup codes — **полностью удаляются**.
-- Discord login — **не делаем**. Discord остаётся как linked identity для notifications/Discord-бота (P1+, отдельный spec).
-- API tokens — schema создаётся (для FK на token-id в audit-log), CRUD endpoints помечены P1+ и не реализуются в этой итерации.
-- Steam Web API key — опционален; без него panel работает, persona/avatar не обогащаются.
-- Migration-from-existing-data — у панели нет prod-data (pre-launch); миграция destructive forward-only.
+- Email/password login — **removed entirely**.
+- TOTP / backup codes — **removed entirely**.
+- Discord login — **not doing it**. Discord remains as a linked identity for notifications/the Discord bot (P1+, separate spec).
+- API tokens — the schema is created (for the FK on token-id in audit-log), CRUD endpoints are marked P1+ and are not implemented in this iteration.
+- Steam Web API key — optional; without it the panel works, persona/avatar are not enriched.
+- Migration-from-existing-data — the panel has no prod data (pre-launch); the migration is destructive and forward-only.
 
 ---
 
 ## 2. Mental model
 
-«Пользователь панели» как отдельная сущность не существует. Identity-якорь — `players.steam_id64 bigint PK`. Эта таблица уже есть и наполняется автоматически:
+A "panel user" as a separate entity does not exist. The identity anchor is `players.steam_id64 bigint PK`. This table already exists and is populated automatically:
 
-- `worker-rcon` upsert'ит player'а на каждом `ListPlayers` polling tick (см. `apps/workers/rcon/src/persist.ts`),
-- `worker-log-ingest` парсит `player.connected` / `player.disconnected` события из `SquadGame.log`.
+- `worker-rcon` upserts the player on every `ListPlayers` polling tick (see `apps/workers/rcon/src/persist.ts`),
+- `worker-log-ingest` parses `player.connected` / `player.disconnected` events from `SquadGame.log`.
 
-«Пользователь панели» = `player` с назначенной ролью в новой таблице `player_role_assignments`. Owner управляет доступом из карточки игрока (`/players/<steam_id64>`), а не из отдельного «pending users» UI. Pending = «player без ролей», что и так дефолтное состояние всех игроков сервера.
+A "panel user" = a `player` with a role assigned in the new `player_role_assignments` table. The Owner manages access from the player card (`/players/<steam_id64>`), not from a separate "pending users" UI. Pending = "a player without roles", which is already the default state of all server players.
 
 Steam OpenID callback:
 
-1. Валидирует OpenID 2.0 response (см. §6).
-2. Находит/создаёт `players` row по `steam_id64` (stub если игрок ни разу не был на сервере).
-3. Опционально обогащает `canonical_name` через `GetPlayerSummaries` (если `STEAM_WEB_API_KEY` задан и `canonical_name` дефолтный stub).
-4. Если это первый Steam-callback на свежей панели (см. §5) — выдаёт Owner role атомарно.
-5. Иначе проверяет наличие role-assignment. Если ролей нет — 403 без сессии (cookie не ставится, redirect на `/login?error=not_authorized`).
-6. Если роли есть — создаёт `sessions` row, ставит `__Host-sid` cookie, redirect на `/`.
+1. Validates the OpenID 2.0 response (see §6).
+2. Finds/creates the `players` row by `steam_id64` (a stub if the player has never been on the server).
+3. Optionally enriches `canonical_name` via `GetPlayerSummaries` (if `STEAM_WEB_API_KEY` is set and `canonical_name` is the default stub).
+4. If this is the first Steam callback on a fresh panel (see §5) — grants the Owner role atomically.
+5. Otherwise checks for a role assignment. If there are no roles — 403 without a session (no cookie is set, redirect to `/login?error=not_authorized`).
+6. If there are roles — creates a `sessions` row, sets the `__Host-sid` cookie, redirects to `/`.
 
 ---
 
-## 3. Архитектура и слои кода
+## 3. Architecture and code layers
 
-### 3.1 Новые/изменённые файлы
+### 3.1 New/changed files
 
-| Path | Назначение |
+| Path | Purpose |
 |---|---|
-| `apps/api/src/lib/steam-openid.ts` | Pure-функции: `buildLoginRedirectUrl(returnTo, nonce)`, `parseCallbackParams(query)`, `verifyWithSteam(params): Promise<{steamId64, responseNonce}>`. Без I/O state — caller делает Redis nonce ops. ~120 строк. |
-| `apps/api/src/lib/steam-profile.ts` | Wrapper над `GET https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/`. Возвращает `{persona, avatarUrl} \| null`. Кеш в Redis `steam-profile:{steamid}` TTL 1h. Молча возвращает `null` если ENV `STEAM_WEB_API_KEY` пустой. |
-| `apps/api/src/lib/first-owner.ts` | `claimFirstOwner(steamId64): Promise<'claimed' \| 'already_claimed' \| 'no_owner_role'>`. См. §5 для алгоритма. |
-| `apps/api/src/routes/auth-steam.ts` | `GET /api/v1/auth/steam/login` (redirect на Steam), `GET /api/v1/auth/steam/callback` (validation → first-owner OR role-check → session). Заменяет существующий 501-stub. |
-| `apps/api/src/routes/auth.ts` | Удаляются: `POST /login`, `POST /me/totp/*`. Остаются: `POST /logout`, `GET /me`. Добавляется: `GET /me/sessions`, `DELETE /me/sessions/:id`, `DELETE /me/sessions` (logout all). |
-| `apps/api/src/routes/setup.ts` | Сжимается до двух endpoints: `GET /setup/check-env`, `POST /setup/init`. Удаляются: `/setup/org`, `/setup/owner`, `/setup/finalize`. |
-| `apps/api/src/lib/sessions.ts` | Расширяется: `last_activity_at`, sliding TTL touch с Redis SETNX throttle (см. §7). |
-| `apps/api/src/plugins/auth.ts` | Middleware дополняется `touchSession()` после resolve. `req.user` теперь `{steamId64, canonicalName, avatarUrl, permissions, clearance}` без `email`/`displayName`. |
-| `packages/db/src/schema/*` | Удаляются: `users.ts`, `user-identities.ts`, `user-role-assignments.ts`, `user-api-tokens.ts`. Добавляются: `player-role-assignments.ts`, `player-api-tokens.ts`. Изменяются: `sessions.ts`, `organization-members.ts`, `audit-log.ts`, `config-versions.ts`. |
-| `packages/db/drizzle/0008_steam_only_auth.sql` | Один transaction, см. §4. |
-| `packages/shared-config/src/bridge-methods.ts` | В `pathAllowlist` для `file_atomic_write`/`file_read` добавляется `/var/lib/squad-panel/.first-owner-claimed`. |
-| `apps/web/src/app/login/page.tsx` | Заменяется на одну кнопку «Войти через Steam» → `window.location.href = '/api/v1/auth/steam/login'`. Email/password форма удаляется. |
-| `apps/web/src/app/setup/page.tsx` | Двухшаговый wizard: env-check → форма «Название организации, slug» → `POST /api/v1/setup/init` → redirect на `/login`. |
-| `apps/web/src/app/(dashboard)/settings/account/page.tsx` | Удаляется TOTP-секция. Добавляется секция «Активные сессии» с listing'ом и кнопками logout. |
-| `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` | Добавляется секция «Доступ к панели» (видна с permission `user:manage_roles`): list ролей игрока, dropdown «Назначить роль», кнопка «Удалить роль». |
-| `apps/web/src/app/no-access/page.tsx` | Новая статичная страница: «Steam ID `7656...` не имеет доступа. Обратитесь к администратору.» Используется как landing для cookie-less ошибок. |
+| `apps/api/src/lib/steam-openid.ts` | Pure functions: `buildLoginRedirectUrl(returnTo, nonce)`, `parseCallbackParams(query)`, `verifyWithSteam(params): Promise<{steamId64, responseNonce}>`. No I/O state — the caller does the Redis nonce ops. ~120 lines. |
+| `apps/api/src/lib/steam-profile.ts` | Wrapper over `GET https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/`. Returns `{persona, avatarUrl} \| null`. Cached in Redis under `steam-profile:{steamid}` with a 1h TTL. Silently returns `null` if the ENV `STEAM_WEB_API_KEY` is empty. |
+| `apps/api/src/lib/first-owner.ts` | `claimFirstOwner(steamId64): Promise<'claimed' \| 'already_claimed' \| 'no_owner_role'>`. See §5 for the algorithm. |
+| `apps/api/src/routes/auth-steam.ts` | `GET /api/v1/auth/steam/login` (redirect to Steam), `GET /api/v1/auth/steam/callback` (validation → first-owner OR role-check → session). Replaces the existing 501 stub. |
+| `apps/api/src/routes/auth.ts` | Removed: `POST /login`, `POST /me/totp/*`. Kept: `POST /logout`, `GET /me`. Added: `GET /me/sessions`, `DELETE /me/sessions/:id`, `DELETE /me/sessions` (logout all). |
+| `apps/api/src/routes/setup.ts` | Reduced to two endpoints: `GET /setup/check-env`, `POST /setup/init`. Removed: `/setup/org`, `/setup/owner`, `/setup/finalize`. |
+| `apps/api/src/lib/sessions.ts` | Extended: `last_activity_at`, sliding TTL touch with a Redis SETNX throttle (see §7). |
+| `apps/api/src/plugins/auth.ts` | The middleware gains `touchSession()` after resolve. `req.user` is now `{steamId64, canonicalName, avatarUrl, permissions, clearance}` without `email`/`displayName`. |
+| `packages/db/src/schema/*` | Removed: `users.ts`, `user-identities.ts`, `user-role-assignments.ts`, `user-api-tokens.ts`. Added: `player-role-assignments.ts`, `player-api-tokens.ts`. Changed: `sessions.ts`, `organization-members.ts`, `audit-log.ts`, `config-versions.ts`. |
+| `packages/db/drizzle/0008_steam_only_auth.sql` | A single transaction, see §4. |
+| `packages/shared-config/src/bridge-methods.ts` | `/var/lib/squad-panel/.first-owner-claimed` is added to `pathAllowlist` for `file_atomic_write`/`file_read`. |
+| `apps/web/src/app/login/page.tsx` | Replaced with a single «Войти через Steam» (Sign in with Steam) button → `window.location.href = '/api/v1/auth/steam/login'`. The email/password form is removed. |
+| `apps/web/src/app/setup/page.tsx` | Two-step wizard: env-check → form «Название организации, slug» (Organization name, slug) → `POST /api/v1/setup/init` → redirect to `/login`. |
+| `apps/web/src/app/(dashboard)/settings/account/page.tsx` | The TOTP section is removed. An «Активные сессии» (Active sessions) section is added, with a listing and logout buttons. |
+| `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` | Adds a «Доступ к панели» (Panel access) section (visible with the `user:manage_roles` permission): the player's role list, a «Назначить роль» (Assign role) dropdown, a «Удалить роль» (Remove role) button. |
+| `apps/web/src/app/no-access/page.tsx` | A new static page: «Steam ID `7656...` не имеет доступа. Обратитесь к администратору.» (Steam ID `7656...` has no access. Contact the administrator.) Used as the landing page for cookie-less errors. |
 
 ### 3.2 ENV vars
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `PANEL_PUBLIC_URL` | да | — | api | `https://<host>` для построения `openid.return_to`. Wizard env-check проверяет, что GET на `<PANEL_PUBLIC_URL>/api/v1/health` возвращает к этой же панели. | нет |
-| `STEAM_WEB_API_KEY` | нет | пусто | api | Если задан — обогащаем `players.canonical_name` персоной. Получается на https://steamcommunity.com/dev/apikey. | да |
-| `SESSION_TTL_SECONDS` | нет | `21600` (6h) | api | TTL sliding session. Менять только в тестах. | нет |
-| `SESSION_TOUCH_THROTTLE_SECONDS` | нет | `60` | api | Минимум между обновлениями `last_activity_at` per session. | нет |
+| `PANEL_PUBLIC_URL` | yes | — | api | `https://<host>` for building `openid.return_to`. The wizard env-check verifies that a GET to `<PANEL_PUBLIC_URL>/api/v1/health` reaches this same panel. | no |
+| `STEAM_WEB_API_KEY` | no | empty | api | If set — `players.canonical_name` is enriched with the persona. Obtained at https://steamcommunity.com/dev/apikey. | yes |
+| `SESSION_TTL_SECONDS` | no | `21600` (6h) | api | Sliding session TTL. Change only in tests. | no |
+| `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | api | Minimum interval between `last_activity_at` updates per session. | no |
 
 ---
 
 ## 4. Schema migration `0008_steam_only_auth.sql`
 
-Один файл, single transaction, destructive forward-only. Откат — git revert + `psql -c 'DROP DATABASE admin; CREATE DATABASE admin'` + `pnpm db:migrate`. Документируется в `docs/operations/migrations.md`.
+A single file, single transaction, destructive forward-only. Rollback — git revert + `psql -c 'DROP DATABASE admin; CREATE DATABASE admin'` + `pnpm db:migrate`. Documented in `docs/operations/migrations.md`.
 
-### 4.1 Дропается
+### 4.1 Dropped
 
 ```sql
 DROP TABLE sessions, user_api_tokens, user_identities,
@@ -95,7 +95,7 @@ DROP TABLE sessions, user_api_tokens, user_identities,
            audit_log, config_versions, users CASCADE;
 ```
 
-### 4.2 Создаётся
+### 4.2 Created
 
 ```sql
 CREATE TABLE sessions (
@@ -164,39 +164,39 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX audit_log_actor_steam_idx ON audit_log(actor_steam_id64) WHERE actor_steam_id64 IS NOT NULL;
 CREATE INDEX audit_log_occurred_idx    ON audit_log(occurred_at DESC);
--- BEFORE UPDATE/DELETE trigger + hash-chain logic пересоздаются 1:1 по существующему коду
+-- BEFORE UPDATE/DELETE trigger + hash-chain logic are recreated 1:1 from the existing code
 
 CREATE TABLE config_versions (
   -- existing columns: id uuid PK, server_id uuid, file_path text, content text,
   --                   sha256 bytea, commit_message text, created_at timestamptz
-  -- замена author_user_id uuid → author_steam_id64 bigint NULL + author_label text NULL:
+  -- replace author_user_id uuid → author_steam_id64 bigint NULL + author_label text NULL:
   author_steam_id64  bigint      REFERENCES players(steam_id64) ON DELETE SET NULL,
   author_label       text,
   CHECK ((author_steam_id64 IS NOT NULL) OR (author_label IS NOT NULL))
 );
 ```
 
-### 4.3 Изменяется
+### 4.3 Changed
 
-- `organizations.settings` — добавляется ключ `first_owner_claimed: boolean` (хранится в `jsonb`, не отдельной колонкой).
-- `players` — без изменений; не добавляются `display_name`, `avatar_url`. Steam-persona переходит в `players.canonical_name` напрямую (RCON-воркер тоже пишет туда). Если хочется отдельный «display name видимый в панели» — отдельная миграция позже.
+- `organizations.settings` — the key `first_owner_claimed: boolean` is added (stored in `jsonb`, not as a separate column).
+- `players` — unchanged; `display_name`, `avatar_url` are not added. The Steam persona goes directly into `players.canonical_name` (the RCON worker writes there too). If a separate "display name visible in the panel" is wanted — a separate migration later.
 
 ### 4.4 Drizzle codegen
 
-`pnpm db:generate` после правки schema files → проверить что diff equivalent ручному `0008_*.sql` → коммитим оба файла одним коммитом.
+`pnpm db:generate` after editing the schema files → check that the diff is equivalent to the hand-written `0008_*.sql` → commit both files in one commit.
 
 ---
 
 ## 5. First-login Owner trick
 
-### 5.1 Двойной якорь
+### 5.1 Double anchor
 
 - **DB:** `organizations.settings.first_owner_claimed = true`.
-- **Filesystem:** `/var/lib/squad-panel/.first-owner-claimed` (содержит JSON `{"steam_id64": "...", "claimed_at": "ISO8601"}`).
+- **Filesystem:** `/var/lib/squad-panel/.first-owner-claimed` (contains JSON `{"steam_id64": "...", "claimed_at": "ISO8601"}`).
 
-Trick активен ⟺ оба якоря не взведены. Если хотя бы один взведён — последующие logins проходят по обычному role-check пути.
+The trick is active ⟺ neither anchor is set. If at least one is set, subsequent logins go through the regular role-check path.
 
-### 5.2 Алгоритм `claimFirstOwner(steamId64)`
+### 5.2 Algorithm `claimFirstOwner(steamId64)`
 
 ```ts
 async function claimFirstOwner(steamId64: bigint): Promise<'claimed' | 'already_claimed' | 'no_owner_role'> {
@@ -210,7 +210,7 @@ async function claimFirstOwner(steamId64: bigint): Promise<'claimed' | 'already_
 
     const orgs = await tx.select().from(organizations).limit(1);
     const org = orgs[0];
-    if (!org) throw new Error('no_organization_yet'); // setup wizard ещё не пройден
+    if (!org) throw new Error('no_organization_yet'); // setup wizard not yet completed
     const claimed = (org.settings as { first_owner_claimed?: boolean })?.first_owner_claimed === true;
     if (claimed) return 'already_claimed';
 
@@ -233,7 +233,7 @@ async function claimFirstOwner(steamId64: bigint): Promise<'claimed' | 'already_
       .set({ settings: { ...org.settings, first_owner_claimed: true } })
       .where(eq(organizations.id, org.id));
 
-    // 4. Sentinel — последним; если bridge упадёт, ROLLBACK откатит DB и trick остаётся доступен.
+    // 4. Sentinel — written last; if the bridge fails, ROLLBACK rolls back the DB and the trick remains available.
     await bridgeClient.fileAtomicWrite(
       '/var/lib/squad-panel/.first-owner-claimed',
       JSON.stringify({ steam_id64: String(steamId64), claimed_at: new Date().toISOString() }),
@@ -244,9 +244,9 @@ async function claimFirstOwner(steamId64: bigint): Promise<'claimed' | 'already_
 }
 ```
 
-Concurrency: `pg_advisory_xact_lock(hashtext('first_owner'))` сериализует параллельные callback'и. FOR UPDATE на organization row не достаточно потому что row может ещё не существовать в edge case (setup ещё не пройден).
+Concurrency: `pg_advisory_xact_lock(hashtext('first_owner'))` serialises concurrent callbacks. FOR UPDATE on the organization row is not enough because the row may not exist yet in an edge case (setup not yet completed).
 
-### 5.3 Order в callback handler
+### 5.3 Order in the callback handler
 
 ```
 parse + verify Steam OpenID
@@ -256,10 +256,10 @@ upsert players (stub if not exists)
 optional: enrich canonical_name from GetPlayerSummaries
   ↓
 claimFirstOwner(steamId64)
-  ├── 'claimed'         → создать сессию, redirect /
+  ├── 'claimed'         → create session, redirect /
   ├── 'already_claimed' → role check:
-  │                         have roles → создать сессию, redirect /
-  │                         no roles   → redirect /login?error=not_authorized (cookie не ставим)
+  │                         have roles → create session, redirect /
+  │                         no roles   → redirect /login?error=not_authorized (no cookie is set)
   └── 'no_owner_role'   → 500, audit-log system error
 ```
 
@@ -288,26 +288,26 @@ claimFirstOwner(steamId64)
 
 Rate-limit: 10 req/min/IP.
 
-Validation pipeline (любой шаг fail → 400 + redirect `/login?error=auth_failed`, audit запись):
+Validation pipeline (any failing step → 400 + redirect `/login?error=auth_failed`, audit record):
 
 1. **Nonce match.** `n` query param = `__Host-steam-nonce` cookie.
-2. **Nonce single-use.** `GETDEL steam-nonce:{nonce}` → если `nil`, reject. Cookie очищаем.
-3. **Return-to host-binding.** `openid.return_to` параметр в callback URL должен начинаться с `<PANEL_PUBLIC_URL>/api/v1/auth/steam/callback`.
-4. **Claimed-id format.** `openid.claimed_id` начинается с `https://steamcommunity.com/openid/id/` и содержит 17-digit numeric `steam_id64` в конце. Парсим.
-5. **`check_authentication` к Steam.**
+2. **Nonce single-use.** `GETDEL steam-nonce:{nonce}` → if `nil`, reject. Clear the cookie.
+3. **Return-to host-binding.** The `openid.return_to` parameter in the callback URL must start with `<PANEL_PUBLIC_URL>/api/v1/auth/steam/callback`.
+4. **Claimed-id format.** `openid.claimed_id` starts with `https://steamcommunity.com/openid/id/` and ends with a 17-digit numeric `steam_id64`. We parse it.
+5. **`check_authentication` to Steam.**
    ```
    POST https://steamcommunity.com/openid/login
    Content-Type: application/x-www-form-urlencoded
-   <все openid.* params из callback>&openid.mode=check_authentication
+   <all openid.* params from the callback>&openid.mode=check_authentication
    ```
-   Response должен содержать `is_valid:true`. Иначе reject.
-6. **Response-nonce single-use.** `SET steam-response-nonce:{openid.response_nonce} 1 NX EX 3600` → если NOT set (значение существовало), reject as replay.
+   The response must contain `is_valid:true`. Otherwise reject.
+6. **Response-nonce single-use.** `SET steam-response-nonce:{openid.response_nonce} 1 NX EX 3600` → if NOT set (the value already existed), reject as replay.
 
-После validation — owner-trick path или role-check path (см. §5.3).
+After validation — the owner-trick path or the role-check path (see §5.3).
 
-### 6.3 Pure-функция `verifyWithSteam`
+### 6.3 Pure function `verifyWithSteam`
 
-В `apps/api/src/lib/steam-openid.ts`:
+In `apps/api/src/lib/steam-openid.ts`:
 
 ```ts
 interface CallbackParams {
@@ -322,15 +322,15 @@ export interface SteamVerifyResult {
 export async function verifyWithSteam(params: CallbackParams): Promise<SteamVerifyResult>;
 ```
 
-Тестируется юнит-тестами с mock'ом `fetch` — счёт правильности serialisation формы и парс ответа Steam'а.
+Tested with unit tests with a mocked `fetch` — checking the correctness of form serialisation and parsing of Steam's response.
 
 ---
 
 ## 7. Sliding sessions
 
-### 7.1 Touch с Redis SETNX throttle
+### 7.1 Touch with a Redis SETNX throttle
 
-В `apps/api/src/plugins/auth.ts` после resolve session:
+In `apps/api/src/plugins/auth.ts`, after resolving the session:
 
 ```ts
 const touchKey = `session-touch:${session.id}`;
@@ -341,42 +341,42 @@ if (setOk === 'OK') {
     .set({ lastActivityAt: new Date(), expiresAt: newExpiresAt })
     .where(eq(sessions.id, session.id));
   await app.redis.set(`session:${session.id}`, JSON.stringify({...session, expiresAt: newExpiresAt}), 'EX', 600);
-  // Set-Cookie header только когда DB обновили — иначе клиент получает Set-Cookie на каждом request'е.
+  // Set-Cookie header only when the DB was updated — otherwise the client gets a Set-Cookie on every request.
   reply.setCookie(SESSION_COOKIE, token, {
     path: '/', httpOnly: true, secure: true, sameSite: 'lax', maxAge: SESSION_TTL_SECONDS,
   });
 }
 ```
 
-Если Redis недоступен — fallback к touch без throttling (correctness preserved, чуть больше DB UPDATE'ов).
+If Redis is unavailable — fall back to touching without throttling (correctness preserved, slightly more DB UPDATEs).
 
 ### 7.2 Session management endpoints
 
-| Method | Path | Permission | Audit | Описание |
+| Method | Path | Permission | Audit | Description |
 |---|---|---|---|---|
-| GET | `/api/v1/me/sessions` | self | нет | Список активных сессий текущего пользователя: `{id, ip, userAgent, lastActivityAt, expiresAt, current: bool}`. Sort by `lastActivityAt DESC`. |
-| DELETE | `/api/v1/me/sessions/:id` | self (id принадлежит req.user) | `user.session.revoke` | Logout одной сессии. Чистит DB row + Redis cache. |
-| DELETE | `/api/v1/me/sessions` | self | `user.session.revoke_all` | Logout из всех устройств. Клиент после ответа сам делает `clearCookie` + redirect /login. |
+| GET | `/api/v1/me/sessions` | self | no | List of the current user's active sessions: `{id, ip, userAgent, lastActivityAt, expiresAt, current: bool}`. Sort by `lastActivityAt DESC`. |
+| DELETE | `/api/v1/me/sessions/:id` | self (id belongs to req.user) | `user.session.revoke` | Log out one session. Cleans the DB row + Redis cache. |
+| DELETE | `/api/v1/me/sessions` | self | `user.session.revoke_all` | Log out from all devices. After the response the client itself does `clearCookie` + redirect to /login. |
 
-UI в `/settings/account` — таблица + кнопки. Текущая сессия помечена бейджем.
+The UI in `/settings/account` — a table + buttons. The current session is marked with a badge.
 
 ---
 
 ## 8. Pending players UI (no-role flow)
 
-В `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` добавляется секция «Доступ к панели». Показывается только если у текущего пользователя есть permission `user:manage_roles`.
+A «Доступ к панели» (Panel access) section is added to `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx`. It is shown only if the current user has the `user:manage_roles` permission. The wireframe below shows English glosses of the Russian UI copy.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Доступ к панели                                      │
+│ Panel access («Доступ к панели»)                     │
 │                                                      │
-│ Текущие роли:                                        │
+│ Current roles:                                       │
 │   • Moderator           [×]                          │
 │   • Server Admin (Squad Server #2)  [×]              │
 │                                                      │
-│ Добавить роль:                                       │
+│ Add a role:                                          │
 │   ┌──────────────────────┐  ┌──────────┐             │
-│   │ Выберите роль  ▼     │  │ Назначить│             │
+│   │ Select a role  ▼     │  │ Assign   │             │
 │   └──────────────────────┘  └──────────┘             │
 └──────────────────────────────────────────────────────┘
 ```
@@ -388,15 +388,15 @@ API endpoints:
 | POST | `/api/v1/players/:steam_id64/roles` body `{role_id}` | `user:manage_roles` | `player.role.assign` |
 | DELETE | `/api/v1/players/:steam_id64/roles/:role_id` | `user:manage_roles` | `player.role.revoke` |
 
-Owner role нельзя удалить через этот UI (server-side check + visual hint). Самый последний Owner — также нельзя удалить (защита от lockout); явная ошибка `cannot_remove_last_owner`.
+The Owner role cannot be removed through this UI (server-side check + visual hint). The last remaining Owner also cannot be removed (lockout protection); explicit error `cannot_remove_last_owner`.
 
-«No-access» landing для cookie-less ошибок: `/no-access?error=...&steam_id64=...`. Текст: «Steam ID `7656...` не имеет доступа к панели. Обратитесь к администратору. Если вы Owner — проверьте журнал `/var/lib/squad-panel/.first-owner-claimed`.»
+The "no-access" landing page for cookie-less errors: `/no-access?error=...&steam_id64=...`. Text: «Steam ID `7656...` не имеет доступа к панели. Обратитесь к администратору. Если вы Owner — проверьте журнал `/var/lib/squad-panel/.first-owner-claimed`.» (Steam ID `7656...` has no access to the panel. Contact the administrator. If you are the Owner — check the log `/var/lib/squad-panel/.first-owner-claimed`.)
 
 ---
 
-## 9. Audit-log актор
+## 9. Audit-log actor
 
-Каждый authenticated request → audit запись с:
+Every authenticated request → an audit record with:
 
 ```
 actor_kind = 'steam'
@@ -405,16 +405,16 @@ actor_token_id = req.token?.id ?? null
 actor_system_label = null
 ```
 
-Background воркеры (status-reconciler, audit-archiver, event-partition):
+Background workers (status-reconciler, audit-archiver, event-partition):
 
 ```
 actor_kind = 'system'
 actor_steam_id64 = null
 actor_token_id = null
-actor_system_label = 'status-reconciler' (или другое имя)
+actor_system_label = 'status-reconciler' (or another name)
 ```
 
-Hash chain: pre-existing logic в `apps/api/src/lib/audit.ts` пересчитывается с нуля (новый chain start, prev_hash = `\x00...`). Документируется в `docs/operations/migrations.md` что после `0008` audit-chain валидируется только от migration cutoff.
+Hash chain: the pre-existing logic in `apps/api/src/lib/audit.ts` is recomputed from scratch (new chain start, prev_hash = `\x00...`). It is documented in `docs/operations/migrations.md` that after `0008` the audit chain is validated only from the migration cutoff.
 
 ---
 
@@ -422,30 +422,30 @@ Hash chain: pre-existing logic в `apps/api/src/lib/audit.ts` пересчиты
 
 ### 10.1 Endpoints
 
-| Method | Path | Audit | Описание |
+| Method | Path | Audit | Description |
 |---|---|---|---|
-| GET | `/api/v1/setup/check-env` | нет | Возвращает `{ok, checks}`. Checks: bridge ping, host OS, `PANEL_PUBLIC_URL` self-reachable, `STEAM_WEB_API_KEY` (опциональный, отдельная info-строка), depot volume mounted. |
-| POST | `/api/v1/setup/init` body `{name, slug?}` | `setup.init` | Атомарно: insert organization + seed system roles + set `setup_complete=true`. Если `setup_complete` уже true — 410 Gone. |
+| GET | `/api/v1/setup/check-env` | no | Returns `{ok, checks}`. Checks: bridge ping, host OS, `PANEL_PUBLIC_URL` self-reachable, `STEAM_WEB_API_KEY` (optional, a separate info line), depot volume mounted. |
+| POST | `/api/v1/setup/init` body `{name, slug?}` | `setup.init` | Atomically: insert organization + seed system roles + set `setup_complete=true`. If `setup_complete` is already true — 410 Gone. |
 
-Старые routes `/setup/org`, `/setup/owner`, `/setup/finalize` — удаляются.
+The old routes `/setup/org`, `/setup/owner`, `/setup/finalize` are removed.
 
 ### 10.2 UI `/setup/page.tsx`
 
 ```
-Шаг 1: Проверка окружения
-  [zelёная галка] Bridge: подключен (Ubuntu 24.04)
-  [zelёная галка] Public URL: https://squad-panel.lan доступен с этой панели
-  [серая инфо]   Steam Web API key: не задан (опционально)
-  [zelёная галка] Depot volume: смонтирован
+Step 1: Environment check («Проверка окружения»)
+  [green check] Bridge: connected (Ubuntu 24.04)
+  [green check] Public URL: https://squad-panel.lan is reachable from this panel
+  [gray info]   Steam Web API key: not set (optional)
+  [green check] Depot volume: mounted
 
-Шаг 2: Создание организации
-  Название:  [Squad Community ABC___]
+Step 2: Organization creation («Создание организации»)
+  Name:      [Squad Community ABC___]
   Slug (auto): [squad-community-abc]
-  [Создать]
+  [Create («Создать»)]
 
   → POST /setup/init → redirect /login
 
-  /login — кнопка «Войти через Steam» → первый, кто залогинится, станет Owner.
+  /login — the «Войти через Steam» (Sign in with Steam) button → whoever logs in first becomes Owner.
 ```
 
 ---
@@ -457,12 +457,12 @@ Hash chain: pre-existing logic в `apps/api/src/lib/audit.ts` пересчиты
 | `POST /api/v1/auth/login` | DELETE |
 | `POST /api/v1/me/totp/provision`, `/enable`, `/disable` | DELETE |
 | `POST /api/v1/setup/org`, `/owner`, `/finalize` | DELETE |
-| `apps/api/src/lib/argon.ts`, `lib/totp.ts`, `lib/crypto.ts` (если используется только для TOTP) | DELETE — проверить, что crypto не используется чем-то ещё (audit-log encryption и т.п.); если используется — оставить, удалить только TOTP-paths |
-| `users.password_hash`, `totp_*` columns | DROP (через `DROP TABLE users CASCADE`) |
-| `user_identities` | DROP (steam_id64 теперь нативный PK; Discord-linking — отдельный спек, отдельная таблица позже) |
-| `apps/web/src/app/login/page.tsx` form | REWRITE — одна кнопка вместо form |
+| `apps/api/src/lib/argon.ts`, `lib/totp.ts`, `lib/crypto.ts` (if used only for TOTP) | DELETE — check that crypto is not used by anything else (audit-log encryption etc.); if it is — keep it and delete only the TOTP paths |
+| `users.password_hash`, `totp_*` columns | DROP (via `DROP TABLE users CASCADE`) |
+| `user_identities` | DROP (steam_id64 is now the native PK; Discord linking — a separate spec, a separate table later) |
+| `apps/web/src/app/login/page.tsx` form | REWRITE — a single button instead of a form |
 | `apps/web/src/app/(dashboard)/settings/account/page.tsx` TOTP secties | DELETE |
-| `apps/api/src/routes/auth-discord.ts` | DELETE (Discord login не нужен; Discord linking — отдельный спек) |
+| `apps/api/src/routes/auth-discord.ts` | DELETE (Discord login is not needed; Discord linking — a separate spec) |
 
 ---
 
@@ -472,101 +472,101 @@ Hash chain: pre-existing logic в `apps/api/src/lib/audit.ts` пересчиты
 
 | File | Coverage |
 |---|---|
-| `apps/api/test/lib/steam-openid.test.ts` | `buildLoginRedirectUrl` — правильные query params, URL-encoding. `parseCallbackParams` — happy path + missing fields. `verifyWithSteam` с mock'нутым `fetch` — `is_valid:true`/`false`, `claimed_id` парс, response_nonce extract. |
-| `apps/api/test/lib/steam-profile.test.ts` | Mock fetch, проверяем cache hit/miss, `null` когда ENV пустой. |
-| `apps/api/test/lib/first-owner.test.ts` | С эфемерной тестовой Postgres (existing test-db helper): `claimFirstOwner` happy path, second call returns `'already_claimed'`, concurrent calls (10 параллельных) — ровно один `'claimed'`, остальные `'already_claimed'`, sentinel writes via mocked bridge. |
-| `apps/api/test/lib/sessions.test.ts` | Touch throttle: 100 параллельных touch — ровно один UPDATE (mock Redis SETNX). Sliding TTL: `expiresAt` = `now() + 6h` после touch. |
+| `apps/api/test/lib/steam-openid.test.ts` | `buildLoginRedirectUrl` — correct query params, URL-encoding. `parseCallbackParams` — happy path + missing fields. `verifyWithSteam` with a mocked `fetch` — `is_valid:true`/`false`, `claimed_id` parsing, response_nonce extraction. |
+| `apps/api/test/lib/steam-profile.test.ts` | Mock fetch, check cache hit/miss, `null` when ENV is empty. |
+| `apps/api/test/lib/first-owner.test.ts` | With an ephemeral test Postgres (existing test-db helper): `claimFirstOwner` happy path, the second call returns `'already_claimed'`, concurrent calls (10 in parallel) — exactly one `'claimed'`, the rest `'already_claimed'`, sentinel writes via a mocked bridge. |
+| `apps/api/test/lib/sessions.test.ts` | Touch throttle: 100 parallel touches — exactly one UPDATE (mock Redis SETNX). Sliding TTL: `expiresAt` = `now() + 6h` after touch. |
 
 ### Tier 2 — integration (Fastify `inject()`)
 
 | File | Coverage |
 |---|---|
-| `apps/api/test/auth-steam.test.ts` | `/auth/steam/login` ставит cookie + Redis nonce, redirect URL правильный. `/auth/steam/callback` happy path → создаёт session row. Negative paths: nonce mismatch → 400. nonce missing in Redis → 400. response_nonce replay → 400. claimed_id wrong format → 400. `check_authentication` returns `is_valid:false` → 400. |
-| `apps/api/test/auth-steam-first-owner.test.ts` | Fresh DB → first callback assigns Owner role + sentinel created (mocked bridge). Second callback (different steamid) → no owner role, redirect no-access. После `DELETE FROM organizations` (DB reset) + sentinel still present → trick остаётся блокированным. |
-| `apps/api/test/setup-routes.test.ts` | `/setup/init` happy path. После init второй call → 410. `setup_complete=true` блокирует все setup routes. |
-| `apps/api/test/sessions-management.test.ts` | `GET /me/sessions` показывает только сессии req.user, `current: true` для текущей. `DELETE /me/sessions/:id` — нельзя удалить чужую (404). Logout-all отзывает все. |
-| `apps/api/test/audit-coverage.test.ts` | Существующий тест адаптируется — заменяется проверка `actor_user_id` на дискриминированный union. |
+| `apps/api/test/auth-steam.test.ts` | `/auth/steam/login` sets the cookie + Redis nonce, the redirect URL is correct. `/auth/steam/callback` happy path → creates a session row. Negative paths: nonce mismatch → 400. nonce missing in Redis → 400. response_nonce replay → 400. claimed_id wrong format → 400. `check_authentication` returns `is_valid:false` → 400. |
+| `apps/api/test/auth-steam-first-owner.test.ts` | Fresh DB → the first callback assigns the Owner role + sentinel created (mocked bridge). Second callback (different steamid) → no owner role, redirect to no-access. After `DELETE FROM organizations` (DB reset) + sentinel still present → the trick stays blocked. |
+| `apps/api/test/setup-routes.test.ts` | `/setup/init` happy path. After init a second call → 410. `setup_complete=true` blocks all setup routes. |
+| `apps/api/test/sessions-management.test.ts` | `GET /me/sessions` shows only req.user's sessions, `current: true` for the current one. `DELETE /me/sessions/:id` — cannot delete someone else's (404). Logout-all revokes all. |
+| `apps/api/test/audit-coverage.test.ts` | The existing test is adapted — the `actor_user_id` check is replaced with a discriminated union. |
 
 ### Tier 3 — e2e
 
-`apps/api/test/e2e/install-lifecycle.e2e.test.ts` — обновляется: вместо вызова `/setup/owner` тест читает env `PANEL_TEST_OWNER_STEAM_ID64` + `PANEL_TEST_COOKIE` (real cookie от уже залогиненного Owner). Если пуст — тест выводит инструкцию пользователю и `test.skip`.
+`apps/api/test/e2e/install-lifecycle.e2e.test.ts` — updated: instead of calling `/setup/owner` the test reads env `PANEL_TEST_OWNER_STEAM_ID64` + `PANEL_TEST_COOKIE` (a real cookie from an already logged-in Owner). If empty — the test prints instructions to the user and `test.skip`.
 
-Новый тест `apps/api/test/e2e/steam-login.e2e.test.ts`:
+New test `apps/api/test/e2e/steam-login.e2e.test.ts`:
 
-> Этот тест **не может быть полностью автоматизирован** — Steam OpenID требует реального Steam-аккаунта.
+> This test **cannot be fully automated** — Steam OpenID requires a real Steam account.
 >
-> Тест выводит инструкцию: «Залогинься через Steam на `https://<host>/login`, затем установи `PANEL_TEST_COOKIE` и нажми Enter». Дальше тест проверяет: `GET /me` возвращает permissions с Owner, `GET /me/sessions` показывает текущую сессию с правильным IP/UA, `DELETE /me/sessions/<id>` инвалидирует cookie, после повторного логина sentinel всё ещё взведён (проверяется через bridge `file_read`).
+> The test prints the instruction: "Log in via Steam at `https://<host>/login`, then set `PANEL_TEST_COOKIE` and press Enter". Next the test checks: `GET /me` returns permissions with Owner, `GET /me/sessions` shows the current session with the correct IP/UA, `DELETE /me/sessions/<id>` invalidates the cookie, after logging in again the sentinel is still set (checked via the bridge `file_read`).
 
-Если testing требуется без интерактива — alternative: helper `apps/api/test/helpers/steam-fake-callback.ts` создаёт сессию напрямую через DB insert (BYPASS Steam OpenID validation) **только когда `NODE_ENV=test`**. Этот helper **не используется** в e2e тесте — он только для tier-2 интеграционных тестов где валидируется поведение после-валидации (sessions, RBAC), не сама валидация.
+If testing is required without interaction — an alternative: the helper `apps/api/test/helpers/steam-fake-callback.ts` creates a session directly via a DB insert (BYPASSING Steam OpenID validation) **only when `NODE_ENV=test`**. This helper is **not used** in the e2e test — it is only for tier-2 integration tests that validate post-validation behaviour (sessions, RBAC), not the validation itself.
 
 ---
 
-## 13. Ограничения и известные риски
+## 13. Constraints and known risks
 
-- **Steam OpenID 2.0** — deprecated протокол, поддерживается Steam'ом de-facto только для backward compat. Замены нет (Steam не реализовал OAuth2/OIDC). Если Steam отключит OpenID — панель потеряет login. Mitigation: документируем в `docs/components/auth/troubleshooting.md` что миграция на Steam OAuth (если появится) — приоритетный TODO.
-- **`STEAM_WEB_API_KEY` опционален** — без него `players.canonical_name` для не-серверных пользователей будет stub'ом. UI показывает stub без специальной обработки.
-- **Sentinel-файл удаляется только вручную** — оператор должен знать про `/var/lib/squad-panel/.first-owner-claimed` чтобы переинициализировать панель. Документируется в `docs/operations/setup.md` и `docs/operations/troubleshooting.md`.
-- **Hash-chain audit** рестартует с миграцией. `pnpm verify:audit-chain` проверяет только пост-миграционные строки. Документируется в `docs/operations/migrations.md`.
-- **Steam-first-owner-trick на чистой панели**: если злоумышленник перехватит первый Steam-callback (XSS/CSRF на свежей панели до первого логина), он может стать Owner. Mitigation — `__Host-steam-nonce` cookie + Redis nonce + `return_to` host-binding (см. §6). Owner должен инициировать первый login сразу после `setup/init`.
-- **Concurrent first-owner**: если два Steam-callback'а пришли одновременно (теоретически невозможно у одного оператора, но защита нужна) — `pg_advisory_xact_lock` сериализует, ровно один claim'ит.
-- **Bridge unavailable во время first-owner claim**: sentinel write упадёт → ROLLBACK всей транзакции → DB-flag не взводится → trick остаётся доступен. Корректное поведение, но Owner получит ошибку и должен повторить login.
+- **Steam OpenID 2.0** — a deprecated protocol, supported by Steam de facto only for backward compatibility. There is no replacement (Steam did not implement OAuth2/OIDC). If Steam turns off OpenID — the panel loses login. Mitigation: we document in `docs/components/auth/troubleshooting.md` that migrating to Steam OAuth (if it appears) is a priority TODO.
+- **`STEAM_WEB_API_KEY` is optional** — without it `players.canonical_name` for non-server users will be a stub. The UI shows the stub without special handling.
+- **The sentinel file is removed only manually** — the operator must know about `/var/lib/squad-panel/.first-owner-claimed` in order to re-initialise the panel. Documented in `docs/operations/setup.md` and `docs/operations/troubleshooting.md`.
+- **Hash-chain audit** restarts with the migration. `pnpm verify:audit-chain` checks only post-migration rows. Documented in `docs/operations/migrations.md`.
+- **Steam first-owner trick on a clean panel**: if an attacker intercepts the first Steam callback (XSS/CSRF on a fresh panel before the first login), they can become Owner. Mitigation — the `__Host-steam-nonce` cookie + Redis nonce + `return_to` host-binding (see §6). The Owner must initiate the first login right after `setup/init`.
+- **Concurrent first-owner**: if two Steam callbacks arrive simultaneously (theoretically impossible for a single operator, but the protection is needed) — `pg_advisory_xact_lock` serialises them, exactly one claims.
+- **Bridge unavailable during the first-owner claim**: the sentinel write fails → ROLLBACK of the whole transaction → the DB flag is not set → the trick remains available. This is correct behaviour, but the Owner gets an error and must retry the login.
 
 ---
 
 ## 14. Documentation impact
 
-При реализации обновляются:
+The following are updated during implementation:
 
-- `docs/components/api/api.md` — новые routes, удалённые routes.
-- `docs/components/api/data-model.md` — новые таблицы, изменения FK.
+- `docs/components/api/api.md` — new routes, removed routes.
+- `docs/components/api/data-model.md` — new tables, FK changes.
 - `docs/components/api/flows.md` — Steam login flow, first-owner trick, sliding sessions.
-- `docs/components/api/configuration.md` — новые ENV vars.
-- `docs/components/api/testing.md` — новые тесты, e2e disclaimer про Steam-account.
+- `docs/components/api/configuration.md` — new ENV vars.
+- `docs/components/api/testing.md` — new tests, e2e disclaimer about the Steam account.
 - `docs/components/web/flows.md` — wizard, /login, /no-access, /settings/account changes.
-- `docs/components/bridge/api.md` — новый allowlisted path (`/var/lib/squad-panel/.first-owner-claimed`).
+- `docs/components/bridge/api.md` — the new allowlisted path (`/var/lib/squad-panel/.first-owner-claimed`).
 - `docs/architecture/data-flow.md` — auth flow rewrite.
-- `docs/architecture/decisions.md` — добавляется ADR «Steam-only login + first-owner trick + steam_id64 PK».
-- `docs/architecture/rbac.md` — players вместо users.
-- `docs/operations/setup.md` — wizard flow, sentinel-файл.
-- `docs/operations/migrations.md` — `0008` migration steps + откат.
+- `docs/architecture/decisions.md` — adds the ADR "Steam-only login + first-owner trick + steam_id64 PK".
+- `docs/architecture/rbac.md` — players instead of users.
+- `docs/operations/setup.md` — wizard flow, sentinel file.
+- `docs/operations/migrations.md` — `0008` migration steps + rollback.
 - `docs/operations/environment-variables.md` — `PANEL_PUBLIC_URL`, `STEAM_WEB_API_KEY`.
-- `docs/operations/troubleshooting.md` — «как сбросить first-owner для переинициализации», «как переназначить Owner если последний потерял Steam access».
+- `docs/operations/troubleshooting.md` — "how to reset first-owner to re-initialise", "how to reassign Owner if the last one lost Steam access".
 
 ---
 
-## 15. Implementation order (для plan stage)
+## 15. Implementation order (for the plan stage)
 
 1. Migration `0008` + Drizzle schema files + `pnpm db:generate` + sanity test.
 2. `apps/api/src/lib/steam-openid.ts` + unit tests.
 3. `apps/api/src/lib/steam-profile.ts` + unit tests.
 4. `apps/api/src/lib/first-owner.ts` + unit tests + concurrent test.
-5. Bridge allowlist update в `packages/shared-config/src/bridge-methods.ts` + Go handler config (already permits prefix-based allow if path matches `/var/lib/squad-panel/`, проверить).
+5. Bridge allowlist update in `packages/shared-config/src/bridge-methods.ts` + Go handler config (already permits prefix-based allow if path matches `/var/lib/squad-panel/`, to be verified).
 6. `sessions.ts` extension (touch throttle + last_activity_at).
-7. `auth-steam.ts` route с full validation pipeline.
-8. `auth.ts` route — удаление password/TOTP, добавление session-management endpoints.
-9. `setup.ts` route — упрощение до `/init` + `/check-env`.
-10. `auth.ts` plugin — middleware изменения (touch + req.user shape).
+7. `auth-steam.ts` route with the full validation pipeline.
+8. `auth.ts` route — removal of password/TOTP, addition of session-management endpoints.
+9. `setup.ts` route — simplified to `/init` + `/check-env`.
+10. `auth.ts` plugin — middleware changes (touch + req.user shape).
 11. `apps/web/src/app/login/page.tsx` — simplify.
-12. `apps/web/src/app/setup/page.tsx` — двухшаговый wizard.
+12. `apps/web/src/app/setup/page.tsx` — two-step wizard.
 13. `apps/web/src/app/(dashboard)/settings/account/page.tsx` — sessions UI.
-14. `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` — role-assign секция + endpoints.
-15. `apps/web/src/app/no-access/page.tsx` — статичная страница.
+14. `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` — role-assign section + endpoints.
+15. `apps/web/src/app/no-access/page.tsx` — static page.
 16. E2E test rewrite + new `steam-login.e2e.test.ts`.
-17. Documentation updates (см. §14).
+17. Documentation updates (see §14).
 
 ---
 
 ## 16. Acceptance criteria
 
-- [ ] Свежая `pnpm db:migrate` создаёт схему без ошибок.
-- [ ] `/login` показывает только кнопку «Войти через Steam».
-- [ ] Setup wizard работает: `/setup/check-env` → `/setup/init` → redirect на `/login`.
-- [ ] Первый Steam-логин после `/setup/init` создаёт `players` row + Owner role + sentinel-файл.
-- [ ] Второй Steam-логин (другой steamid) без назначенной роли → redirect `/no-access`, cookie не ставится.
-- [ ] Owner назначает роль второму player'у через `/players/<steam_id64>` — повторный Steam-логин выдаёт сессию.
-- [ ] Sliding TTL: после 5 минут активности `expires_at` обновлён, после 7 часов inactivity сессия инвалидируется.
-- [ ] `/settings/account` показывает активные сессии, logout одной/всех работает.
-- [ ] `pnpm turbo run typecheck && pnpm turbo run test` зелёные.
-- [ ] `pnpm --filter @squad/api test:e2e` зелёные (с user-supplied `PANEL_TEST_COOKIE`).
-- [ ] `pnpm verify:audit-chain` зелёный после migration.
-- [ ] `systemd-analyze security panel-host-bridge.service` < 3.0 (без regression).
+- [ ] A fresh `pnpm db:migrate` creates the schema without errors.
+- [ ] `/login` shows only the «Войти через Steam» (Sign in with Steam) button.
+- [ ] The setup wizard works: `/setup/check-env` → `/setup/init` → redirect to `/login`.
+- [ ] The first Steam login after `/setup/init` creates a `players` row + Owner role + sentinel file.
+- [ ] The second Steam login (a different steamid) without an assigned role → redirect to `/no-access`, no cookie is set.
+- [ ] The Owner assigns a role to the second player via `/players/<steam_id64>` — a repeated Steam login grants a session.
+- [ ] Sliding TTL: after 5 minutes of activity `expires_at` is refreshed, after 7 hours of inactivity the session is invalidated.
+- [ ] `/settings/account` shows active sessions, logging out one/all works.
+- [ ] `pnpm turbo run typecheck && pnpm turbo run test` are green.
+- [ ] `pnpm --filter @squad/api test:e2e` is green (with a user-supplied `PANEL_TEST_COOKIE`).
+- [ ] `pnpm verify:audit-chain` is green after the migration.
+- [ ] `systemd-analyze security panel-host-bridge.service` < 3.0 (no regression).

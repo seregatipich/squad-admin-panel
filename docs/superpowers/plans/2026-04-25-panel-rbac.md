@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement Эпик 2 (Panel RBAC): single role per user, global roles, registry-based permissions with categories/danger/unimplemented metadata, 5 system roles seeded once, CRUD UI for roles, dedicated `/users` page, first-login Owner trick replacing the setup wizard.
+**Goal:** Implement Epic 2 (Panel RBAC): single role per user, global roles, registry-based permissions with categories/danger/unimplemented metadata, 5 system roles seeded once, CRUD UI for roles, dedicated `/users` page, first-login Owner trick replacing the setup wizard.
 
 **Architecture:** Pre-launch destructive forward-only migration on a fresh branch. Drops `player_role_assignments` (M:N), `role_server_scopes`, `organizations`, `organization_members`. Adds `players.role_id uuid NULL` and singleton `panel_meta`. Permission registry lives in `packages/shared-config` as objects with `{key, category, label, dangerous?, unimplemented?}`. UI gets new `/roles` and `/users` pages; `/setup` is removed.
 
@@ -70,7 +70,7 @@
 | `apps/web/src/components/RoleColorDot.tsx` | Create | Single component used everywhere a role color shows |
 | `apps/web/src/app/(dashboard)/users/page.tsx` | Create | Users table + assign-role modal |
 | `apps/web/src/app/(dashboard)/players/[steam_id64]/page.tsx` | Modify | Simplify PanelAccessSection to single role; Owner confirm-dialog |
-| `apps/web/src/app/(dashboard)/layout.tsx` | Modify | Add "Роли", "Пользователи" nav items; permission-gated |
+| `apps/web/src/app/(dashboard)/layout.tsx` | Modify | Add "Роли" (Roles), "Пользователи" (Users) nav items; permission-gated |
 | `apps/web/src/app/login/page.tsx` | Modify | Remove `/setup` redirect |
 | `apps/web/src/app/setup/` | Delete | Wizard gone |
 
@@ -140,7 +140,7 @@ Create `packages/db/drizzle/0009_panel_rbac.sql`:
 
 ```sql
 -- =====================================================================
--- 0009 — Panel RBAC (Эпик 2): single-role-per-user, drop multi-tenancy,
+-- 0009 — Panel RBAC (Epic 2): single-role-per-user, drop multi-tenancy,
 --   permission rename, palette CHECK, panel_meta singleton.
 --
 -- Destructive forward-only. Pre-launch — no prod data to preserve.
@@ -203,11 +203,11 @@ DELETE FROM roles;
 -- 11. Seed 5 system roles.
 WITH new_roles AS (
   INSERT INTO roles (id, name, description, color, is_system_role) VALUES
-    (gen_random_uuid(), 'Owner',         'Полный доступ. Системная роль, не редактируется.', 'red',     true),
-    (gen_random_uuid(), 'Senior Admin',  'Всё кроме деструктивного.',                          'amber',   false),
+    (gen_random_uuid(), 'Owner',         'Полный доступ. Системная роль, не редактируется.', 'red',     true),  -- Full access. System role, not editable.
+    (gen_random_uuid(), 'Senior Admin',  'Всё кроме деструктивного.',                          'amber',   false),  -- Everything except destructive actions.
     (gen_random_uuid(), 'Admin',         'Server lifecycle + moderation.',                     'sky',     false),
-    (gen_random_uuid(), 'Moderator',     'Только модерация и просмотр игроков.',               'emerald', false),
-    (gen_random_uuid(), 'Viewer',        'Только просмотр.',                                   'neutral', false)
+    (gen_random_uuid(), 'Moderator',     'Только модерация и просмотр игроков.',               'emerald', false),  -- Moderation and viewing players only.
+    (gen_random_uuid(), 'Viewer',        'Только просмотр.',                                   'neutral', false)  -- View only.
   RETURNING id, name
 )
 INSERT INTO role_permissions (role_id, permission_key)
@@ -581,53 +581,53 @@ export interface PermissionDef {
 }
 
 export const PERMISSIONS = [
-  { key: 'server:view',          category: 'servers', label: 'Видеть серверы и их статус' },
-  { key: 'server:install',       category: 'servers', label: 'Устанавливать серверы',          dangerous: true },
-  { key: 'server:start',         category: 'servers', label: 'Start сервера' },
+  { key: 'server:view',          category: 'servers', label: 'Видеть серверы и их статус' },  // See servers and their status
+  { key: 'server:install',       category: 'servers', label: 'Устанавливать серверы',          dangerous: true },  // Install servers
+  { key: 'server:start',         category: 'servers', label: 'Start сервера' },  // Start the server
   { key: 'server:stop',          category: 'servers', label: 'Stop (graceful)' },
   { key: 'server:force_stop',    category: 'servers', label: 'Force-stop (kill)',              dangerous: true },
   { key: 'server:restart',       category: 'servers', label: 'Restart' },
-  { key: 'server:delete',        category: 'servers', label: 'Удалить сервер с очисткой',       dangerous: true },
+  { key: 'server:delete',        category: 'servers', label: 'Удалить сервер с очисткой',       dangerous: true },  // Delete a server with cleanup
   { key: 'server:edit_settings', category: 'servers', label: 'Resource limits, ports, max_players' },
-  { key: 'server:update',        category: 'servers', label: 'app_update через SteamCMD' },
-  { key: 'config:view',          category: 'configs', label: 'Читать .cfg файлы' },
-  { key: 'config:edit',          category: 'configs', label: 'Редактировать через Monaco' },
-  { key: 'config:rollback',      category: 'configs', label: 'Откат к предыдущей версии' },
-  { key: 'player:view',          category: 'players', label: 'Список игроков, ник, SteamID' },
-  { key: 'player:view_ips',      category: 'players', label: 'История IP' },
-  { key: 'player:view_notes',    category: 'players', label: 'Заметки про игрока',             unimplemented: true },
-  { key: 'player:edit_notes',    category: 'players', label: 'Редактировать заметки',          unimplemented: true },
-  { key: 'player:set_flags',     category: 'players', label: 'Custom теги (toxic, helpful)',   unimplemented: true },
-  { key: 'mod:kick',             category: 'moderation', label: 'Kick через UI',     dangerous: true, unimplemented: true },
+  { key: 'server:update',        category: 'servers', label: 'app_update через SteamCMD' },  // app_update via SteamCMD
+  { key: 'config:view',          category: 'configs', label: 'Читать .cfg файлы' },  // Read .cfg files
+  { key: 'config:edit',          category: 'configs', label: 'Редактировать через Monaco' },  // Edit via Monaco
+  { key: 'config:rollback',      category: 'configs', label: 'Откат к предыдущей версии' },  // Roll back to the previous version
+  { key: 'player:view',          category: 'players', label: 'Список игроков, ник, SteamID' },  // Player list, nickname, SteamID
+  { key: 'player:view_ips',      category: 'players', label: 'История IP' },  // IP history
+  { key: 'player:view_notes',    category: 'players', label: 'Заметки про игрока',             unimplemented: true },  // Notes about a player
+  { key: 'player:edit_notes',    category: 'players', label: 'Редактировать заметки',          unimplemented: true },  // Edit notes
+  { key: 'player:set_flags',     category: 'players', label: 'Custom теги (toxic, helpful)',   unimplemented: true },  // Custom tags (toxic, helpful)
+  { key: 'mod:kick',             category: 'moderation', label: 'Kick через UI',     dangerous: true, unimplemented: true },  // Kick via the UI
   { key: 'mod:warn',             category: 'moderation', label: 'Warn',                                unimplemented: true },
   { key: 'mod:ban_temp',         category: 'moderation', label: 'Temp ban',           dangerous: true, unimplemented: true },
   { key: 'mod:ban_perm',         category: 'moderation', label: 'Permanent ban',      dangerous: true, unimplemented: true },
   { key: 'mod:unban',            category: 'moderation', label: 'Unban',                               unimplemented: true },
-  { key: 'admin_group:view',     category: 'admin_groups', label: 'Видеть Admins.cfg',   unimplemented: true },
-  { key: 'admin_group:edit',     category: 'admin_groups', label: 'Редактировать Admins.cfg', unimplemented: true },
-  { key: 'whitelist:view',       category: 'whitelist', label: 'Видеть whitelist',       unimplemented: true },
-  { key: 'whitelist:edit',       category: 'whitelist', label: 'Управлять whitelist',    unimplemented: true },
+  { key: 'admin_group:view',     category: 'admin_groups', label: 'Видеть Admins.cfg',   unimplemented: true },  // See Admins.cfg
+  { key: 'admin_group:edit',     category: 'admin_groups', label: 'Редактировать Admins.cfg', unimplemented: true },  // Edit Admins.cfg
+  { key: 'whitelist:view',       category: 'whitelist', label: 'Видеть whitelist',       unimplemented: true },  // See the whitelist
+  { key: 'whitelist:edit',       category: 'whitelist', label: 'Управлять whitelist',    unimplemented: true },  // Manage the whitelist
   { key: 'host:view',            category: 'host', label: 'Dashboard host info' },
-  { key: 'host:metrics',         category: 'host', label: 'Метрики (CPU/RAM/Disk/Net + история)' },
-  { key: 'audit:view',           category: 'audit', label: 'Читать audit log' },
-  { key: 'audit:export',         category: 'audit', label: 'Export audit в CSV', unimplemented: true },
+  { key: 'host:metrics',         category: 'host', label: 'Метрики (CPU/RAM/Disk/Net + история)' },  // Metrics (CPU/RAM/Disk/Net + history)
+  { key: 'audit:view',           category: 'audit', label: 'Читать audit log' },  // Read the audit log
+  { key: 'audit:export',         category: 'audit', label: 'Export audit в CSV', unimplemented: true },  // Export the audit to CSV
   { key: 'events:view',          category: 'events', label: 'Game events log' },
-  { key: 'user:view',            category: 'users', label: 'Список пользователей панели' },
-  { key: 'user:manage_roles',    category: 'users', label: 'Назначать роли',  dangerous: true },
-  { key: 'role:view',            category: 'roles', label: 'Видеть роли' },
-  { key: 'role:create',          category: 'roles', label: 'Создавать роли' },
-  { key: 'role:edit',            category: 'roles', label: 'Редактировать роли' },
-  { key: 'role:delete',          category: 'roles', label: 'Удалять роли',    dangerous: true },
-  { key: 'backup:view',          category: 'backup', label: 'Список backups',     unimplemented: true },
-  { key: 'backup:trigger',       category: 'backup', label: 'Запустить backup',   unimplemented: true },
-  { key: 'backup:restore',       category: 'backup', label: 'Restore из snapshot',dangerous: true, unimplemented: true },
-  { key: 'api_token:create',     category: 'api_tokens', label: 'Создавать API tokens' },
-  { key: 'api_token:revoke',     category: 'api_tokens', label: 'Ревокать tokens' },
-  { key: 'discord:link',         category: 'discord', label: 'Привязать Discord', unimplemented: true },
-  { key: 'trigger:view',         category: 'triggers',  label: 'Видеть авто-правила',     unimplemented: true },
-  { key: 'trigger:edit',         category: 'triggers',  label: 'Редактировать авто-правила', unimplemented: true },
-  { key: 'scheduler:view',       category: 'scheduler', label: 'Видеть запланированные задачи', unimplemented: true },
-  { key: 'scheduler:edit',       category: 'scheduler', label: 'Редактировать расписание',     unimplemented: true },
+  { key: 'user:view',            category: 'users', label: 'Список пользователей панели' },  // List of panel users
+  { key: 'user:manage_roles',    category: 'users', label: 'Назначать роли',  dangerous: true },  // Assign roles
+  { key: 'role:view',            category: 'roles', label: 'Видеть роли' },  // See roles
+  { key: 'role:create',          category: 'roles', label: 'Создавать роли' },  // Create roles
+  { key: 'role:edit',            category: 'roles', label: 'Редактировать роли' },  // Edit roles
+  { key: 'role:delete',          category: 'roles', label: 'Удалять роли',    dangerous: true },  // Delete roles
+  { key: 'backup:view',          category: 'backup', label: 'Список backups',     unimplemented: true },  // List of backups
+  { key: 'backup:trigger',       category: 'backup', label: 'Запустить backup',   unimplemented: true },  // Start a backup
+  { key: 'backup:restore',       category: 'backup', label: 'Restore из snapshot',dangerous: true, unimplemented: true },  // Restore from a snapshot
+  { key: 'api_token:create',     category: 'api_tokens', label: 'Создавать API tokens' },  // Create API tokens
+  { key: 'api_token:revoke',     category: 'api_tokens', label: 'Ревокать tokens' },  // Revoke tokens
+  { key: 'discord:link',         category: 'discord', label: 'Привязать Discord', unimplemented: true },  // Link Discord
+  { key: 'trigger:view',         category: 'triggers',  label: 'Видеть авто-правила',     unimplemented: true },  // See auto-rules
+  { key: 'trigger:edit',         category: 'triggers',  label: 'Редактировать авто-правила', unimplemented: true },  // Edit auto-rules
+  { key: 'scheduler:view',       category: 'scheduler', label: 'Видеть запланированные задачи', unimplemented: true },  // See scheduled tasks
+  { key: 'scheduler:edit',       category: 'scheduler', label: 'Редактировать расписание',     unimplemented: true },  // Edit the schedule
 ] as const satisfies readonly PermissionDef[];
 
 export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key) as readonly string[];
@@ -1515,7 +1515,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
 export default usersRoutes;
 ```
 
-(Note: `assigned_at` / `assigned_by` are NULL in this iteration. Adding them properly requires schema changes — open follow-up: future enhancement to record assignment metadata on `players` directly with `role_assigned_at`, `role_assigned_by` columns. For Эпик 2 P0 this is acceptable; UI shows "—".)
+(Note: `assigned_at` / `assigned_by` are NULL in this iteration. Adding them properly requires schema changes — open follow-up: future enhancement to record assignment metadata on `players` directly with `role_assigned_at`, `role_assigned_by` columns. For Epic 2 P0 this is acceptable; UI shows "—".)
 
 Register in `server.ts`.
 
@@ -1915,7 +1915,7 @@ export function RoleColorDot({ color, size = 'md' }: { color: RoleColor; size?: 
 ) : null}
 ```
 
-Insert them after the existing `Игроки` link.
+Insert them after the existing `Игроки` (Players) link. The two new links read «Роли» (Roles) and «Пользователи» (Users).
 
 - [ ] **Step 3: Build + smoke**
 
@@ -1979,22 +1979,22 @@ interface RoleEditorProps {
 }
 
 const CATEGORY_ORDER: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'servers',      label: 'Серверы' },
-  { id: 'configs',      label: 'Конфиги' },
-  { id: 'players',      label: 'Игроки' },
-  { id: 'moderation',   label: 'Модерация' },
-  { id: 'admin_groups', label: 'Squad-группы' },
+  { id: 'servers',      label: 'Серверы' },  // Servers
+  { id: 'configs',      label: 'Конфиги' },  // Configs
+  { id: 'players',      label: 'Игроки' },  // Players
+  { id: 'moderation',   label: 'Модерация' },  // Moderation
+  { id: 'admin_groups', label: 'Squad-группы' },  // Squad groups
   { id: 'whitelist',    label: 'Whitelist' },
-  { id: 'host',         label: 'Хост' },
-  { id: 'audit',        label: 'Журнал' },
-  { id: 'events',       label: 'События' },
-  { id: 'users',        label: 'Пользователи' },
-  { id: 'roles',        label: 'Роли' },
+  { id: 'host',         label: 'Хост' },  // Host
+  { id: 'audit',        label: 'Журнал' },  // Log
+  { id: 'events',       label: 'События' },  // Events
+  { id: 'users',        label: 'Пользователи' },  // Users
+  { id: 'roles',        label: 'Роли' },  // Roles
   { id: 'backup',       label: 'Backup' },
-  { id: 'api_tokens',   label: 'API-токены' },
+  { id: 'api_tokens',   label: 'API-токены' },  // API tokens
   { id: 'discord',      label: 'Discord' },
-  { id: 'triggers',     label: 'Триггеры' },
-  { id: 'scheduler',    label: 'Расписание' },
+  { id: 'triggers',     label: 'Триггеры' },  // Triggers
+  { id: 'scheduler',    label: 'Расписание' },  // Schedule
 ];
 
 export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEditorProps) {
@@ -2012,7 +2012,7 @@ export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEdi
     fetch('/api/v1/permissions', { credentials: 'include' })
       .then((r) => r.json())
       .then(setRegistry)
-      .catch(() => setErr('Не удалось загрузить список permissions'));
+      .catch(() => setErr('Не удалось загрузить список permissions'));  // Failed to load the permissions list
   }, []);
 
   const filtered = useMemo(() => {
@@ -2048,7 +2048,7 @@ export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEdi
   async function submit() {
     if (readOnly) return;
     if (!name.trim()) {
-      setErr('Имя обязательно');
+      setErr('Имя обязательно');  // Name is required
       return;
     }
     setBusy(true);
@@ -2254,7 +2254,7 @@ export default function RolesPage() {
   async function remove(role: RoleRow) {
     if (
       !confirm(
-        `Удалить роль «${role.name}»? Это снимет роль у ${role.assigned_users_count} пользователей.`,
+        `Удалить роль «${role.name}»? Это снимет роль у ${role.assigned_users_count} пользователей.`,  // Delete the role «name»? This will remove the role from N users.
       )
     )
       return;
@@ -2274,7 +2274,7 @@ export default function RolesPage() {
     }
   }
 
-  if (!rows || !me) return <div className="text-neutral-500">Загрузка…</div>;
+  if (!rows || !me) return <div className="text-neutral-500">Загрузка…</div>;  // Loading…
   const canCreate = me.permissions.includes('role:create');
   const canEdit = me.permissions.includes('role:edit');
   const canDelete = me.permissions.includes('role:delete');
@@ -2376,7 +2376,7 @@ export default function NewRolePage() {
             body: JSON.stringify(data),
           });
           if (!r.ok) {
-            if (r.status === 409) throw new Error('Роль с таким именем уже существует');
+            if (r.status === 409) throw new Error('Роль с таким именем уже существует');  // A role with this name already exists
             throw new Error(`HTTP ${r.status}`);
           }
           router.push('/roles');
@@ -2418,7 +2418,7 @@ export default function EditRolePage({ params }: { params: Promise<{ id: string 
       .then(setRole);
   }, [id]);
 
-  if (!role) return <div className="text-neutral-500">Загрузка…</div>;
+  if (!role) return <div className="text-neutral-500">Загрузка…</div>;  // Loading…
   const isOwner = role.is_system_role && role.name === 'Owner';
 
   return (
@@ -2443,8 +2443,8 @@ export default function EditRolePage({ params }: { params: Promise<{ id: string 
             body: JSON.stringify(data),
           });
           if (!r.ok) {
-            if (r.status === 409) throw new Error('Имя занято');
-            if (r.status === 400) throw new Error('Owner не редактируется');
+            if (r.status === 409) throw new Error('Имя занято');  // Name is taken
+            if (r.status === 400) throw new Error('Owner не редактируется');  // Owner cannot be edited
             throw new Error(`HTTP ${r.status}`);
           }
           router.push('/roles');
@@ -2465,11 +2465,11 @@ Expected: PASS.
 - [ ] **Step 6: Manual test**
 
 Spin up the stack (`docker compose up -d`), navigate to `/roles`, verify:
-- List shows 5 roles with color dots, "Системная" badge on Owner.
-- Click "Создать роль" → editor loads with all 47 permissions across 16 categories. Search filter works. ⚠️ on dangerous, "(в разработке)" on unimplemented.
+- List shows 5 roles with color dots, "Системная" (System) badge on Owner.
+- Click "Создать роль" (Create role) → editor loads with all 47 permissions across 16 categories. Search filter works. ⚠️ on dangerous, "(в разработке)" (in development) on unimplemented.
 - Create a test role; goes back to list with count `0`.
-- Click "Редактировать" on Owner — read-only banner, all checkboxes disabled.
-- Click "Редактировать" on non-Owner — toggle a permission and Save.
+- Click "Редактировать" (Edit) on Owner — read-only banner, all checkboxes disabled.
+- Click "Редактировать" (Edit) on non-Owner — toggle a permission and Save.
 
 - [ ] **Step 7: Commit**
 
@@ -2519,7 +2519,7 @@ export default function UsersPage() {
   }
   useEffect(() => { void load(); }, []);
 
-  if (!users || !me) return <div className="text-neutral-500">Загрузка…</div>;
+  if (!users || !me) return <div className="text-neutral-500">Загрузка…</div>;  // Loading…
   const canManage = me.permissions.includes('user:manage_roles');
 
   return (
@@ -2617,7 +2617,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
   async function assign() {
     if (!picked || !roleId) return;
     if (roleId === ownerRoleId) {
-      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;
+      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;  // This will give the user full access to the panel. Confirm?
     }
     setBusy(true);
     setErr(null);
@@ -2737,7 +2737,7 @@ pnpm --filter @squad/web build
 
 Manual:
 - Navigate to `/users` as Owner. Table shows everyone with a role.
-- Click "Назначить роль игроку". Type partial name → typeahead. Pick a player. Pick role from dropdown. Click "Назначить".
+- Click "Назначить роль игроку" (Assign a role to a player). Type partial name → typeahead. Pick a player. Pick role from dropdown. Click "Назначить" (Assign).
 - Re-load — new user shows up.
 - Try to assign Owner — confirm dialog appears.
 
@@ -2796,7 +2796,7 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
 
   async function save(roleId: string | null) {
     if (roleId === ownerId && roleId !== null) {
-      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;
+      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;  // This will give the user full access to the panel. Confirm?
     }
     setBusy(true);
     setMsg(null);
@@ -2808,13 +2808,13 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
         body: JSON.stringify({ role_id: roleId }),
       });
       if (r.status === 409) {
-        setMsg({ kind: 'err', text: 'Нельзя снять роль у последнего Owner.' });
+        setMsg({ kind: 'err', text: 'Нельзя снять роль у последнего Owner.' });  // Cannot remove the role from the last Owner.
         return;
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await reload();
       setEditing(false);
-      setMsg({ kind: 'ok', text: 'Готово.' });
+      setMsg({ kind: 'ok', text: 'Готово.' });  // Done.
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
@@ -2934,8 +2934,8 @@ Expected: PASS.
 
 - [ ] **Step 5: Manual test**
 
-- Open `/players/<steam_id>` page as Owner. PanelAccessSection shows current role with color dot, "Изменить" / "Снять роль" buttons.
-- Click "Изменить", pick a different role, save. Verify it persists.
+- Open `/players/<steam_id>` page as Owner. PanelAccessSection shows current role with color dot, "Изменить" (Edit) / "Снять роль" (Remove role) buttons.
+- Click "Изменить" (Edit), pick a different role, save. Verify it persists.
 - Try to assign Owner — confirm dialog.
 - Verify `/setup` returns 404.
 - Verify `/login` no longer redirects to `/setup`.
@@ -3099,17 +3099,17 @@ Expected: PASS (`install-lifecycle`, `bridge-rpc`, `panel-rbac` all green).
 Walk through this scenario by hand on the live stack:
 
 1. Reset DB to fresh `0009` state (drop+re-create + migrate). Confirm `panel_meta.first_owner_claimed=false` and 5 roles.
-2. Visit `/`. Click "Login через Steam" with operator's account. Verify redirect to `/` with full Owner access.
+2. Visit `/`. Click "Login через Steam" (Login via Steam) with operator's account. Verify redirect to `/` with full Owner access.
 3. Verify `panel_meta.first_owner_claimed=true` in DB.
 4. Open second Steam account in private browser, log in. Verify `/no-access` page (this is a player who doesn't have a role yet).
-5. As Owner, navigate to `/users`. Verify the table shows the operator. Click "Назначить роль игроку", typeahead the second account, pick "Viewer". Save.
-6. Second account refresh: visits `/dashboard`. Verifies sidebar shows only "Дашборд", "Серверы", "Игроки", "Журнал действий", "Аккаунт", "API-токены" (the `*:view` items Viewer has).
-7. As Owner, `/roles` → "Создать роль" → name "Manager", color "blue", check `server:view`, `server:start`, `server:stop`. Save.
+5. As Owner, navigate to `/users`. Verify the table shows the operator. Click "Назначить роль игроку" (Assign a role to a player), typeahead the second account, pick "Viewer". Save.
+6. Second account refresh: visits `/dashboard`. Verifies sidebar shows only "Дашборд" (Dashboard), "Серверы" (Servers), "Игроки" (Players), "Журнал действий" (Action log), "Аккаунт" (Account), "API-токены" (API tokens) (the `*:view` items Viewer has).
+7. As Owner, `/roles` → "Создать роль" (Create role) → name "Manager", color "blue", check `server:view`, `server:start`, `server:stop`. Save.
 8. As Owner, `/users` → second account → assign "Manager".
 9. Second account: refresh dashboard, click on a server, see Start/Stop buttons.
 10. As Owner, `/roles/<manager>` → uncheck `server:start` → save.
 11. Second account clicks Start → 403 (cache-invalidation worked, no 30s wait).
-12. As Owner, `/roles` → delete "Manager" (confirm dialog mentions "1 пользователь"). Confirm.
+12. As Owner, `/roles` → delete "Manager" (confirm dialog mentions "1 пользователь" (1 user)). Confirm.
 13. Second account refresh → `/no-access` (role gone).
 14. As Owner, try to remove own Owner role via `/players/<owner>` → 409, error message displayed.
 15. Restore second account: assign Viewer.
@@ -3120,7 +3120,7 @@ If any step fails — fix immediately, do not move on.
 
 ```bash
 git push -u origin feat/panel-rbac
-gh pr create --title "feat: panel RBAC (Эпик 2)" --body "$(cat <<'EOF'
+gh pr create --title "feat: panel RBAC (Epic 2)" --body "$(cat <<'EOF'
 ## Summary
 - Single role per user via `players.role_id`.
 - Permission registry objects (`{key, category, label, dangerous?, unimplemented?}`).
@@ -3157,7 +3157,7 @@ Spec coverage check:
 - §11 (cache invalidation) → Task 4, used in Task 7 ✓
 - §12 (TRUNCATE tokens) → Task 1 ✓
 - §13 (16 colors as marker) → Tasks 3, 10, 11, 12, 13 ✓
-- §UI (search, ⚠️, "в разработке", confirm-dialog) → Tasks 11, 12, 13 ✓
+- §UI (search, ⚠️, "в разработке" (in development), confirm-dialog) → Tasks 11, 12, 13 ✓
 - §Migration (10 commits) → Tasks 0-15 ✓
 - §Testing (Tier 1/2/3 + manual gate) → Tasks 3, 7, 9, 15 ✓
 - §Out-of-scope → respected (no triggers/scheduler/whitelist UI) ✓

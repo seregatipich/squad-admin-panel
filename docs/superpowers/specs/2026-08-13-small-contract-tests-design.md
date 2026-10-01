@@ -1,46 +1,46 @@
-# Точечные контракты меток, тегов и кеша внешних банов
+# Targeted contracts for marks, tags and the external-ban cache
 
-## Контекст
+## Context
 
-Аудит накопительной ветки выявил четыре небольшие проверки, отсутствующие в
-актуальном `dev`. Проверяемые компоненты и общий Redis-контракт продолжают
-использоваться, поэтому потеря этих тестов оставляет регрессии незаметными.
-Сливать исходную ветку целиком нельзя: она давно разошлась с `dev` и содержит
-несвязанные рабочие изменения.
+An audit of the accumulating branch found four small checks that are missing from the
+current `dev`. The components under test and the shared Redis contract are still
+in use, so losing these tests leaves regressions unnoticed.
+The source branch cannot be merged as a whole: it diverged from `dev` long ago and contains
+unrelated working changes.
 
-## Решение
+## Decision
 
-Перенести только поведенческие проверки, адаптировав их к текущим исходникам:
+Carry over only the behavioral checks, adapting them to the current sources:
 
-- `PlayerMarkBadge` не отображает пустой набор, выбирает самую серьёзную метку,
-  не меняет порядок массива вызывающего кода и корректно показывает количество;
-- `TagInput` нормализует ввод, не добавляет пустые/повторные/лишние теги,
-  поддерживает удаление мышью и клавишей Backspace и переводит фокус в поле;
-- `@squad/shared-types` закрепляет точное имя ключа версии кеша и экспортирует
-  его из корня пакета;
-- кеш log-ingest читает именно общий ключ при каждой проверке версии.
+- `PlayerMarkBadge` renders nothing for an empty set, picks the most severe mark,
+  does not reorder the caller's array, and shows the count correctly;
+- `TagInput` normalizes input, does not add empty/duplicate/excess tags,
+  supports removal with the mouse and the Backspace key, and moves focus into the field;
+- `@squad/shared-types` pins the exact name of the cache version key and exports
+  it from the package root;
+- the log-ingest cache reads exactly the shared key on every version check.
 
-Рабочий код в задаче не меняется, если профильные тесты не воспроизведут
-реальный дефект. Тесты входят в существующие пакетные наборы Vitest, поэтому
-отдельная команда или новый шаг CI не нужны.
+Production code is not changed in this task unless the relevant tests reproduce
+a real defect. The tests join the existing package Vitest suites, so
+no separate command or new CI step is needed.
 
-## Доказательство красной фазы
+## Evidence for the red phase
 
-Поскольку текущий код уже реализует ожидаемое поведение, после добавления
-тестов каждая новая группа проверяется контролируемым временным ослаблением
-соответствующей границы. Наблюдаем ожидаемое падение, возвращаем исходный код
-и подтверждаем зелёный результат. В коммиты временные ослабления не входят.
+Since the current code already implements the expected behavior, after adding
+the tests each new group is checked by a controlled temporary weakening of
+the corresponding boundary. We observe the expected failure, restore the original code
+and confirm the green result. The temporary weakenings are not part of the commits.
 
-## Безопасность и границы
+## Safety and boundaries
 
-- тесты не используют сеть, Docker, PostgreSQL, Redis или системные команды;
-- входные массивы проверяются на отсутствие скрытой мутации;
-- общий ключ проверяется и у владельца контракта, и у потребителя;
-- значки меток здесь являются служебными значками панели, а не игровыми
-  пиктограммами публичной статистики; задача не добавляет чужие игровые активы.
+- the tests use no network, Docker, PostgreSQL, Redis or system commands;
+- input arrays are checked for hidden mutation;
+- the shared key is checked both at the contract owner and at the consumer;
+- the mark badges here are the panel's own service badges, not the game
+  icons of public statistics; the task does not add third-party game assets.
 
-## Критерий приёмки
+## Acceptance criterion
 
-Три новых файла и усиленный существующий тест проходят профильные пакетные
-наборы, типы, форматирование и полный проектный шлюз. Разница с `dev` содержит
-только тесты и эту документацию.
+The three new files and the strengthened existing test pass the relevant package
+suites, type checks, formatting and the full project gate. The diff against `dev` contains
+only tests and this documentation.

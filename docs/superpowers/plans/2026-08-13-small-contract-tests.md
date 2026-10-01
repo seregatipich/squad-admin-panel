@@ -1,13 +1,13 @@
-# План возврата точечных контрактов
+# Plan for restoring the targeted contracts
 
-1. Добавить тест `PlayerMarkBadge` для пустого состояния, серьёзности,
-   неизменности входа, количества и запасного значка.
-2. Добавить тест `TagInput` для нормализации, ограничений, удаления и фокуса.
-3. Добавить тест общего ключа версии внешних банов и корневого экспорта.
-4. Усилить тест кеша log-ingest проверкой аргумента обоих чтений версии.
-5. Для каждой группы временно ослабить рабочую границу, зафиксировать ожидаемое
-   падение и вернуть исходный код до коммита.
-6. Запустить четыре профильных файла, пакетные тесты web/shared-types/log-ingest,
-   проверку типов и Biome.
-7. Провести обзор разницы, полный локальный шлюз, поиск секретов и механическую
-   аттестацию ветки; затем опубликовать её для последовательного слияния.
+1. Add a `PlayerMarkBadge` test for the empty state, severity,
+   input immutability, the count and the fallback badge.
+2. Add a `TagInput` test for normalization, limits, removal and focus.
+3. Add a test of the shared external-ban version key and the root export.
+4. Strengthen the log-ingest cache test by checking the argument of both version reads.
+5. For each group, temporarily weaken the production boundary, record the expected
+   failure and restore the original code before committing.
+6. Run the four relevant files, the web/shared-types/log-ingest package tests,
+   the type check and Biome.
+7. Review the diff, run the full local gate, the secret scan and the mechanical
+   attestation of the branch; then publish it for sequential merging.

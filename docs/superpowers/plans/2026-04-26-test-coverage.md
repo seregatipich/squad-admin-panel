@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Cover every public surface, every flow, every edge case. Зелёные тесты — единственное доказательство, что фича работает; "вручную проверил" больше не считается.
+**Goal:** Cover every public surface, every flow, every edge case. Green tests are the only proof that a feature works; "checked it manually" no longer counts.
 
 **Architecture:** Six-tier pyramid:
 
@@ -456,7 +456,7 @@ Page list (19 total):
 11. `/players/[steam_id64]` — profile, name history, IP history (gated), PanelAccessSection single-role.
 12. `/audit` — entries list, filter by action/actor/date.
 13. `/logs` — live tail (WebSocket polling), source filter, level filter, export button (gated).
-14. `/roles` — list with color dots, "Системная" badge on Owner, delete confirm.
+14. `/roles` — list with color dots, "Системная" (System) badge on Owner, delete confirm.
 15. `/roles/new` — RoleEditor form, color picker (16 swatches), permission search, save → redirect.
 16. `/roles/[id]` — Owner read-only mode, non-Owner editable, save persists.
 17. `/users` — table renders, assign-role modal with typeahead, Owner confirm dialog.

@@ -52,7 +52,7 @@
 | `apps/workers/log-ingest/src/tail.ts` | Bytes/min counter + parser-miss sampling |
 | `packages/bridge-client/src/client.ts` | More fine-grained `onLog` calls per §5.1 |
 | `apps/web/src/app/(dashboard)/dashboard/page.tsx` | Cards become `<button>` opening modal |
-| `apps/web/src/app/(dashboard)/layout.tsx` | "Логи" nav link |
+| `apps/web/src/app/(dashboard)/layout.tsx` | "Логи" (Logs) nav link |
 | `apps/web/package.json` | `recharts` dep |
 | `docker/compose.yml` | `worker-metrics-sampler` service |
 
@@ -2449,7 +2449,7 @@ Expected: PASS.
 ```bash
 pnpm --filter @squad/web dev
 ```
-Open `/dashboard`, click each of CPU/RAM/Disk/Net cards, confirm modal opens and chart renders or shows "Нет данных" if metrics-sampler isn't running.
+Open `/dashboard`, click each of CPU/RAM/Disk/Net cards, confirm modal opens and chart renders or shows "Нет данных" (No data) if metrics-sampler isn't running.
 
 - [ ] **Step 17.4: Commit**
 
@@ -2639,14 +2639,14 @@ git commit -m "feat(web): /logs page with filters, live tail, export button"
 
 ---
 
-## Task 19: Add nav link for Логи
+## Task 19: Add nav link for Логи (Logs)
 
 **Files:**
 - Modify: `apps/web/src/app/(dashboard)/layout.tsx`
 
 - [ ] **Step 19.1: Add the nav entry**
 
-In `apps/web/src/app/(dashboard)/layout.tsx`, add a `<Link>` between "Журнал действий" and "Аккаунт":
+In `apps/web/src/app/(dashboard)/layout.tsx`, add a `<Link>` between "Журнал действий" (Action log) and "Аккаунт" (Account):
 
 ```tsx
 <Link href="/logs" className="block rounded px-2 py-1 hover:bg-neutral-900">
@@ -2804,9 +2804,9 @@ Expected: PASS (no audit declarations needed; all new routes are GET).
 
 - [ ] **Step 21.3: Manual browser smoke**
 
-- Visit `/dashboard`. Click each of CPU / RAM / Disk / Network — modal opens, chart renders or shows "Нет данных за 24 часа" if sampler hasn't been running long.
+- Visit `/dashboard`. Click each of CPU / RAM / Disk / Network — modal opens, chart renders or shows "Нет данных за 24 часа" (No data for 24 hours) if sampler hasn't been running long.
 - Visit `/logs`. Confirm filter buttons, level dropdown, server dropdown, search box all narrow the list. Confirm new entries appear within ~1 second after a manual action that produces one (e.g., restart bridge → see `down`/`recovered` warns).
-- Click "⤓ Экспорт", confirm a `panel-logs-*.txt.gz` downloads, gunzip it, confirm sections present and CSV is plottable.
+- Click "⤓ Экспорт" (Export), confirm a `panel-logs-*.txt.gz` downloads, gunzip it, confirm sections present and CSV is plottable.
 
 - [ ] **Step 21.4: Run the full e2e suite**
 

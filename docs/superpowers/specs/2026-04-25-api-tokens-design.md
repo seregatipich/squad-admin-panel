@@ -2,7 +2,7 @@
 
 **Status**: approved (in implementation)
 **Date**: 2026-04-25
-**Spec for**: P1 task "API tokens для интеграций (создание, ревокация, scopes)"
+**Spec for**: P1 task "API tokens for integrations (creation, revocation, scopes)"
 
 ## Goal
 

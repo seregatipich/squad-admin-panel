@@ -6,18 +6,18 @@ Created: 2026-04-26
 
 ## Goal
 
-1. **DELETE** удаляет файлы сервера (`/var/lib/squad-panel/{configs,saved}/{uuid}`) и контейнер.
-2. **Бэкап конфигов** в БД (через существующую систему версий `config_versions`) — гарантировано, до любых деструктивных шагов.
-3. **Архив удалённых серверов** — кликабельная страница в панели; конфиги читаемы read-only.
-4. **Восстановление** — мастер: re-install → overlay backed-up `.cfg` → новая история.
-5. **Liveness** — статус серверов / контейнеров / RCON / bridge приходит в UI без задержки через WebSocket; явный индикатор разрыва.
+1. **DELETE** removes the server's files (`/var/lib/squad-panel/{configs,saved}/{uuid}`) and the container.
+2. **Config backup** in the DB (through the existing `config_versions` versioning system) — guaranteed, before any destructive step.
+3. **Archive of deleted servers** — a clickable page in the panel; configs are readable read-only.
+4. **Restore** — a wizard: re-install → overlay backed-up `.cfg` → fresh history.
+5. **Liveness** — server / container / RCON / bridge status reaches the UI without delay over WebSocket; an explicit indicator when the connection drops.
 
 ## Non-goals
 
-- Восстановление контейнера в исходное состояние (используем re-install + overlay configs).
-- Полное архивирование `Saved/` (логи, EOS marker, workshop cache) — только `.cfg`.
-- Schedule-based purge (пока навсегда).
-- DB-уровневый бэкап (вынесено в отдельный эпик).
+- Restoring the container to its original state (we use re-install + overlay configs).
+- Full archiving of `Saved/` (logs, EOS marker, workshop cache) — only `.cfg` files.
+- Schedule-based purge (for now, kept forever).
+- DB-level backup (moved to a separate epic).
 
 ## Bundles & dependency DAG
 
@@ -32,27 +32,27 @@ E (live-bus WS)  ─────────────────────
                                                                                                 G (docs everywhere)
 ```
 
-A, B, E независимы → стартуют параллельно.
+A, B, E are independent → they start in parallel.
 
 ## Bundle A — bridge `directory_delete`
 
 **Files**
-- `packages/shared-config/src/bridge-methods.ts` — добавить `directory_delete` в `BRIDGE_METHODS`.
+- `packages/shared-config/src/bridge-methods.ts` — add `directory_delete` to `BRIDGE_METHODS`.
 - `packages/bridge-client/src/client.ts` — `directoryDelete = (p: {path: string}) => this.call<{removed: boolean}>('directory_delete', p, { timeoutMs: 60_000 })`.
-- `packages/bridge-client/src/types.ts` — типы.
+- `packages/bridge-client/src/types.ts` — types.
 - `apps/bridge/internal/handlers/handlers.go` — case `"directory_delete"` + `directoryDelete()`.
-- `apps/bridge/internal/validate/docker.go` — `PanelConfigsServerRoot(p) (string, error)` и `PanelSavedServerRoot(p) (string, error)`: путь должен быть **точно** `PanelConfigsRoot/{uuid}` или `PanelSavedRoot/{uuid}` (без trailing-slash, без файлов внутри). Используется при `directory_delete` и нигде больше.
+- `apps/bridge/internal/validate/docker.go` — `PanelConfigsServerRoot(p) (string, error)` and `PanelSavedServerRoot(p) (string, error)`: the path must be **exactly** `PanelConfigsRoot/{uuid}` or `PanelSavedRoot/{uuid}` (no trailing slash, no files inside). Used by `directory_delete` and nowhere else.
 - `apps/bridge/internal/handlers/handlers_test.go` — unit-tests forbidden cases (traversal, file path, unknown root, bad uuid).
 - `apps/api/test/e2e/bridge-rpc.e2e.test.ts` — case `directory_delete` success x 2 (configs root, saved root) + forbidden x 4.
 
 **Semantics**
-- На входе `{path: string}`. Validator выбирает между `PanelConfigsServerRoot` и `PanelSavedServerRoot`. Если ни один не подходит — `forbidden`.
-- `os.RemoveAll(cleaned)` (idempotent — отсутствие пути не ошибка, возвращаем `removed: false`).
-- На успех — `{removed: true}`.
+- Input is `{path: string}`. The validator chooses between `PanelConfigsServerRoot` and `PanelSavedServerRoot`. If neither matches — `forbidden`.
+- `os.RemoveAll(cleaned)` (idempotent — a missing path is not an error, we return `removed: false`).
+- On success — `{removed: true}`.
 
 **Tests**
-- Go unit: pass valid configs path → ok. Pass valid saved path → ok. Pass `/etc/passwd` → ErrForbidden. Pass `/var/lib/squad-panel/configs/019dc169-..-/ServerConfig` (file-level path) → ErrForbidden (не root). Pass traversal `/var/lib/squad-panel/configs/../etc` → ErrForbidden.
-- E2E: создать пустую директорию `/var/lib/squad-panel/configs/0000.../`, удалить через bridge, убедиться отсутствует.
+- Go unit: pass valid configs path → ok. Pass valid saved path → ok. Pass `/etc/passwd` → ErrForbidden. Pass `/var/lib/squad-panel/configs/019dc169-..-/ServerConfig` (file-level path) → ErrForbidden (not a root). Pass traversal `/var/lib/squad-panel/configs/../etc` → ErrForbidden.
+- E2E: create an empty directory `/var/lib/squad-panel/configs/0000.../`, delete it through the bridge, verify it is gone.
 
 ## Bundle B — migration 0013
 
@@ -75,15 +75,15 @@ CREATE UNIQUE INDEX servers_slug_active_key ON servers(slug) WHERE deleted_at IS
 - `slugActiveKey` partial unique index.
 
 **Regression test** (`packages/db/test/migrations.regression.test.ts`):
-- Колонки существуют.
-- Партиальный индекс позволяет два сервера с одинаковым slug если один deleted.
+- Columns exist.
+- The partial index allows two servers with the same slug if one is deleted.
 
 ## Bundle C — server-delete orchestrator
 
 **Files**
-- `apps/api/src/lib/server-delete.ts` — orchestrator класс.
-- `apps/api/src/routes/servers.ts` — переписать DELETE.
-- Все list-queries и detail-queries в `routes/servers.ts` + `routes/server-configs.ts` + `routes/server-install.ts` + `routes/server-logs.ts` — добавить filter `deleted_at IS NULL` (если не filter по конкретному id, который уже учёт получает 404).
+- `apps/api/src/lib/server-delete.ts` — orchestrator class.
+- `apps/api/src/routes/servers.ts` — rewrite DELETE.
+- All list-queries and detail-queries in `routes/servers.ts` + `routes/server-configs.ts` + `routes/server-install.ts` + `routes/server-logs.ts` — add the `deleted_at IS NULL` filter (unless filtering by a specific id, which already gets a 404).
 
 **`server-delete.ts` flow**
 
@@ -114,15 +114,15 @@ export async function softDeleteServer(
 5. **DB update** — `UPDATE servers SET deleted_at=now(), deleted_by_steam_id64=$1, deletion_backup_marker_id=$2 WHERE id=$3`.
 6. **Audit** (in route): `writeAuditEntry` with `before={status, slug, display_name}`, `after={deleted_at, backup_marker_id}`, `context={...DeleteResult}`.
 
-**Rcon.cfg**: бэкапится с password как есть (нужно для restore символьно совпадающим). Audit логирует только sha256, не content.
+**Rcon.cfg**: backed up with the password as is (needed so restore matches character for character). Audit logs only the sha256, not the content.
 
-**Idempotency**: повторный DELETE на уже soft-deleted сервере → 404 (с deleted_at filter).
+**Idempotency**: a repeated DELETE on an already soft-deleted server → 404 (with the deleted_at filter).
 
-**Unit tests**: bridge mocks (success всех phases, partial fail in phase 2, partial fail in phase 3, phase 1 fail aborts).
+**Unit tests**: bridge mocks (success of all phases, partial fail in phase 2, partial fail in phase 3, phase 1 fail aborts).
 
 ## Bundle D — archive + restore-configs routes
 
-**Files**: `apps/api/src/routes/server-archive.ts` (новый), `apps/api/src/lib/server-restore.ts`.
+**Files**: `apps/api/src/routes/server-archive.ts` (new), `apps/api/src/lib/server-restore.ts`.
 
 **Endpoints**:
 
@@ -147,7 +147,7 @@ export async function softDeleteServer(
 - `apps/api/src/routes/live.ts` — `GET /api/v1/ws/live` (auth via session cookie, reuses authPlugin).
 - `apps/api/src/plugins/status-reconciler.ts` — emit `live.publish('server.status', {...})` on edge transition.
 - `apps/api/src/plugins/bridge-heartbeat.ts` — emit `live.publish('bridge.connection', {state})` on state change.
-- `apps/workers/rcon/src/index.ts` — на каждое изменение `rcon:status:{id}` сделать `redis.publish('rcon:status:changed', JSON.stringify({server_id, ...payload}))`. API субскрайбится.
+- `apps/workers/rcon/src/index.ts` — on every `rcon:status:{id}` change, do `redis.publish('rcon:status:changed', JSON.stringify({server_id, ...payload}))`. The API subscribes.
 
 **Wire format** (server → client):
 ```json
@@ -166,35 +166,35 @@ Client → server: `{"type": "pong"}` (server pings every 10s, client must pong 
 
 **Files**:
 - `apps/web/src/lib/live-bus.ts` — singleton WS + reconnect + subscriber API.
-- `apps/web/src/components/connection-banner.tsx` — fixed top banner: "Связь с панелью потеряна — переподключаемся…" / "Bridge не отвечает — операции с сервером временно недоступны".
+- `apps/web/src/components/connection-banner.tsx` — fixed top banner: "Связь с панелью потеряна — переподключаемся…" (Connection to the panel lost — reconnecting…) / "Bridge не отвечает — операции с сервером временно недоступны" (Bridge is not responding — server operations are temporarily unavailable).
 - `apps/web/src/app/(dashboard)/layout.tsx` — render banner.
-- `apps/web/src/app/(dashboard)/servers/page.tsx` — subscribe to `server.status` + `rcon.status`, instant updates; REST poll становится `120s` fallback (для refetch на focus).
-- `apps/web/src/app/(dashboard)/servers/[id]/page.tsx` — обновить confirm-модал на «Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел "Архив серверов").»
-- `apps/web/src/app/(dashboard)/servers/archive/page.tsx` — таблица soft-deleted.
-- `apps/web/src/app/(dashboard)/servers/archive/[id]/page.tsx` — детали + список backup .cfg файлов с просмотром.
-- `apps/web/src/app/(dashboard)/servers/archive/[id]/restore/page.tsx` — мастер restore.
+- `apps/web/src/app/(dashboard)/servers/page.tsx` — subscribe to `server.status` + `rcon.status`, instant updates; the REST poll becomes a `120s` fallback (for refetch on focus).
+- `apps/web/src/app/(dashboard)/servers/[id]/page.tsx` — update the confirm modal to «Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел "Архив серверов").» (Files will be erased from disk. The `.cfg` backup will be kept in the archive (the "Server archive" section).)
+- `apps/web/src/app/(dashboard)/servers/archive/page.tsx` — table of soft-deleted servers.
+- `apps/web/src/app/(dashboard)/servers/archive/[id]/page.tsx` — details + a list of backup .cfg files with a viewer.
+- `apps/web/src/app/(dashboard)/servers/archive/[id]/restore/page.tsx` — restore wizard.
 
-**Playwright** (`apps/web/test/e2e/server-archive-restore.spec.ts`): mocked, проверяет UI flow без реального bridge.
+**Playwright** (`apps/web/test/e2e/server-archive-restore.spec.ts`): mocked, checks the UI flow without a real bridge.
 
 ## Bundle G — docs
 
-См. описание в TaskCreate #52. 8 файлов для нового компонента `live-bus`. Update остальных. Changelog records в каждом затронутом компоненте.
+See the description in TaskCreate #52. 8 files for the new `live-bus` component. Update the rest. Changelog records in each affected component.
 
 ## Bundle H — e2e lifecycle
 
-См. TaskCreate #53. Прогон на live stack как `install-lifecycle.e2e.test.ts`. Время: ~6-8 минут per run (install + delete + restore + install).
+See TaskCreate #53. Run on the live stack as `install-lifecycle.e2e.test.ts`. Time: ~6-8 minutes per run (install + delete + restore + install).
 
 ## Acceptance
 
 - `pnpm turbo run typecheck && pnpm turbo run test` — green.
-- `pnpm --filter @squad/api test:e2e` — green (включая `server-delete-restore-lifecycle.e2e.test.ts`).
+- `pnpm --filter @squad/api test:e2e` — green (including `server-delete-restore-lifecycle.e2e.test.ts`).
 - `pnpm --filter @squad/web test:e2e` — green.
-- Manual: уделить сервер из UI → файлы исчезли с диска → архив показывает запись → restore создаёт новый сервер → конфиги совпадают с pre-delete версией.
-- Liveness: `docker stop panel-host-bridge` → красный баннер в UI в течение 5s; `docker start` → баннер исчезает в течение 5s.
+- Manual: delete a server from the UI → files are gone from disk → the archive shows the entry → restore creates a new server → configs match the pre-delete version.
+- Liveness: `docker stop panel-host-bridge` → red banner in the UI within 5s; `docker start` → banner disappears within 5s.
 
 ## Open risks / known caveats
 
-- **Phase 2-4 partial fail**: contractual choice — мы фиксируем `errors[]` в audit, БД помечает deleted_at, оператор видит висящий контейнер/файлы и руками доделывает. Альтернатива (откат deleted_at) — сложно и опасно (могли быть состояния гонки с reconciler-ом).
-- **Slug reuse**: партиальный unique index делает это возможным; restore mut предлагает `${old_slug}-restored-1` чтобы не путать пользователя.
-- **WebSocket за reverse proxy**: Caddyfile уже умеет ws-upgrade; убедиться в `docker/Caddyfile`.
-- **Worker heartbeat liveness**: пока не покрываем в UI (отдельный эпик), но API-side bridge.connection и server.status — основное.
+- **Phase 2-4 partial fail**: a contractual choice — we record `errors[]` in the audit, the DB marks deleted_at, the operator sees the dangling container/files and finishes by hand. The alternative (rolling back deleted_at) is complex and dangerous (there could be race conditions with the reconciler).
+- **Slug reuse**: the partial unique index makes this possible; the restore mutation suggests `${old_slug}-restored-1` so as not to confuse the user.
+- **WebSocket behind a reverse proxy**: the Caddyfile already handles ws-upgrade; verify in `docker/Caddyfile`.
+- **Worker heartbeat liveness**: not covered in the UI for now (separate epic), but the API-side bridge.connection and server.status are the main thing.

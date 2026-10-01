@@ -1,80 +1,80 @@
-# План реализации проверок эксплуатационных скриптов и цепочки аудита
+# Implementation plan: operations script and audit chain checks
 
-> Tracking: #283. База: актуальный `origin/dev`. Выполнять по TDD, малыми
-> коммитами; старую накопительную ветку не сливать.
+> Tracking: #283. Base: the current `origin/dev`. Follow TDD in small
+> commits; do not merge the old accumulating branch.
 
-## Задача 1. Красные контракты production deploy
+## Task 1. Red contracts for production deploy
 
-**Файлы:**
+**Files:**
 
-- создать `scripts/operations-scripts.test.ts`;
-- изменить `scripts/deploy-stand.sh` только после красного результата.
+- create `scripts/operations-scripts.test.ts`;
+- change `scripts/deploy-stand.sh` only after a red result.
 
-1. Создать изолированную deploy-фикстуру с путём, содержащим пробелы, и
-   журналирующими подменами `docker`, `sleep`, `curl`.
-2. Доказать красным тестом, что текущий скрипт объявляет успех после 40 ответов
-   `api starting`.
-3. Доказать красным тестом, что текущий скрипт подавляет ненулевой код `curl`.
-4. Добавить явную проверку итогового API status и убрать подавление HTTP-ошибки;
-   включить `curl --fail`.
-5. Получить зелёные тесты: env отсутствует, штатный порядок, API timeout,
+1. Create an isolated deploy fixture with a path containing spaces and
+   logging stand-ins for `docker`, `sleep` and `curl`.
+2. Prove with a red test that the current script declares success after 40
+   `api starting` responses.
+3. Prove with a red test that the current script suppresses a non-zero `curl` exit code.
+4. Add an explicit check of the final API status and remove the suppression of the HTTP error;
+   enable `curl --fail`.
+5. Get green tests: env missing, normal order, API timeout,
    build failure, HTTP failure.
-6. Проверить `bash -n` и Biome, закоммитить.
+6. Check `bash -n` and Biome, commit.
 
-## Задача 2. Остальные эксплуатационные границы
+## Task 2. Remaining operational boundaries
 
-**Файлы:**
+**Files:**
 
-- изменить `scripts/operations-scripts.test.ts`.
+- change `scripts/operations-scripts.test.ts`.
 
-1. Добавить проверку синтаксиса и strict-mode всех целевых Bash-скриптов.
-2. Добавить безопасные фикстуры для preflight `bootstrap` и
-   `install-host-bridge`; доказать отсутствие мутаций до допуска.
-3. Добавить точные подтверждения и stop-on-failure для `rebuild` и `uninstall`.
-4. Добавить настоящий временный Unix-сервер для восьми framed-вызовов
-   `verify-bridge` и негативный случай оборванного ответа.
-5. Выполнить весь файл и Biome, закоммитить.
+1. Add a syntax and strict-mode check for all target Bash scripts.
+2. Add safe fixtures for the `bootstrap` and `install-host-bridge`
+   preflight; prove there are no mutations before admission.
+3. Add exact confirmations and stop-on-failure for `rebuild` and `uninstall`.
+4. Add a real temporary Unix server for the eight framed calls of
+   `verify-bridge` and a negative case with a truncated response.
+5. Run the whole file and Biome, commit.
 
-## Задача 3. Реальная цепочка аудита
+## Task 3. The real audit chain
 
-**Файлы:**
+**Files:**
 
-- создать `scripts/verify-audit-chain.test.ts`.
+- create `scripts/verify-audit-chain.test.ts`.
 
-1. Создать одну мигрированную временную template-БД и отдельную БД на каждый
-   сценарий; исходную `DATABASE_URL` использовать только как административную
-   точку подключения.
-2. Проверить пустую и двухстрочную целую цепочку, а также наличие трёх боевых
-   триггеров `audit_log`.
-3. Повредить отдельно `row_hash` и `prev_hash`, проверить exact `id` и reason.
-4. Проверить exit 2 при отсутствии `DATABASE_URL` и недоступной БД.
-5. Удалить все временные БД в teardown, выполнить файл и Biome, закоммитить.
+1. Create one migrated temporary template DB and a separate DB for each
+   scenario; use the original `DATABASE_URL` only as an administrative
+   connection point.
+2. Check an empty and a two-row intact chain, and the presence of the three live
+   `audit_log` triggers.
+3. Corrupt `row_hash` and `prev_hash` separately, check the exact `id` and reason.
+4. Check exit 2 when `DATABASE_URL` is missing and when the DB is unreachable.
+5. Drop all temporary DBs in teardown, run the file and Biome, commit.
 
-## Задача 4. Включение в обязательный контур и документация
+## Task 4. Wiring into the mandatory gate and documentation
 
-**Файлы:**
+**Files:**
 
-- изменить `package.json`;
-- изменить `.github/workflows/ci.yml` при необходимости только в названии или
-  статической гарантии порядка;
-- изменить `docs/development/testing.md`;
-- изменить `docs/operations/deployment.md`.
+- change `package.json`;
+- change `.github/workflows/ci.yml` if needed, only in the name or in the
+  static ordering guarantee;
+- change `docs/development/testing.md`;
+- change `docs/operations/deployment.md`.
 
-1. Сначала доказать, что текущий `pnpm test:scripts` не исполняет новые файлы.
-2. Включить три файла с `--test-concurrency=1` после сборки panel-bridge.
-3. Зафиксировать, что CI применяет миграции перед `test:scripts`, и описать
-   безопасную локальную команду.
-4. Выполнить `pnpm test:scripts` с реальными временными PostgreSQL/Redis,
-   typecheck и Biome, закоммитить.
+1. First prove that the current `pnpm test:scripts` does not run the new files.
+2. Include the three files with `--test-concurrency=1` after the panel-bridge build.
+3. Record that CI applies migrations before `test:scripts`, and describe a
+   safe local command.
+4. Run `pnpm test:scripts` with real temporary PostgreSQL/Redis,
+   typecheck and Biome, commit.
 
-## Задача 5. Приёмка ветки
+## Task 5. Branch acceptance
 
-1. Выполнить полный локальный pre-push шлюз с мигрированной изолированной БД.
-2. Запустить отдельный gitleaks по `origin/dev..HEAD`.
-3. Прочитать весь diff, сопоставить каждый критерий #283 с тестом и проверить
-   отсутствие реальных host-мутаций.
-4. Опубликовать ветку обычным `git push`, выполнить
+1. Run the full local pre-push gate with a migrated isolated DB.
+2. Run a separate gitleaks scan over `origin/dev..HEAD`.
+3. Read the whole diff, map each #283 criterion to a test and check that
+   there are no real host mutations.
+4. Publish the branch with a plain `git push`, run
    `bash scripts/verify-done.sh --feature`.
-5. Зафиксировать handoff evidence в #283 и перевести задачу в Review. Слияние
-   выполнять только после восстановления runner #281 и зелёного CI точного
+5. Record the handoff evidence in #283 and move the task to Review. Merge
+   only after runner #281 is restored and CI is green on the exact
    `dev`.

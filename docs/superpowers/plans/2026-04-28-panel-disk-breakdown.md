@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Split the existing dashboard "Диск 23.2%" widget's used-portion into two visible sub-segments — `Панель` and `Прочее` — so the operator sees how much disk panel-owned storage takes versus everything else on the host. Click on the widget opens a modal with per-type donut and per-server table.
+**Goal:** Split the existing dashboard "Диск 23.2%" (Disk 23.2%) widget's used-portion into two visible sub-segments — `Панель` (Panel) and `Прочее` (Other) — so the operator sees how much disk panel-owned storage takes versus everything else on the host. Click on the widget opens a modal with per-type donut and per-server table.
 
-**Architecture:** New bridge RPC `panel_disk_usage` calls `du -sb` on allowlisted panel paths plus `docker system df --format json` to size panel-owned volumes/images, returns one consolidated payload with 5-min internal cache. New API endpoint `/api/v1/host/disk-usage` wraps it with 60s cache. Web side extends the existing `<DashboardCard title="Диск">` component with a sub-segment in the bar and adds `<DiskBreakdownModal>` opened on click.
+**Architecture:** New bridge RPC `panel_disk_usage` calls `du -sb` on allowlisted panel paths plus `docker system df --format json` to size panel-owned volumes/images, returns one consolidated payload with 5-min internal cache. New API endpoint `/api/v1/host/disk-usage` wraps it with 60s cache. Web side extends the existing `<DashboardCard title="Диск">` (Disk) component with a sub-segment in the bar and adds `<DiskBreakdownModal>` opened on click.
 
 **Tech Stack:** Go 1.25 (bridge) / TypeScript / Fastify 5 / React 19 / Tailwind 4 / Vitest / `go test -race` / Playwright. Companion spec: `docs/superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md` §3.8.
 
@@ -424,7 +424,7 @@ git commit -m "test(e2e): panel_disk_usage success + unknown-param tolerance"
 - [ ] **Step 1: Read the current widget**
 
 The disk widget lives in `apps/web/src/app/(dashboard)/dashboard/page.tsx` around lines 736–760. Identify:
-- The component name (likely `<DashboardCard>` or inline JSX block with `title="Диск"`)
+- The component name (likely `<DashboardCard>` or inline JSX block with `title="Диск"` (Disk))
 - Where the bar's "used" portion is rendered (look for `style={{ width: '23.2%' }}` or `formatPercent(...)` with `--bar-fg` or similar)
 
 This is observation — no edit yet.
@@ -674,7 +674,7 @@ If the existing `onClick` opens a metric-history modal already, decide: keep bot
 pnpm --filter @squad/web dev
 ```
 
-Verify clicking "Диск" opens the new modal with data; refresh button bypasses cache (server logs show fresh `du`).
+Verify clicking "Диск" (Disk) opens the new modal with data; refresh button bypasses cache (server logs show fresh `du`).
 
 - [ ] **Step 4: Commit**
 

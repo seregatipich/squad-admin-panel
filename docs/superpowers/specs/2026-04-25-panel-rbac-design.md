@@ -1,48 +1,48 @@
 # Panel RBAC — Design
 
 **Status**: design approved 2026-04-25, implementation pending
-**Scope**: Эпик 2 — права на доступ к самой web-панели
-**Out of scope**: Squad in-game admin groups (Эпик 3 — отдельный, эта работа лишь добавляет stub-permissions для него)
+**Scope**: Epic 2 — access permissions for the web panel itself
+**Out of scope**: Squad in-game admin groups (Epic 3 — separate; this work only adds stub permissions for it)
 
 ---
 
-## 1. Цель и инварианты
+## 1. Goal and invariants
 
-Панель использует permission-key модель. Роль = имя + цвет + флаг `is_system_role` + набор permission-keys. Один пользователь имеет одну роль либо ни одной. Роль глобальна. Никакой иерархии и clearance — кто может больше, у того просто больше галочек.
+The panel uses a permission-key model. A role = a name + a color + the `is_system_role` flag + a set of permission keys. A user has one role or none. A role is global. No hierarchy and no clearance — whoever can do more simply has more checkboxes.
 
-**Архитектурный инвариант**: `players.role_id IS NULL` ⇔ "нет доступа в панель". Это единственное место правды; никаких параллельных state в session-claims, JWT или Redis.
+**Architectural invariant**: `players.role_id IS NULL` ⇔ "no access to the panel". This is the single source of truth; there is no parallel state in session claims, JWT or Redis.
 
-**Owner**: единственная защищённая роль. Не редактируется, не удаляется, не переименовывается. Защищена двумя инвариантами:
-1. На API: PUT/DELETE для роли с `is_system_role = true AND name = 'Owner'` возвращают 400.
-2. На API: при PUT `/players/:id/role` с переходом "Owner → не-Owner" — если бы это оставило систему без Owner, ответ 409 `cannot_remove_last_owner`.
+**Owner**: the only protected role. It cannot be edited, deleted or renamed. It is protected by two invariants:
+1. In the API: PUT/DELETE for the role with `is_system_role = true AND name = 'Owner'` return 400.
+2. In the API: on PUT `/players/:id/role` with an "Owner → non-Owner" transition — if it would leave the system without an Owner, the response is 409 `cannot_remove_last_owner`.
 
 ---
 
-## 2. Решения и trade-offs
+## 2. Decisions and trade-offs
 
-| # | Решение | Альтернативы | Почему так |
+| # | Decision | Alternatives | Why |
 |---|---|---|---|
-| 1 | Single-role: новая колонка `players.role_id uuid NULL`, дроп M:N таблицы `player_role_assignments` | Оставить M:N с UNIQUE-индексом по steam\_id64 | Pre-launch стадия. M:N "симулирующая 1:1" — техдолг с первого дня. Спека написана от единственной роли как от инварианта. |
-| 2 | Без `clearance_level`. `user:manage_roles` даёт право назначить любую роль | Отдельный `role:assign_owner` для эскалации | Спека буквально: "никаких clearance, ранжирования или иерархии". Эскалация — ответственность оператора (давать `user:manage_roles` только доверенным). |
-| 3 | Дропаем `role_server_scopes` целиком | Оставить как dormant schema | Никогда не enforced. Pre-launch — миграция вернёт легко если понадобится. |
-| 4 | Дропаем `organizations` + `organization_members`. Появляется singleton `panel_meta` | Оставить org-scaffolding | Multi-tenancy не используется и не планируется в обозримом. Пользователь явно разрешил снос. |
-| 5 | Permission registry — массив объектов `{key, category, label, dangerous?, unimplemented?}` | Плоский массив + side-map с метаданными; БД-таблица permissions | Один источник правды, типы выводятся, добавление permission остаётся one-line append без миграции. |
-| 6 | Полный permission registry сразу — включая P2 `unimplemented`-стабы | Только ключи под существующий код | Спека описывает зрелое состояние. UI редактора с самого начала выглядит правильно; новые routes — `config: { permissions: [...] }` без правки registry. |
-| 7 | 5 системных ролей. `is_system_role = true` только у Owner | Все 5 системные / без флага вообще | Owner — единственная неприкосновенная. Senior Admin / Admin / Moderator / Viewer — preset, оператор свободно правит и удаляет. |
-| 8 | Две точки управления ролью: `/users` (новая) + упрощённый PanelAccessSection на `/players/:id` | Только одна из двух | Спека требует `/users` со списком имеющих роль; in-place workflow на `/players/:id` уже есть и удобен ("смотрю на проблемного игрока — выдаю роль"). |
-| 9 | Setup wizard уходит. First-login Owner trick на Steam-callback | Сохранить env-check page | Wizard теряет работу после дропа orgs; first-login trick ровно как в спеке. |
-| 10 | Полные before/after snapshots в audit | Только diff; без snapshots | Совпадает с подходом для config\_versions; reconstruct состояния прост. |
-| 11 | Точечная инвалидация in-memory кэша + TTL 30s | Redis pub/sub; снести кэш | Multi-instance API сейчас не нужен. Точечная инвалидация даёт мгновенный эффект; TTL — safety-net. |
-| 12 | TRUNCATE `player_api_tokens` в миграции | Map permission renames в scopes; ничего не делать | Pre-launch, никаких реальных токенов. |
-| 13 | Палитра 16 фиксированных цветов (slug-имена под Tailwind), цвет = маркер-точка | Свободный hex; pill с названием | UX — pill с названием везде шумит; точка достаточна для "разница в цветах". 16 цветов гарантированно читаемы на тёмной теме без runtime-проверки контраста. |
+| 1 | Single-role: a new column `players.role_id uuid NULL`, drop the M:N table `player_role_assignments` | Keep M:N with a UNIQUE index on steam\_id64 | Pre-launch stage. An M:N that "simulates 1:1" is tech debt from day one. The spec is written around a single role as an invariant. |
+| 2 | No `clearance_level`. `user:manage_roles` grants the right to assign any role | A separate `role:assign_owner` for escalation | The spec, literally: "no clearance, ranking or hierarchy". Escalation is the operator's responsibility (grant `user:manage_roles` only to trusted people). |
+| 3 | Drop `role_server_scopes` entirely | Keep it as a dormant schema | It was never enforced. Pre-launch — a migration can easily bring it back if needed. |
+| 4 | Drop `organizations` + `organization_members`. A singleton `panel_meta` appears | Keep the org scaffolding | Multi-tenancy is not used and is not planned in the foreseeable future. The user explicitly approved the removal. |
+| 5 | The permission registry is an array of objects `{key, category, label, dangerous?, unimplemented?}` | A flat array + a side map with metadata; a DB permissions table | A single source of truth, types are derived, and adding a permission stays a one-line append with no migration. |
+| 6 | The full permission registry up front — including P2 `unimplemented` stubs | Only keys for the existing code | The spec describes the mature state. The editor UI looks right from the start; new routes use `config: { permissions: [...] }` with no registry edit. |
+| 7 | 5 system roles. `is_system_role = true` only for Owner | All 5 are system / no flag at all | Owner is the only untouchable role. Senior Admin / Admin / Moderator / Viewer are presets, which the operator is free to edit and delete. |
+| 8 | Two places to manage a role: `/users` (new) + a simplified PanelAccessSection on `/players/:id` | Only one of the two | The spec requires `/users` with a list of those who hold a role; the in-place workflow on `/players/:id` already exists and is convenient ("I'm looking at a problem player — I grant a role"). |
+| 9 | The setup wizard goes away. First-login Owner trick on the Steam callback | Keep the env-check page | The wizard loses its job after the orgs are dropped; the first-login trick is exactly as in the spec. |
+| 10 | Full before/after snapshots in the audit | Diff only; no snapshots | Matches the approach for config\_versions; reconstructing the state is simple. |
+| 11 | Targeted invalidation of the in-memory cache + a 30s TTL | Redis pub/sub; dropping the cache | A multi-instance API is not needed right now. Targeted invalidation takes effect immediately; the TTL is a safety net. |
+| 12 | TRUNCATE `player_api_tokens` in the migration | Map permission renames in scopes; do nothing | Pre-launch, there are no real tokens. |
+| 13 | A palette of 16 fixed colors (slug names matching Tailwind), color = a marker dot | A free-form hex; a pill with the name | UX — a pill with the name everywhere is noisy; a dot is enough to show "a difference in colors". The 16 colors are guaranteed to be readable on a dark theme without a runtime contrast check. |
 
 ---
 
 ## 3. Data model
 
-### Новая таблица `panel_meta`
+### New table `panel_meta`
 
-Singleton — одна строка, защищённая CHECK.
+A singleton — one row, protected by a CHECK.
 
 ```sql
 CREATE TABLE panel_meta (
@@ -55,10 +55,10 @@ CREATE TABLE panel_meta (
 INSERT INTO panel_meta (id) VALUES (1);
 ```
 
-`first_owner_claimed` ставится в `true` в той же транзакции, что и `players.role_id = <Owner>` при первом успешном Steam-логине.
-`roles_seeded` ставится в `true` той же миграцией, после INSERT'ов системных ролей. Никакого повторного сидера в API.
+`first_owner_claimed` is set to `true` in the same transaction as `players.role_id = <Owner>` on the first successful Steam login.
+`roles_seeded` is set to `true` by the same migration, after the INSERTs of the system roles. There is no repeat seeder in the API.
 
-### Изменения `players`
+### Changes to `players`
 
 ```sql
 ALTER TABLE players
@@ -66,9 +66,9 @@ ALTER TABLE players
 CREATE INDEX players_role_id_idx ON players(role_id) WHERE role_id IS NOT NULL;
 ```
 
-NULL — нет доступа в панель → редирект на `/no-access`. `ON DELETE SET NULL` — при удалении роли все носители теряют доступ, но `players` запись и история сохраняются.
+NULL — no access to the panel → redirect to `/no-access`. `ON DELETE SET NULL` — when a role is deleted, all its holders lose access, but the `players` record and its history are preserved.
 
-### Изменения `roles`
+### Changes to `roles`
 
 ```sql
 ALTER TABLE roles DROP COLUMN org_id;
@@ -83,9 +83,9 @@ DROP INDEX IF EXISTS roles_org_name_key;
 CREATE UNIQUE INDEX roles_name_key ON roles(name);
 ```
 
-`name` теперь UNIQUE глобально (раньше — `(org_id, name)`).
+`name` is now globally UNIQUE (previously `(org_id, name)`).
 
-### Удаляемые таблицы
+### Dropped tables
 
 ```sql
 DROP TABLE IF EXISTS player_role_assignments CASCADE;
@@ -94,18 +94,18 @@ DROP TABLE IF EXISTS organization_members    CASCADE;
 DROP TABLE IF EXISTS organizations           CASCADE;
 ALTER TABLE audit_log DROP COLUMN org_id;
 TRUNCATE player_api_tokens;
-DELETE FROM role_permissions;  -- сидер перезальёт
+DELETE FROM role_permissions;  -- the seeder will refill it
 ```
 
-### Сидер 5 ролей в SQL миграции
+### Seeding the 5 roles in the SQL migration
 
-`Owner` (red, system) / `Senior Admin` (amber) / `Admin` (sky) / `Moderator` (emerald) / `Viewer` (neutral). Точные permission-set'ы — секция 4. После INSERT'ов и заливки `role_permissions` — `UPDATE panel_meta SET roles_seeded = true`.
+`Owner` (red, system) / `Senior Admin` (amber) / `Admin` (sky) / `Moderator` (emerald) / `Viewer` (neutral). The exact permission sets are in section 4. After the INSERTs and loading `role_permissions` — `UPDATE panel_meta SET roles_seeded = true`.
 
 ### Drizzle schema files
 
-- **Удалить**: `organizations.ts`, `organization-members.ts`, `role-server-scopes.ts`, `player-role-assignments.ts`.
-- **Изменить**: `roles.ts` (без `orgId`/`clearanceLevel`, +`color`), `players.ts` (+`roleId`), `audit-log.ts` (без `orgId`).
-- **Создать**: `panel-meta.ts`.
+- **Delete**: `organizations.ts`, `organization-members.ts`, `role-server-scopes.ts`, `player-role-assignments.ts`.
+- **Change**: `roles.ts` (without `orgId`/`clearanceLevel`, +`color`), `players.ts` (+`roleId`), `audit-log.ts` (without `orgId`).
+- **Create**: `panel-meta.ts`.
 
 ---
 
@@ -113,7 +113,7 @@ DELETE FROM role_permissions;  -- сидер перезальёт
 
 ### Shape
 
-`packages/shared-config/src/permissions.ts` — registry-объекты:
+`packages/shared-config/src/permissions.ts` — registry objects:
 
 ```ts
 export const PERMISSION_CATEGORIES = [
@@ -137,88 +137,88 @@ export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
 export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
 ```
 
-### Полный registry
+### Full registry
 
 | Category | Key | Label (ru) | Flags |
 |---|---|---|---|
-| servers | `server:view` | Видеть серверы и их статус | |
-| servers | `server:install` | Устанавливать серверы | dangerous |
-| servers | `server:start` | Start сервера | |
+| servers | `server:view` | Видеть серверы и их статус (See servers and their status) | |
+| servers | `server:install` | Устанавливать серверы (Install servers) | dangerous |
+| servers | `server:start` | Start сервера (Start the server) | |
 | servers | `server:stop` | Stop (graceful) | |
 | servers | `server:force_stop` | Force-stop (kill) | dangerous |
 | servers | `server:restart` | Restart | |
-| servers | `server:delete` | Удалить сервер с очисткой | dangerous |
+| servers | `server:delete` | Удалить сервер с очисткой (Delete a server with cleanup) | dangerous |
 | servers | `server:edit_settings` | Resource limits, ports, max\_players | |
-| servers | `server:update` | app\_update через SteamCMD | |
-| configs | `config:view` | Читать .cfg файлы | |
-| configs | `config:edit` | Редактировать через Monaco | |
-| configs | `config:rollback` | Откат к предыдущей версии | |
-| players | `player:view` | Список игроков, ник, SteamID | |
-| players | `player:view_ips` | История IP | |
-| players | `player:view_notes` | Заметки про игрока | unimplemented |
-| players | `player:edit_notes` | Редактировать заметки | unimplemented |
-| players | `player:set_flags` | Custom теги (toxic, helpful) | unimplemented |
-| moderation | `mod:kick` | Kick через UI | dangerous, unimplemented |
+| servers | `server:update` | app\_update через SteamCMD (app\_update via SteamCMD) | |
+| configs | `config:view` | Читать .cfg файлы (Read .cfg files) | |
+| configs | `config:edit` | Редактировать через Monaco (Edit via Monaco) | |
+| configs | `config:rollback` | Откат к предыдущей версии (Roll back to the previous version) | |
+| players | `player:view` | Список игроков, ник, SteamID (Player list, nickname, SteamID) | |
+| players | `player:view_ips` | История IP (IP history) | |
+| players | `player:view_notes` | Заметки про игрока (Notes about a player) | unimplemented |
+| players | `player:edit_notes` | Редактировать заметки (Edit notes) | unimplemented |
+| players | `player:set_flags` | Custom теги (toxic, helpful) (Custom tags (toxic, helpful)) | unimplemented |
+| moderation | `mod:kick` | Kick через UI (Kick via the UI) | dangerous, unimplemented |
 | moderation | `mod:warn` | Warn | unimplemented |
 | moderation | `mod:ban_temp` | Temp ban | dangerous, unimplemented |
 | moderation | `mod:ban_perm` | Permanent ban | dangerous, unimplemented |
 | moderation | `mod:unban` | Unban | unimplemented |
-| admin\_groups | `admin_group:view` | Видеть Admins.cfg | unimplemented |
-| admin\_groups | `admin_group:edit` | Редактировать Admins.cfg | unimplemented |
-| whitelist | `whitelist:view` | Видеть whitelist | unimplemented |
-| whitelist | `whitelist:edit` | Управлять whitelist | unimplemented |
+| admin\_groups | `admin_group:view` | Видеть Admins.cfg (See Admins.cfg) | unimplemented |
+| admin\_groups | `admin_group:edit` | Редактировать Admins.cfg (Edit Admins.cfg) | unimplemented |
+| whitelist | `whitelist:view` | Видеть whitelist (See the whitelist) | unimplemented |
+| whitelist | `whitelist:edit` | Управлять whitelist (Manage the whitelist) | unimplemented |
 | host | `host:view` | Dashboard host info | |
-| host | `host:metrics` | Метрики (CPU/RAM/Disk/Net + история) | |
-| host | `host:manage` | Управление хост-демоном (restart bridge) | dangerous |
-| audit | `audit:view` | Читать audit log | |
-| audit | `audit:export` | Export audit в CSV | unimplemented |
+| host | `host:metrics` | Метрики (CPU/RAM/Disk/Net + история) (Metrics (CPU/RAM/Disk/Net + history)) | |
+| host | `host:manage` | Управление хост-демоном (restart bridge) (Manage the host daemon (restart bridge)) | dangerous |
+| audit | `audit:view` | Читать audit log (Read the audit log) | |
+| audit | `audit:export` | Export audit в CSV (Export the audit to CSV) | unimplemented |
 | events | `events:view` | Game events log | |
-| users | `user:view` | Список пользователей панели | |
-| users | `user:manage_roles` | Назначать роли | dangerous |
-| roles | `role:view` | Видеть роли | |
-| roles | `role:create` | Создавать роли | |
-| roles | `role:edit` | Редактировать роли | |
-| roles | `role:delete` | Удалять роли | dangerous |
-| backup | `backup:view` | Список backups | unimplemented |
-| backup | `backup:trigger` | Запустить backup | unimplemented |
-| backup | `backup:restore` | Restore из snapshot | dangerous, unimplemented |
-| api\_tokens | `api_token:create` | Создавать API tokens | |
-| api\_tokens | `api_token:revoke` | Ревокать tokens | |
-| discord | `discord:link` | Привязать Discord | unimplemented |
-| triggers | `trigger:view` | Видеть авто-правила | unimplemented |
-| triggers | `trigger:edit` | Редактировать авто-правила | unimplemented |
-| scheduler | `scheduler:view` | Видеть запланированные задачи | unimplemented |
-| scheduler | `scheduler:edit` | Редактировать расписание | unimplemented |
+| users | `user:view` | Список пользователей панели (List of panel users) | |
+| users | `user:manage_roles` | Назначать роли (Assign roles) | dangerous |
+| roles | `role:view` | Видеть роли (See roles) | |
+| roles | `role:create` | Создавать роли (Create roles) | |
+| roles | `role:edit` | Редактировать роли (Edit roles) | |
+| roles | `role:delete` | Удалять роли (Delete roles) | dangerous |
+| backup | `backup:view` | Список backups (List of backups) | unimplemented |
+| backup | `backup:trigger` | Запустить backup (Start a backup) | unimplemented |
+| backup | `backup:restore` | Restore из snapshot (Restore from a snapshot) | dangerous, unimplemented |
+| api\_tokens | `api_token:create` | Создавать API tokens (Create API tokens) | |
+| api\_tokens | `api_token:revoke` | Ревокать tokens (Revoke tokens) | |
+| discord | `discord:link` | Привязать Discord (Link Discord) | unimplemented |
+| triggers | `trigger:view` | Видеть авто-правила (See auto-rules) | unimplemented |
+| triggers | `trigger:edit` | Редактировать авто-правила (Edit auto-rules) | unimplemented |
+| scheduler | `scheduler:view` | Видеть запланированные задачи (See scheduled tasks) | unimplemented |
+| scheduler | `scheduler:edit` | Редактировать расписание (Edit the schedule) | unimplemented |
 
-### Renames из существующего кода
+### Renames from the existing code
 
-| Было | Стало |
+| Was | Now |
 |---|---|
-| `server:create` | дропается (поглощён `server:install`) |
+| `server:create` | dropped (absorbed by `server:install`) |
 | `server:edit` | `server:edit_settings` |
 | `server:config:write` | `config:edit` |
-| `server:config:history` | `config:rollback` (плюс новый `config:view`) |
-| `player:view_eos_id` | дропается (часть `player:view`) |
-| `player:view_steam_id` | дропается (часть `player:view`) |
-| `user:create` / `user:edit` / `user:delete` | дропаются (нет такого workflow) |
-| `role:manage` | разбивается на `role:view` / `role:create` / `role:edit` / `role:delete` |
-| `permission:manage` | дропается (registry — статика в коде) |
-| `host:bridge_control` | `host:manage` (переименован, теперь dangerous; заменяет ошибочный маппинг на `host:metrics`) |
-| `org:view` / `org:edit` | дропаются (orgs убраны) |
+| `server:config:history` | `config:rollback` (plus the new `config:view`) |
+| `player:view_eos_id` | dropped (part of `player:view`) |
+| `player:view_steam_id` | dropped (part of `player:view`) |
+| `user:create` / `user:edit` / `user:delete` | dropped (there is no such workflow) |
+| `role:manage` | split into `role:view` / `role:create` / `role:edit` / `role:delete` |
+| `permission:manage` | dropped (the registry is static in code) |
+| `host:bridge_control` | `host:manage` (renamed, now dangerous; replaces the erroneous mapping to `host:metrics`) |
+| `org:view` / `org:edit` | dropped (orgs are removed) |
 
-Все `config: { permissions: [...] }` в существующих routes обновляются в той же серии коммитов. `audit-coverage.test.ts` ловит пропуски.
+All `config: { permissions: [...] }` in the existing routes are updated in the same series of commits. `audit-coverage.test.ts` catches any misses.
 
-### Дефолтные permission sets для системных ролей
+### Default permission sets for the system roles
 
-| Роль | Permissions |
+| Role | Permissions |
 |---|---|
-| **Owner** | все ключи из `PERMISSIONS` (включая unimplemented) |
-| **Senior Admin** | всё кроме `server:delete`, `role:delete`, `backup:restore` |
+| **Owner** | all keys from `PERMISSIONS` (including unimplemented) |
+| **Senior Admin** | everything except `server:delete`, `role:delete`, `backup:restore` |
 | **Admin** | `server:view/start/stop/restart/edit_settings`, `config:view/edit/rollback`, `player:view/view_ips`, `mod:kick/warn/ban_temp/unban`, `admin_group:view`, `whitelist:view/edit`, `host:view/metrics`, `audit:view`, `events:view`, `api_token:create/revoke` |
 | **Moderator** | `server:view`, `player:view`, `mod:kick/warn/ban_temp/unban`, `events:view` |
 | **Viewer** | `server:view`, `config:view`, `player:view`, `audit:view`, `host:view`, `events:view`, `role:view`, `user:view`, `admin_group:view`, `whitelist:view`, `backup:view`, `trigger:view`, `scheduler:view` |
 
-### Палитра цветов
+### Color palette
 
 `packages/shared-config/src/role-colors.ts`:
 
@@ -230,27 +230,27 @@ export const ROLE_COLORS = [
 export type RoleColor = (typeof ROLE_COLORS)[number];
 ```
 
-Slug-имена соответствуют Tailwind-классам (`bg-red-500`, `text-red-400` и т.д.) — никаких ad-hoc маппингов в UI. CHECK в SQL дублирует список — синхронизация enforced unit-тестом.
+The slug names match Tailwind classes (`bg-red-500`, `text-red-400`, etc.) — no ad-hoc mappings in the UI. The CHECK in SQL duplicates the list — synchronization is enforced by a unit test.
 
 ---
 
 ## 5. API surface
 
-### Новые / изменённые endpoints
+### New / changed endpoints
 
-| Метод | Path | Permission | Audit action | Body / response |
+| Method | Path | Permission | Audit action | Body / response |
 |---|---|---|---|---|
 | GET | `/api/v1/permissions` | `role:view` | — | `[{key, category, label, dangerous?, unimplemented?}, ...]` |
 | GET | `/api/v1/roles` | `role:view` | — | `[{id, name, color, is_system_role, description, permissions: [...], assigned_users_count}, ...]` |
 | POST | `/api/v1/roles` | `role:create` | `role.create` | body: `{ name, color, description?, permissions: PermissionKey[] }` |
 | GET | `/api/v1/roles/:id` | `role:view` | — | full role object |
-| PUT | `/api/v1/roles/:id` | `role:edit` | `role.update` | body: `{ name?, color?, description?, permissions? }`. 400 для Owner |
-| DELETE | `/api/v1/roles/:id` | `role:delete` | `role.delete` | 400 для Owner. Каскад `players.role_id = NULL` |
+| PUT | `/api/v1/roles/:id` | `role:edit` | `role.update` | body: `{ name?, color?, description?, permissions? }`. 400 for Owner |
+| DELETE | `/api/v1/roles/:id` | `role:delete` | `role.delete` | 400 for Owner. Cascades to `players.role_id = NULL` |
 | GET | `/api/v1/users` | `user:view` | — | `[{steam_id64, canonical_name, role: {...}, assigned_at, assigned_by, last_seen_at}, ...]` |
 | GET | `/api/v1/players/:steamId/role` | `user:view` | — | `{role: {...} \| null}` |
-| PUT | `/api/v1/players/:steamId/role` | `user:manage_roles` | `player.role.assign` | body: `{ role_id: uuid \| null }`. 409 при попытке снять последнего Owner |
+| PUT | `/api/v1/players/:steamId/role` | `user:manage_roles` | `player.role.assign` | body: `{ role_id: uuid \| null }`. 409 when trying to remove the last Owner |
 
-### Удаляемые endpoints
+### Removed endpoints
 
 - `GET /api/v1/players/:steamId/roles` (M:N list)
 - `POST /api/v1/players/:steamId/roles` (M:N add)
@@ -260,7 +260,7 @@ Slug-имена соответствуют Tailwind-классам (`bg-red-500`
 
 ### First-login Owner trick
 
-В `apps/api/src/routes/auth-steam.ts` после успешного Steam OpenID, **внутри одной транзакции** с advisory-lock'ом (паттерн из `d854971`):
+In `apps/api/src/routes/auth-steam.ts`, after a successful Steam OpenID, **inside a single transaction** with an advisory lock (the pattern from `d854971`):
 
 ```sql
 BEGIN;
@@ -274,11 +274,11 @@ UPDATE panel_meta SET first_owner_claimed = true WHERE id = 1;
 COMMIT;
 ```
 
-Если флаг уже `true` или Owner существует — обычный flow: cookie ставится, дальше middleware решает (роль есть → панель, нет → `/no-access`).
+If the flag is already `true` or an Owner exists — the normal flow: the cookie is set, then the middleware decides (a role exists → panel, none → `/no-access`).
 
 ### Cache invalidation
 
-В `apps/api/src/lib/rbac.ts`:
+In `apps/api/src/lib/rbac.ts`:
 
 ```ts
 export function invalidatePermissionCache(steamId64: bigint): void;
@@ -288,77 +288,77 @@ export async function invalidatePermissionCacheForRole(
 ): Promise<void>;
 ```
 
-Вызывается:
+Called:
 - `PUT /players/:id/role` → `invalidatePermissionCache(steamId64)`.
-- `PUT /roles/:id` (изменили permissions) → `invalidatePermissionCacheForRole(roleId)`.
-- `DELETE /roles/:id` → `invalidatePermissionCacheForRole(roleId)` (носители всё равно потеряют роль через `ON DELETE SET NULL`, но кэш чистим явно).
+- `PUT /roles/:id` (permissions were changed) → `invalidatePermissionCacheForRole(roleId)`.
+- `DELETE /roles/:id` → `invalidatePermissionCacheForRole(roleId)` (the holders will lose the role anyway via `ON DELETE SET NULL`, but the cache is cleared explicitly).
 
-TTL 30s остаётся как safety-net.
+The 30s TTL remains as a safety net.
 
-### Удаляемые из rbac.ts
+### Removed from rbac.ts
 
-- `hasServerPermission` — нет per-server scoping.
-- Логика `clearance` в `loadUserPermissions` (была `MAX` по нескольким ролям, теперь не нужна).
+- `hasServerPermission` — there is no per-server scoping.
+- The `clearance` logic in `loadUserPermissions` (it used to be a `MAX` over several roles, no longer needed).
 
 ---
 
 ## 6. UI
 
-### Новые страницы
+### New pages
 
 **`/roles`** (permission `role:view`)
-Список ролей. Колонки: цветной маркер-точка слева от имени, имя, описание, "пользователей: N", `is_system_role` бэдж "Системная" для Owner, кнопки "Редактировать" / "Удалить" (последняя disabled для Owner). Кнопка "Создать роль" наверху (только если permission `role:create`).
+Role list. Columns: a colored marker dot to the left of the name, name, description, "пользователей: N" (users: N), `is_system_role` badge "Системная" (System) for Owner, buttons "Редактировать" (Edit) / "Удалить" (Delete) (the latter is disabled for Owner). A "Создать роль" (Create role) button at the top (only if the user has the `role:create` permission).
 
-**`/roles/new`** и **`/roles/:id`** (permissions `role:create` / `role:edit`)
-Редактор роли. Блоки:
-1. Имя (`<input>`) + color-picker (16 swatch'ей grid).
-2. Описание (`<textarea>` опционально).
-3. Permissions: search-bar (filter realtime по `label.toLowerCase().includes(q) || key.includes(q)`), под ним 16 категорий в трёхколоночном responsive grid. В каждой категории — чекбоксы с label, ⚠️-бейдж справа для `dangerous`, "затенённый" стиль (opacity-50 + подпись "в разработке") для `unimplemented`.
-4. Owner — read-only mode: вместо кнопки "Сохранить" — alert "Системная роль. Permissions нельзя редактировать.", все чекбоксы disabled.
-5. Кнопка "Скопировать права из…" (P1, dropdown с другими ролями) в форме создания. При выборе чекбоксы пред-заполняются permissions выбранной роли.
-6. Кнопки "Сохранить" / "Отмена".
+**`/roles/new`** and **`/roles/:id`** (permissions `role:create` / `role:edit`)
+Role editor. Blocks:
+1. Name (`<input>`) + a color picker (a grid of 16 swatches).
+2. Description (`<textarea>`, optional).
+3. Permissions: a search bar (realtime filter by `label.toLowerCase().includes(q) || key.includes(q)`), under it 16 categories in a three-column responsive grid. Each category has checkboxes with labels, a ⚠️ badge on the right for `dangerous`, and a "dimmed" style (opacity-50 + the caption "в разработке" (in development)) for `unimplemented`.
+4. Owner — read-only mode: instead of the "Сохранить" (Save) button — an alert "Системная роль. Permissions нельзя редактировать." (System role. Permissions cannot be edited.), all checkboxes disabled.
+5. A "Скопировать права из…" (Copy permissions from…) button (P1, a dropdown with the other roles) in the create form. When one is selected, the checkboxes are pre-filled with the permissions of the selected role.
+6. "Сохранить" (Save) / "Отмена" (Cancel) buttons.
 
 **`/users`** (permission `user:view`)
-Таблица. Колонки: ник + цветная точка-роли, SteamID64 (моноширинный, ссылка на Steam profile), название роли, кто/когда назначил, last\_seen. Кнопка "Назначить роль игроку" → modal: typeahead-поиск по `players` (debounced GET к `/api/v1/players?q=`), при выборе — dropdown ролей (пустых option = "снять роль" нет, для назначения отсутствие роли не имеет смысла), кнопка "Назначить" (требует `user:manage_roles`).
+Table. Columns: nickname + the role's colored dot, SteamID64 (monospaced, a link to the Steam profile), role name, who/when assigned, last\_seen. A "Назначить роль игроку" (Assign a role to a player) button → a modal: typeahead search over `players` (debounced GET to `/api/v1/players?q=`), on selection — a roles dropdown (there is no empty option = "remove role": for an assignment, having no role makes no sense), a "Назначить" (Assign) button (requires `user:manage_roles`).
 
-При выборе **Owner** в любом dropdown'е (на `/users` или на `/players/:id`) — confirm-dialog: "Это даст пользователю **полный доступ** к панели. Подтвердить?" Без подтверждения PUT не отправляется. Снижает риск эскалации (см. Section 10).
+When **Owner** is selected in any dropdown (on `/users` or on `/players/:id`) — a confirm dialog: "Это даст пользователю **полный доступ** к панели. Подтвердить?" (This will give the user **full access** to the panel. Confirm?) Without confirmation the PUT is not sent. This reduces the escalation risk (see Section 10).
 
-### Изменяемые страницы
+### Changed pages
 
-**`/players/:steam_id64`** — секция `PanelAccessSection`
-Сейчас (после `825d94c`) рисует список из нескольких ролей с кнопками "Удалить". После изменений: одно поле "Роль" — read-only текст с цветной точкой если роль есть, "—" если нет. Кнопки рядом: "Изменить" (открывает inline dropdown ролей) и "Снять роль" (если роль есть). Owner-lockout 409 показывается понятным сообщением.
+**`/players/:steam_id64`** — the `PanelAccessSection`
+Currently (after `825d94c`) it renders a list of several roles with "Удалить" (Delete) buttons. After the changes: a single "Роль" (Role) field — read-only text with a colored dot if there is a role, "—" if there is none. Buttons next to it: "Изменить" (Edit; opens an inline roles dropdown) and "Снять роль" (Remove role; if there is a role). The Owner-lockout 409 is shown with a clear message.
 
-### Удаляемые страницы
+### Removed pages
 
-- **`/setup`** (вся директория `apps/web/src/app/setup/`) — wizard уходит.
-- **Login redirect**: в `apps/web/src/app/login/` редирект на `/setup` (commit `9c938ca`) убирается.
+- **`/setup`** (the entire `apps/web/src/app/setup/` directory) — the wizard goes away.
+- **Login redirect**: in `apps/web/src/app/login/`, the redirect to `/setup` (commit `9c938ca`) is removed.
 
 ### Sidebar / nav
 
-Добавляются пункты:
-- "Роли" под `role:view`
-- "Пользователи" под `user:view`
+Items added:
+- "Роли" (Roles) under `role:view`
+- "Пользователи" (Users) under `user:view`
 
-В `apps/web/src/app/(dashboard)/layout.tsx` (или где живёт nav) — динамическая фильтрация по `req.user.permissions`.
+In `apps/web/src/app/(dashboard)/layout.tsx` (or wherever the nav lives) — dynamic filtering by `req.user.permissions`.
 
 ---
 
 ## 7. Migration sequence
 
-Текущий бранч `feat/steam-only-login` мержится в master (он ready, api-tokens завершены, decision-record написан). Новая работа — в бранче `feat/panel-rbac`. Серия коммитов:
+The current branch `feat/steam-only-login` is merged into master (it is ready, api-tokens are complete, the decision record is written). The new work goes in the `feat/panel-rbac` branch. A series of commits:
 
-1. **`feat(db): 0009_panel_rbac migration + drizzle schema rebuild`** — single-transaction SQL: drop org-таблиц + M:N + role\_server\_scopes, alter roles (drop org\_id/clearance, add color), alter players (add role\_id), create panel\_meta, truncate role\_permissions + player\_api\_tokens, INSERT 5 системных ролей и их permissions, `panel_meta.roles_seeded = true`. Drizzle schema: удалить/добавить/изменить файлы. Удалить `packages/db/src/seed/system-roles.ts`.
-2. **`feat(shared-config): permission registry + role colors`** — registry-объекты, role-colors palette, `permissions.test.ts`, `role-defaults.test.ts`, `role-colors.test.ts`.
-3. **`refactor(api/rbac): single-role lookup + invalidation`** — переписать `loadUserPermissions` под `players.role_id`, добавить `invalidatePermissionCacheForRole`, удалить `hasServerPermission`. Unit-тесты.
-4. **`feat(api/roles): GET /permissions + CRUD /roles`** — endpoints с Owner-guard и audit'ом.
-5. **`feat(api/users): GET /users + PUT /players/:id/role`** — удалить старые `/players/:id/roles` endpoints. Owner-lockout invariant.
-6. **`feat(api/auth): first-login owner trick + drop /setup`** — advisory-lock сценарий в Steam-callback, удалить `routes/setup.ts`. Permission-rename'ы во всех `config.permissions`. `audit-coverage.test.ts` обновится автоматически.
-7. **`feat(web/roles): /roles list + editor`** — color-picker, search над permissions, категории, ⚠️/unimplemented стили.
-8. **`feat(web/users): /users table + assign modal`** — typeahead, dropdown ролей.
-9. **`refactor(web): single-role PanelAccessSection + drop /setup + nav`** — переписать секцию на `/players/:id`, удалить `/setup`, добавить пункты в sidebar.
-10. **`docs(rbac): component dir + decision record + cross-references`** — `docs/components/rbac/{README,api,data-model,flows,configuration,testing,troubleshooting,changelog}.md`. Обновить `docs/architecture/rbac.md` (single-role + новый registry). Decision-record в `docs/architecture/decisions.md`. Удалить упоминания `/setup` и `clearance` из всех старых docs.
+1. **`feat(db): 0009_panel_rbac migration + drizzle schema rebuild`** — a single-transaction SQL: drop the org tables + M:N + role\_server\_scopes, alter roles (drop org\_id/clearance, add color), alter players (add role\_id), create panel\_meta, truncate role\_permissions + player\_api\_tokens, INSERT the 5 system roles and their permissions, `panel_meta.roles_seeded = true`. Drizzle schema: delete/add/change files. Delete `packages/db/src/seed/system-roles.ts`.
+2. **`feat(shared-config): permission registry + role colors`** — registry objects, the role-colors palette, `permissions.test.ts`, `role-defaults.test.ts`, `role-colors.test.ts`.
+3. **`refactor(api/rbac): single-role lookup + invalidation`** — rewrite `loadUserPermissions` on top of `players.role_id`, add `invalidatePermissionCacheForRole`, delete `hasServerPermission`. Unit tests.
+4. **`feat(api/roles): GET /permissions + CRUD /roles`** — endpoints with the Owner guard and auditing.
+5. **`feat(api/users): GET /users + PUT /players/:id/role`** — delete the old `/players/:id/roles` endpoints. The Owner-lockout invariant.
+6. **`feat(api/auth): first-login owner trick + drop /setup`** — the advisory-lock scenario in the Steam callback, delete `routes/setup.ts`. Permission renames in all `config.permissions`. `audit-coverage.test.ts` updates automatically.
+7. **`feat(web/roles): /roles list + editor`** — color picker, search over permissions, categories, ⚠️/unimplemented styles.
+8. **`feat(web/users): /users table + assign modal`** — typeahead, roles dropdown.
+9. **`refactor(web): single-role PanelAccessSection + drop /setup + nav`** — rewrite the section on `/players/:id`, delete `/setup`, add the sidebar items.
+10. **`docs(rbac): component dir + decision record + cross-references`** — `docs/components/rbac/{README,api,data-model,flows,configuration,testing,troubleshooting,changelog}.md`. Update `docs/architecture/rbac.md` (single-role + the new registry). A decision record in `docs/architecture/decisions.md`. Remove mentions of `/setup` and `clearance` from all the old docs.
 
-После каждого шага: `pnpm turbo run typecheck && pnpm turbo run test` зелёный AND **manual e2e на live стенде** по сценарию из секции 8.
+After each step: `pnpm turbo run typecheck && pnpm turbo run test` is green AND a **manual e2e on the live stand** following the scenario from section 8.
 
 ---
 
@@ -366,71 +366,71 @@ TTL 30s остаётся как safety-net.
 
 ### Tier 1 — unit
 
-- **`permissions.test.ts`**: ключи уникальны, все категории из `PERMISSION_CATEGORIES` существуют (нет orphan), `dangerous`/`unimplemented` — `true | undefined`, никогда `false`.
-- **`role-defaults.test.ts`**: каждый ключ в дефолтных permission-set'ах (Owner / Senior Admin / Admin / Moderator / Viewer) ∈ `PERMISSION_KEYS`. Owner = ALL. Viewer не содержит ничего кроме `*:view`.
-- **`role-colors.test.ts`**: `ROLE_COLORS` совпадает с CHECK constraint в SQL миграции (читает текст файла миграции, парсит).
-- **`rbac.test.ts`**: `loadUserPermissions(NULL role_id)` → пустой set; non-NULL → корректный set; cache hit/miss; `invalidatePermissionCache` чистит ключ; `invalidatePermissionCacheForRole` находит всех носителей и чистит их.
+- **`permissions.test.ts`**: keys are unique, all categories from `PERMISSION_CATEGORIES` exist (no orphans), `dangerous`/`unimplemented` are `true | undefined`, never `false`.
+- **`role-defaults.test.ts`**: every key in the default permission sets (Owner / Senior Admin / Admin / Moderator / Viewer) ∈ `PERMISSION_KEYS`. Owner = ALL. Viewer contains nothing except `*:view`.
+- **`role-colors.test.ts`**: `ROLE_COLORS` matches the CHECK constraint in the SQL migration (reads the migration file text and parses it).
+- **`rbac.test.ts`**: `loadUserPermissions(NULL role_id)` → an empty set; non-NULL → the correct set; cache hit/miss; `invalidatePermissionCache` clears the key; `invalidatePermissionCacheForRole` finds all holders and clears them.
 
 ### Tier 2 — integration (apps/api/test/)
 
-- **`roles-crud.test.ts`** — POST/GET/PUT/DELETE с разными permission-фикстурами. Owner read-only (PUT/DELETE → 400). UNIQUE name (POST дубликата → 409). `assigned_users_count` в GET корректный.
-- **`player-role-assign.test.ts`** — PUT валидный role\_id; PUT с несуществующим → 404; PUT `null` снимает роль; Owner-lockout: попытка снять последнего Owner → 409. Cache invalidation: PUT, потом фейковый запрос с проверкой permissions — должен использовать новый set без TTL-ожидания.
-- **`users-list.test.ts`** — GET фильтрует по `role_id NOT NULL`; join с roles работает; `assigned_at`/`assigned_by` присутствуют.
-- **`permissions-list.test.ts`** — GET возвращает ровно `PERMISSIONS.length` объектов с правильными полями.
-- **`first-owner-trick.test.ts`** — два concurrent логина дают одного Owner'а (advisory-lock). После `first_owner_claimed = true` следующий fresh-логин получает `role_id = NULL`.
-- **`audit-coverage.test.ts`** — обновляется автоматически (route-walker).
-- **`setup-removed.test.ts`** — `/api/v1/setup/check-env`, `/api/v1/setup/init` возвращают 404.
-- **`permission-rename-coverage.test.ts`** — grep'ает все TS-файлы apps/api/src на старые ключи (`server:edit`, `server:config:write`, `role:manage` и т.д.) — должен возвращать 0 совпадений (защита от пропущенного rename).
+- **`roles-crud.test.ts`** — POST/GET/PUT/DELETE with different permission fixtures. Owner is read-only (PUT/DELETE → 400). UNIQUE name (POST of a duplicate → 409). `assigned_users_count` in GET is correct.
+- **`player-role-assign.test.ts`** — PUT with a valid role\_id; PUT with a nonexistent one → 404; PUT `null` removes the role; Owner-lockout: an attempt to remove the last Owner → 409. Cache invalidation: PUT, then a fake request that checks permissions — it must use the new set without waiting for the TTL.
+- **`users-list.test.ts`** — GET filters by `role_id NOT NULL`; the join with roles works; `assigned_at`/`assigned_by` are present.
+- **`permissions-list.test.ts`** — GET returns exactly `PERMISSIONS.length` objects with the right fields.
+- **`first-owner-trick.test.ts`** — two concurrent logins yield exactly one Owner (advisory lock). After `first_owner_claimed = true`, the next fresh login gets `role_id = NULL`.
+- **`audit-coverage.test.ts`** — updates automatically (route walker).
+- **`setup-removed.test.ts`** — `/api/v1/setup/check-env`, `/api/v1/setup/init` return 404.
+- **`permission-rename-coverage.test.ts`** — greps all the TS files in apps/api/src for the old keys (`server:edit`, `server:config:write`, `role:manage`, etc.) — it must return 0 matches (protection against a missed rename).
 
 ### Tier 3 — e2e (apps/api/test/e2e/)
 
-**`panel-rbac.e2e.test.ts`** — новый файл рядом с `install-lifecycle.e2e.test.ts`. Сценарий через HTTP с реальной cookie:
+**`panel-rbac.e2e.test.ts`** — a new file next to `install-lifecycle.e2e.test.ts`. A scenario over HTTP with a real cookie:
 
-1. POST `/api/v1/roles` body `{name: "Test", color: "blue", permissions: ["server:view"]}` → 201, возвращает id.
+1. POST `/api/v1/roles` body `{name: "Test", color: "blue", permissions: ["server:view"]}` → 201, returns the id.
 2. PUT `/api/v1/players/:secondary/role` `{role_id: testId}` → 200.
-3. GET `/api/v1/servers` от secondary user → 200 (есть `server:view`).
-4. GET `/api/v1/audit` от secondary → 403 (нет `audit:view`).
+3. GET `/api/v1/servers` as the secondary user → 200 (has `server:view`).
+4. GET `/api/v1/audit` as secondary → 403 (no `audit:view`).
 5. PUT `/api/v1/roles/:testId` body `{permissions: []}` → 200.
-6. GET `/api/v1/servers` от secondary → 403 (инвалидация сработала, не ждём TTL).
+6. GET `/api/v1/servers` as secondary → 403 (invalidation worked, no waiting for the TTL).
 7. DELETE `/api/v1/roles/:testId` → 200.
-8. GET `/api/v1/me` от secondary → role: null.
+8. GET `/api/v1/me` as secondary → role: null.
 9. PUT `/api/v1/players/:owner/role` `{role_id: null}` → 409 `cannot_remove_last_owner`.
 
-### Manual validation gate (требование пользователя)
+### Manual validation gate (a user requirement)
 
-После **каждого** из шагов 1-9 — оператор проходит руками:
+After **each** of steps 1-9, the operator goes through this by hand:
 
-1. Залогиниться как Owner. Видит `/roles`, `/users` в sidebar.
-2. Создать роль "Test" цветом blue, выдать `server:view`.
-3. Через `/users` назначить роль второму игроку (typeahead-поиском).
-4. Залогиниться как этот игрок. Sidebar показывает только "Серверы" (никаких других пунктов).
-5. Owner редактирует роль "Test" → убирает `server:view` → второй игрок при следующем нажатии получает 403/redirect.
-6. Owner удаляет роль "Test" → второй игрок попадает на `/no-access` при следующем запросе.
-7. Owner на `/players/:secondary` восстанавливает (выдаёт Viewer).
+1. Log in as Owner. They see `/roles`, `/users` in the sidebar.
+2. Create a "Test" role with the color blue, grant it `server:view`.
+3. Via `/users`, assign the role to a second player (using the typeahead search).
+4. Log in as that player. The sidebar shows only "Серверы" (Servers) (no other items).
+5. The Owner edits the "Test" role → removes `server:view` → the second player gets a 403/redirect on the next click.
+6. The Owner deletes the "Test" role → the second player lands on `/no-access` on the next request.
+7. The Owner restores access on `/players/:secondary` (grants Viewer).
 
-Без зелёных автотестов **И** ручного прохода — шаг не считается завершённым. Это блокирующий gate.
+Without green automated tests **AND** a manual pass, a step is not considered complete. This is a blocking gate.
 
 ---
 
 ## 9. Out of scope
 
-- **Иерархия / clearance levels** — отказались.
-- **Per-server permission scoping** — отказались, таблица `role_server_scopes` дропается.
-- **Multi-tenancy / orgs** — `organizations` дропается.
-- **Setup wizard / env-check page** — удаляется, first-login Owner trick на Steam-callback заменяет.
-- **Bulk-операции в `/users`** (mass assign/revoke) — будущий P1.
-- **Composition of roles / inheritance** — роль плоская, никаких "Senior Admin extends Admin".
-- **Expiring role assignments** — назначение бессрочное.
-- **UI для управления permission registry** — registry это код, меняет программист.
-- **Triggers / Scheduler / Whitelist / Backup / Discord / Moderation actions / Player notes** UI — permissions добавляются как `unimplemented` стабы; routes/UI — отдельные эпики.
-- **Discord-link** — `discord:link` permission stub, UI/route — отдельный эпик.
+- **Hierarchy / clearance levels** — rejected.
+- **Per-server permission scoping** — rejected, the `role_server_scopes` table is dropped.
+- **Multi-tenancy / orgs** — `organizations` is dropped.
+- **Setup wizard / env-check page** — removed, the first-login Owner trick on the Steam callback replaces it.
+- **Bulk operations in `/users`** (mass assign/revoke) — a future P1.
+- **Role composition / inheritance** — a role is flat, no "Senior Admin extends Admin".
+- **Expiring role assignments** — an assignment is permanent.
+- **A UI for managing the permission registry** — the registry is code; a programmer changes it.
+- **Triggers / Scheduler / Whitelist / Backup / Discord / Moderation actions / Player notes** UI — the permissions are added as `unimplemented` stubs; routes/UI are separate epics.
+- **Discord link** — the `discord:link` permission is a stub; UI/route is a separate epic.
 
 ---
 
 ## 10. Risks
 
-- **Эскалация через `user:manage_roles`**: пользователь с этим правом может выдать кому-то Owner. Митigation: документировать как "give to trusted only"; в UI — confirm-dialog при назначении Owner'а ("Это даст полный доступ к панели. Подтвердить?"); ⚠️-бейдж на permission в редакторе.
-- **In-memory кэш в multi-instance API**: точечная инвалидация работает только в одном процессе. На сейчас compose запускает один инстанс — не блокер. При горизонтальном масштабировании — Redis pub/sub в отдельном эпике.
-- **Permission rename-расхождение**: если route ссылается на старое имя, типы поймают (PermissionKey union); `permission-rename-coverage.test.ts` подстраховывает.
-- **Сидер ролей в SQL vs Drizzle types**: миграция INSERT'ит роли с фиксированными именами; типы Drizzle не знают про конкретные UUID. Тесты ожидают присутствие записей по `name`, не по id — это приемлемо, имена стабильные.
-- **`is_system_role = true` только у Owner**: оператор может удалить, например, Moderator. После этого никто его не воссоздаёт автоматически (по дизайну). Документируется в `troubleshooting.md`.
+- **Escalation via `user:manage_roles`**: a user with this permission can grant someone Owner. Mitigation: document it as "give to trusted only"; in the UI — a confirm dialog when assigning Owner ("Это даст полный доступ к панели. Подтвердить?" (This will give full access to the panel. Confirm?)); a ⚠️ badge on the permission in the editor.
+- **In-memory cache in a multi-instance API**: targeted invalidation works only within a single process. For now compose runs one instance — not a blocker. With horizontal scaling — Redis pub/sub in a separate epic.
+- **Permission rename drift**: if a route references an old name, the types will catch it (the PermissionKey union); `permission-rename-coverage.test.ts` is the backstop.
+- **Role seeder in SQL vs Drizzle types**: the migration INSERTs roles with fixed names; the Drizzle types know nothing about specific UUIDs. The tests expect records to be present by `name`, not by id — this is acceptable, the names are stable.
+- **`is_system_role = true` only for Owner**: an operator can delete, for example, Moderator. After that nobody recreates it automatically (by design). This is documented in `troubleshooting.md`.

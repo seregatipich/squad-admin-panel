@@ -1,44 +1,44 @@
-# План исправления выбора срока роли (#268)
+# Plan for fixing the role expiry selection (#268)
 
-## Цель
+## Goal
 
-Сделать обе формы назначения роли однозначными и одинаковыми: оператор видит
-дату только как `ДД/ММ/ГГГГ`, открывает календарь нажатием по всей области поля
-и понимает назначение необязательного комментария.
+Make both role assignment forms unambiguous and identical: the operator sees
+the date only as `ДД/ММ/ГГГГ` (DD/MM/YYYY), opens the calendar by clicking anywhere in the field area,
+and understands the purpose of the optional comment.
 
-## Принятые решения
+## Decisions made
 
-- Один общий `RoleExpiryDateField` используется в модальном окне `/users` и в
-  редакторе роли карточки игрока.
-- Внешнее представление даты не зависит от языка браузера: выбранное
-  `YYYY-MM-DD` отображается как `ДД/ММ/ГГГГ`.
-- Кнопка размером со всё поле синхронно вызывает нативный `showPicker()`.
-  Скрытый `input[type=date]` остаётся источником календаря и ISO-значения без
-  новой зависимости.
-- Пустое значение означает бессрочную роль. Выбранная дата включается целиком:
-  API получает последний миллисекундный момент выбранного UTC-дня. Это даёт
-  стабильный обратный переход в дату независимо от часового пояса браузера.
-- Под полем явно написано правило конца дня и бессрочности. Под комментарием —
-  что это необязательная причина, видимая другим администраторам.
+- One shared `RoleExpiryDateField` is used in the `/users` modal and in
+  the role editor of the player card.
+- The external representation of the date does not depend on the browser language: the selected
+  `YYYY-MM-DD` is displayed as `ДД/ММ/ГГГГ`.
+- A button the size of the whole field synchronously calls the native `showPicker()`.
+  The hidden `input[type=date]` remains the source of the calendar and the ISO value without
+  a new dependency.
+- An empty value means a permanent role. The selected date is inclusive of the whole day:
+  the API receives the last millisecond of the selected UTC day. This gives a
+  stable round trip back to the date regardless of the browser's time zone.
+- Under the field the end-of-day and permanence rule is stated explicitly. Under the comment,
+  that it is an optional reason visible to other administrators.
 
-## Шаги
+## Steps
 
-1. Добавить красные модульные проверки преобразования даты, строгого русского
-   представления, открытия календаря по всей кнопке и очистки значения.
-2. Добавить красные проверки обеих реальных форм: отсутствие
-   `datetime-local`, наличие понятных подписей и формат `ДД/ММ/ГГГГ`.
-3. Реализовать общий компонент и UTC-преобразования, подключить их в обе формы.
-4. Обновить документацию веб-компонента и браузерные сценарии `/users` и
-   карточки игрока.
-5. Провести красную/зелёную проверку, типизацию, Biome, сборку и реальную
-   Playwright-приёмку на настольной и мобильной ширине.
-6. Самостоятельно прочитать полный diff, влить ветку в `dev`, дождаться зелёного
-   CI, затем быстро продвинуть тот же SHA в `master`, проверить выпуск и оставить
-   в issue полное подтверждение готовности.
+1. Add red unit checks for the date conversion, the strict Russian
+   representation, opening the calendar from the whole button, and clearing the value.
+2. Add red checks for both real forms: no
+   `datetime-local`, clear labels present, and the `ДД/ММ/ГГГГ` format.
+3. Implement the shared component and the UTC conversions, and wire them into both forms.
+4. Update the web component documentation and the browser scenarios for `/users` and
+   the player card.
+5. Run the red/green check, typing, Biome, the build and a real
+   Playwright acceptance at desktop and mobile widths.
+6. Read the full diff yourself, merge the branch into `dev`, wait for green
+   CI, then fast-forward the same SHA to `master`, verify the release and leave
+   full readiness confirmation in the issue.
 
-## Не входит
+## Out of scope
 
-- Изменение API или схемы БД.
-- Изменение точных календарей планировщика: там время суток является частью
-  предметного договора и `datetime-local` остаётся корректным.
-- Подключение сторонней библиотеки календаря.
+- Changing the API or the DB schema.
+- Changing the exact calendars of the scheduler: there the time of day is part of the
+  domain contract and `datetime-local` remains correct.
+- Adding a third-party calendar library.

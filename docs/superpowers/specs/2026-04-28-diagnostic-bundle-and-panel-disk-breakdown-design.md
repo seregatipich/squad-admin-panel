@@ -8,9 +8,9 @@ Related work: `docs/superpowers/specs/2026-04-25-panel-observability-design.md` 
 
 Operator can answer three questions without ssh and without a dedicated page for each:
 
-1. **«что произошло» / «что было до отключения»** — reconstruct a 5-minute timeline of panel-internal events around any unexpected shutdown (Squad container exit, bridge disconnect, worker heartbeat lost, RCON auth fail, panic).
-2. **«почему панель странно себя ведёт сейчас»** — dump current connector state + recent error/warn stream of every panel component, ready to paste into a coding agent.
-3. **«сколько диска ест панель против всего остального»** — see panel-owned storage broken out from total host disk usage, with per-server detail one click away.
+1. **"what happened" / "what was going on before the disconnect"** — reconstruct a 5-minute timeline of panel-internal events around any unexpected shutdown (Squad container exit, bridge disconnect, worker heartbeat lost, RCON auth fail, panic).
+2. **"why is the panel behaving strangely right now"** — dump current connector state + recent error/warn stream of every panel component, ready to paste into a coding agent.
+3. **"how much disk does the panel eat versus everything else"** — see panel-owned storage broken out from total host disk usage, with per-server detail one click away.
 
 The deliverable is **two minimally-invasive UI changes** (a topbar diagnostics popover + a sub-segment on the existing disk widget) and the supporting backend.
 
@@ -237,11 +237,11 @@ Path/volume/image allowlist enforcement is identical to existing bridge methods 
 
 **UI changes (existing dashboard disk widget, `apps/web/src/app/(dashboard)/dashboard/page.tsx`):**
 
-- Disk widget renders the existing horizontal bar (currently single segment colored by used%). Add a **second sub-segment in a distinct color** representing `panel_used / host_total`. Both segments together still equal the existing `used / host_total = 23.2%` value — the sub-segment is a slice INSIDE the used portion, not in addition to it. Legend below the bar: small `■ Панель X.X% · ■ Прочее Y.Y%`. Numbers must always sum to the displayed total.
-- **Click on the disk widget** opens an existing-style modal (similar to `MetricHistoryModal`) titled «Что занимает панель»:
+- Disk widget renders the existing horizontal bar (currently single segment colored by used%). Add a **second sub-segment in a distinct color** representing `panel_used / host_total`. Both segments together still equal the existing `used / host_total = 23.2%` value — the sub-segment is a slice INSIDE the used portion, not in addition to it. Legend below the bar: small `■ Панель X.X% · ■ Прочее Y.Y%` (Panel / Other). Numbers must always sum to the displayed total.
+- **Click on the disk widget** opens an existing-style modal (similar to `MetricHistoryModal`) titled «Что занимает панель» (What the panel takes up):
   - Donut chart: configs / saved / depot volume / pg volume / redis volume / docker images / audit archive
-  - Sortable table «по серверам»: display name | configs MB | saved GB | total. Clicking a row navigates to `/servers/[id]`.
-  - Footer: `Обновлено N сек назад` + ↻ refresh button (force-bypasses both API and bridge cache)
+  - Sortable table «по серверам» (by server): display name | configs MB | saved GB | total. Clicking a row navigates to `/servers/[id]`.
+  - Footer: `Обновлено N сек назад` (Updated N s ago) + ↻ refresh button (force-bypasses both API and bridge cache)
 
 No other surfaces are touched.
 
@@ -249,9 +249,9 @@ No other surfaces are touched.
 
 ### 4.1 Diagnostics popover (new)
 
-Lives in `apps/web/src/app/(dashboard)/layout.tsx` topbar, rendered next to the user menu. Icon button (lucide `Bug` or `FileText`) with tooltip «Диагностика». Visible only to users with `host:manage` (gated client-side, enforced server-side).
+Lives in `apps/web/src/app/(dashboard)/layout.tsx` topbar, rendered next to the user menu. Icon button (lucide `Bug` or `FileText`) with tooltip «Диагностика» (Diagnostics). Visible only to users with `host:manage` (gated client-side, enforced server-side).
 
-Click opens a small popover (existing `Popover` primitive):
+Click opens a small popover (existing `Popover` primitive; mock-up labels: Диагностика = Diagnostics, Окно = Window, 15 минут / 1 час / 6 часов / 24 часа = 15 minutes / 1 hour / 6 hours / 24 hours, Скачать .md = Download .md, Очистить логи = Clear logs):
 
 ```
 Диагностика
@@ -268,8 +268,8 @@ Click opens a small popover (existing `Popover` primitive):
 [ Очистить логи ]   ← red, requires confirm
 ```
 
-- **Скачать**: triggers `GET /api/v1/host/diagnostics/bundle?window=...` with `responseType: blob`; browser saves the file. Loading state on button; error toast on 4xx/5xx.
-- **Очистить логи**: confirm modal («Удалит все диагностические события за последние 24 часа. Восстановить нельзя. audit_log не трогается.») → `POST /api/v1/host/diagnostics/wipe`. On success: toast «Очищено N событий», popover stays open.
+- **Скачать** (Download): triggers `GET /api/v1/host/diagnostics/bundle?window=...` with `responseType: blob`; browser saves the file. Loading state on button; error toast on 4xx/5xx.
+- **Очистить логи** (Clear logs): confirm modal («Удалит все диагностические события за последние 24 часа. Восстановить нельзя. audit_log не трогается.» — Deletes all diagnostic events from the last 24 hours. Cannot be undone. audit_log is not touched.) → `POST /api/v1/host/diagnostics/wipe`. On success: toast «Очищено N событий» (Cleared N events), popover stays open.
 
 ### 4.2 Disk widget extension
 
@@ -287,7 +287,7 @@ Two parallel tracks that share Phase 1+2 as foundation.
 | **A2. Instrumentation** | Wire `diag.emit` into all sources listed in §3.3. Bridge-side journald → diag stream exporter. Audit-coverage test extension: any route that flips `server.status` must emit a corresponding `server.*` diag event. | A1 |
 | **A3. Bundle endpoint** | `apps/api/src/routes/diagnostics.ts`: builder for §0–§7 with redaction, 400 KB cap with truncation report, Redis cache. New bridge RPC `file_read_tail` (offset-from-end + max_bytes) used to read `SquadGame.log` without slurping multi-MB files. Wipe endpoint. Unit tests per section, golden test against a fixed event fixture. | A2 |
 | **A4. Incident builder (§1)** | Trigger detection, T-5min context window query, classification heuristic, grouping. Plug into bundle builder behind a feature flag (`diag.incidents_enabled` env, default true once stable). | A3 |
-| **A5. Diagnostics popover UI** | `<DiagnosticsMenu>` in topbar layout. Radio + Скачать + Очистить. RBAC gating client-side. Confirm modal on wipe. Playwright e2e: click → blob → structure assertion. | A3 (A4 optional but desired) |
+| **A5. Diagnostics popover UI** | `<DiagnosticsMenu>` in topbar layout. Radio + Скачать (Download) + Очистить (Clear). RBAC gating client-side. Confirm modal on wipe. Playwright e2e: click → blob → structure assertion. | A3 (A4 optional but desired) |
 
 **Track B — Panel disk breakdown**
 
@@ -309,14 +309,14 @@ Track A and Track B are independent. Either can ship first. A1+A2 are mandatory 
 | Bundle endpoint blows API memory with concurrent requests | Throttle 1/30s per user; Redis cache shared across tabs; builder streams sections as they're rendered, never holds full bundle in memory beyond the cap |
 | Wipe destroys evidence during an active incident | Wipe is `host:manage`-only and the action itself is in `audit_log`; UI confirm dialog spells out consequences |
 | Sensitive data leaks in bundle | Redaction list applied to every rendered string; `Rcon.cfg` content is structurally excluded (only sha + metadata); golden test asserts no `password=` substring leaks |
-| Modal "по серверам" with 100+ servers becomes a wall of text | Sort by saved-bytes desc, paginate at 25 rows; no infinite scroll |
+| Modal "по серверам" (by server) with 100+ servers becomes a wall of text | Sort by saved-bytes desc, paginate at 25 rows; no infinite scroll |
 
 ## 7. Testing
 
 - **Unit**: `diag.emit` (Redis-up + Redis-down fallback paths), redaction regex, classification heuristic, dedup logic in §2 builder, file_read_tail bridge RPC.
 - **Integration (Tier 2)**: bundle endpoint over Fastify `inject()` with seeded `diagnostic_events` fixture → assert sections present, ordering, redaction applied, truncation report when oversized. Wipe endpoint: post → assert TRUNCATE + audit_log row + diag:queue empty. Disk-usage endpoint: stub bridge response → assert derived percentages.
 - **Golden test**: fixed event corpus → expected markdown bundle. Updated by `pnpm test -u` only when human-reviewed; CI fails on diff.
-- **E2E (Tier 3)**: `bridge-rpc.e2e.test.ts` adds success+forbidden cases for `panel_disk_usage` and `file_read_tail`. New Playwright spec: open dashboard → click `Диагностика` → select 1h → click `Скачать .md` → assert blob downloaded with content type `text/markdown`, parse first 1 KB and assert structural markers (`# Squad Panel Diagnostic Bundle`, `## 0. State snapshot`).
+- **E2E (Tier 3)**: `bridge-rpc.e2e.test.ts` adds success+forbidden cases for `panel_disk_usage` and `file_read_tail`. New Playwright spec: open dashboard → click `Диагностика` (Diagnostics) → select 1h → click `Скачать .md` (Download .md) → assert blob downloaded with content type `text/markdown`, parse first 1 KB and assert structural markers (`# Squad Panel Diagnostic Bundle`, `## 0. State snapshot`).
 - **Property test**: `diag.emit` under random concurrent producer load — assert no duplicates, no out-of-order writes within `(component, server_id)`.
 
 ## 8. Documentation impact
