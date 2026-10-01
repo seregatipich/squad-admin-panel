@@ -228,7 +228,9 @@ bash scripts/verify-done.sh --wait   # exit 0 required before reporting done
 
 `--wait [seconds]` (default 900) polls every `VERIFY_DONE_POLL_SECS` (default 10) until the `deploy` and `ci` runs for the tip have finished, instead of failing on a run that is still in progress. That lets the promotion follow the `dev` push immediately: the stand deploy and `ci` run side by side and one command waits for both. Without `--wait` a run in progress fails the check.
 
-It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+It proves the working tree is clean, `HEAD` is the `origin/dev` tip, `git-guard doctor` is clean, and — via `gh` — that the `deploy` run for the current `origin/dev` SHA succeeded and that this SHA is promoted to `master` with a green `ci` run **for that SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit.
+
+Every comparison is against `origin/dev`, never the local `dev` ref, so the check also passes from a **detached `HEAD` at the `origin/dev` tip** — the normal state of a worktree when `dev` is checked out in another one. Any other work branch, and a detached `HEAD` that differs from `origin/dev`, fail.
 
 For the **parallel-wave flow** (many work branches integrated serially by an orchestrator), a task agent's terminal state is a pushed feature branch, not a dev merge — use `bash scripts/verify-done.sh --feature`, which checks the branch is a work branch, the tree is clean, it is pushed (`HEAD == origin/<branch>`), and it was branched off `dev`. The orchestrator runs the default mode after merging. Test suite: [`scripts/test-verify-done.sh`](../../scripts/test-verify-done.sh) (runs in CI's `branch-guard` job with a stubbed `gh`) covers both modes.
 
