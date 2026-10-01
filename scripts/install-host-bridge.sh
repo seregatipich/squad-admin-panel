@@ -79,6 +79,11 @@ if [[ "$NEEDS_BUILD" -eq 1 ]]; then
     die "Go toolchain not found. Install golang >= 1.22 or pre-build the binary."
   fi
   (cd "${REPO_DIR}/apps/bridge" && make build)
+  # Under sudo the build output is root-owned; the stand deploy's `rsync
+  # --delete` runs as the repo owner and fails on a file it cannot unlink.
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${REPO_DIR}/apps/bridge/bin"
+  fi
 fi
 [[ -x "$BIN_SRC" ]] || die "bridge binary missing at $BIN_SRC after build"
 
