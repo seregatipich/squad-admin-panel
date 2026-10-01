@@ -168,7 +168,7 @@ Threshold values reflect the measured baseline at the time coverage was introduc
 | Package | lines | funcs | branches | stmts |
 |---|---|---|---|---|
 | `@squad/api` | 70 | 70 | 60 | 70 |
-| `@squad/web` | 1 | 17 | 83 | 1 |
+| `@squad/web` | 85 | 72 | 83 | 85 |
 | `@squad/db` | 72 | 12 | 45 | 72 |
 | `@squad/shared-config` | 68 | 80 | 65 | 68 |
 | `@squad/shared-types` | 48 | 10 | 45 | 48 |
@@ -177,7 +177,7 @@ Threshold values reflect the measured baseline at the time coverage was introduc
 | `worker-log-ingest` | 31 | 68 | 74 | 31 |
 | `worker-metrics-sampler` | 34 | 62 | 55 | 34 |
 
-Low web thresholds reflect that most page/component tests currently validate imports while runtime behavior is covered by Playwright. The web function floor was re-baselined to 17% on 2026-07-04 after the page surface expanded; keep it at or above the measured baseline and ratchet it upward as behavioral component tests are added.
+Web page tests are behavioural: every `page.tsx` has a `page.test.tsx` next to it that renders the real page in happy-dom with testing-library and a stubbed `fetch`, and asserts the loading, ready, empty and error states and at least one key interaction through the visible Russian text (template: `apps/web/src/app/(dashboard)/all-players/page.test.tsx`). Components and helpers keep their own `*.test.tsx` / `*.test.ts` beside them. Playwright covers the live stack on top of this. Import-only smoke tests (a module exports a default) are not written: `tsc` and `next build` already prove that. The thresholds were re-baselined on 2026-10-01 to the unsharded measurement (lines and statements 90.5 %, functions 76.3 %, branches 86.7 %) minus a safety margin; ratchet them upward as tests are added.
 
 ## Definition of "fixed"
 
