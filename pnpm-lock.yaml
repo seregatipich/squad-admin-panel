@@ -1197,6 +1197,40 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.19.17)(happy-dom@20.14.5)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  packages/worker-kit:
+    dependencies:
+      '@squad/db':
+        specifier: workspace:*
+        version: link:../db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../diag
+      '@squad/shared-config':
+        specifier: workspace:*
+        version: link:../shared-config
+      drizzle-orm:
+        specifier: ^0.45.0
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
+      ioredis:
+        specifier: ^6.0.0
+        version: 6.0.0
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.19.17)(happy-dom@20.14.5)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
 packages:
 
   '@adobe/css-tools@4.5.0':
