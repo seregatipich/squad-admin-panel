@@ -69,7 +69,7 @@ Beyond the read-modify-write branches, guards the reload wiring:
 | RCON not connected | `reload === 'skipped_rcon_disconnected'`, no enqueue |
 | audit context | the `admins_cfg.synced` row `context` carries `reload` |
 
-### `index-import.test.ts` — module-import (all deps mocked)
+### `index.test.ts` — module-import (all deps mocked)
 
 Imports `src/index.ts` with `ioredis`, `@squad/db`, `@squad/bridge-client`, `@squad/shared-config`, and `pino` mocked, and drives the running `main()` loop:
 
@@ -103,7 +103,7 @@ Cross-component coverage that the API publishes the right events:
 - The API permission-matrix tests guard that `/api/v1/admins-cfg/drift` and `/api/v1/admins-cfg/drift/all` require `admin_group:view`, while `/api/v1/admins-cfg/sync` requires `admin_group:edit`.
 - `apps/api/test/server-delete.test.ts > softDeleteServer — Redis sync-queue cleanup (SYNC-5)` — DB + real-Redis coverage that soft-delete destroys the per-server stream, consumer group, and `admins-cfg:status:<id>` key, completes every unapplied outbox row as `server_removed` while preserving an existing `relayed_at`/`stream_id`, stays idempotent, and records Redis cleanup failure without undoing the DB result.
 - `apps/api/test/integration/admins-cfg-outbox.test.ts` covers commit/rollback visibility, stable `_outbox_id` after relay crash, bounded/null `XADD`, group creation after relay, a backlog above the old cap without trim, and deleted-server terminal drain without stream resurrection.
-- `apps/workers/config-sync/test/index-import.test.ts` proves relay interval single-flight while delivery is stalled.
+- `apps/workers/config-sync/test/index.test.ts` proves relay interval single-flight while delivery is stalled.
 
 ## What is explicitly NOT covered yet
 

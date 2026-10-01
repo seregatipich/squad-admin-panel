@@ -58,29 +58,22 @@ describe('schema surface', () => {
 
   it('players role assignment stores optional expiry and operator comment', () => {
     const cols = getTableColumns(schema.players);
-    expect(cols.roleExpiresAt).toBeDefined();
     expect(cols.roleExpiresAt.notNull).toBe(false);
-    expect(cols.roleComment).toBeDefined();
     expect(cols.roleComment.notNull).toBe(false);
   });
 
   it('vip_tiers carries nullable price_bonuses', () => {
     const cols = getTableColumns(schema.vipTiers);
-    expect(cols.priceBonuses).toBeDefined();
     expect(cols.priceBonuses.notNull).toBe(false);
   });
 
   it('media_links carries the entity-type check and the uniqueness key', () => {
     const config = getTableConfig(schema.mediaLinks);
-    const entityTypeCheck = config.checks.find(
-      (check) => check.name === 'media_links_entity_type_check',
-    );
-    expect(entityTypeCheck).toBeDefined();
+    expect(config.checks.map((check) => check.name)).toContain('media_links_entity_type_check');
 
     const mediaEntityKey = config.indexes.find(
       (index) => index.config.name === 'media_links_media_entity_key',
     );
-    expect(mediaEntityKey).toBeDefined();
     expect(mediaEntityKey?.config.unique).toBe(true);
     expect(mediaEntityKey?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
       'media_id',
@@ -128,11 +121,13 @@ describe('schema surface', () => {
     ]);
 
     // Reconcile walks mappings by Discord role id.
-    expect(
-      config.indexes.find(
-        (index) => index.config.name === 'discord_role_mappings_discord_role_id_idx',
-      ),
-    ).toBeDefined();
+    const discordRoleIdIndex = config.indexes.find(
+      (index) => index.config.name === 'discord_role_mappings_discord_role_id_idx',
+    );
+    expect(discordRoleIdIndex?.config.unique).toBe(false);
+    expect(discordRoleIdIndex?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
+      'discord_role_id',
+    ]);
 
     // Deleting a panel role takes its mapping with it.
     const fk = config.foreignKeys.map((k) => k.reference())[0];
@@ -142,15 +137,11 @@ describe('schema surface', () => {
 
   it('issue_links carries the entity-type check, the uniqueness key and a cascading issue_id', () => {
     const config = getTableConfig(schema.issueLinks);
-    const entityTypeCheck = config.checks.find(
-      (check) => check.name === 'issue_links_entity_type_check',
-    );
-    expect(entityTypeCheck).toBeDefined();
+    expect(config.checks.map((check) => check.name)).toContain('issue_links_entity_type_check');
 
     const issueEntityKey = config.indexes.find(
       (index) => index.config.name === 'issue_links_issue_entity_key',
     );
-    expect(issueEntityKey).toBeDefined();
     expect(issueEntityKey?.config.unique).toBe(true);
     expect(issueEntityKey?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
       'issue_id',
@@ -175,7 +166,6 @@ describe('schema surface', () => {
     const cols = getTableColumns(schema.mediaUploadTokens);
 
     // The raw token is never a column — only its digest is storable.
-    expect(cols.tokenHash).toBeDefined();
     expect(cols.tokenHash.notNull).toBe(true);
     expect(Object.keys(cols)).not.toContain('token');
     expect(cols.usedAt.notNull).toBe(false);
@@ -186,17 +176,16 @@ describe('schema surface', () => {
     );
     expect(tokenHashKey?.config.unique).toBe(true);
 
-    expect(
-      config.checks.find((check) => check.name === 'media_upload_tokens_target_pair_check'),
-    ).toBeDefined();
-    expect(
-      config.checks.find((check) => check.name === 'media_upload_tokens_target_type_check'),
-    ).toBeDefined();
+    expect(config.checks.map((check) => check.name)).toEqual(
+      expect.arrayContaining([
+        'media_upload_tokens_target_pair_check',
+        'media_upload_tokens_target_type_check',
+      ]),
+    );
   });
 
   it('media_files carries the nullable upload_token_id provenance column', () => {
     const cols = getTableColumns(schema.mediaFiles);
-    expect(cols.uploadTokenId).toBeDefined();
     expect(cols.uploadTokenId.notNull).toBe(false);
   });
 });

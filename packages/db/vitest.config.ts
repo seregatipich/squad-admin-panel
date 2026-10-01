@@ -7,6 +7,10 @@ const maxForks = Number(process.env.VITEST_MAX_FORKS) || 4;
 
 export default defineConfig({
   test: {
+    include: [
+      '**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      '../../apps/workers/_test-shared/database-isolation.regression.test.ts',
+    ],
     exclude: ['**/node_modules/**', '**/dist/**'],
     // Files run in parallel: the global setup migrates one template per run
     // and every worker slot works on its own clone of it, so files that run at
