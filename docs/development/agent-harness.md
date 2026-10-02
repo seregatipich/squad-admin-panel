@@ -148,11 +148,11 @@ the newest SHA matters and nothing deploys from it.
 |---|---|
 | `branch-guard` | the master ancestry audit (on `master` pushes), then every repository-contract suite through `scripts/test-repo-contracts.sh` (see below) |
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
-| `test-api` (6 shards) | a sixth of the API suite by test file, against Postgres and Redis services — no build, no migration |
-| `test-web` (3 shards) | a third of the web suite each — no services, no build |
+| `test-api` (5 shards) | a fifth of the API suite by test file, against Postgres and Redis services — no build, no migration |
+| `test-web` (2 shards) | half of the web suite each — no services, no build |
 | `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; the packages are spread over the shards by measured weight (longest-processing-time-first onto the least-loaded shard), so each starts with one of the three longest suites and the shards finish together; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
-| `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
+| `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) | The decision is made inside the job, which succeeds without running Stryker when nothing changed; a separate job would only take a runner slot from a test shard (see "Concurrent job budget").
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
 | `images` | reuses the `api` and `workers` release images the stand deploy built for the same commit (`scripts/ci-reuse-deploy-images.sh` waits boundedly while that deploy run exists and tags them like bake), and builds `rnsquadjs` itself; with no deploy run for the commit, or one that ended without the images, it builds the `release` group and `rnsquadjs` of `docker/docker-bake.hcl` as before, reading (never writing) the GHCR layer cache the stand deploy writes. Then smoke tests: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
 | `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
@@ -263,3 +263,13 @@ Warns when: `core.hooksPath` shadows lefthook without delegating to it, a `main`
 - `check-command` polices **only this repository** (worktrees included, identified by the git common dir). Commands targeting other repos — scratch fixtures under `/tmp`, clones, `git -C <elsewhere>` — are allowed, as are segments following a `cd` to a dynamically computed directory.
 - `check-command` tokenizes shell strings heuristically; compound commands, `cd`/`git -C` targets, and env prefixes are handled, but exotic quoting can evade it. That layer exists for fast in-session feedback — the rulesets are the enforcement boundary.
 - Client-side layers only bind clients that load them (project settings for Claude Code, installed hooks for git). New machines should run `doctor` once.
+
+## Concurrent job budget
+
+A GitHub plan runs at most 20 jobs at once, across workflows. A promotion starts `ci` beside the dev deploy
+(four build jobs), so `ci` should start about 16–17 jobs at once; more of them queue, and a queued test shard
+starts late. Measured: with 19 `ci` jobs (6 API and 3 web shards) one API shard started 45 s late and the run took
+190 s, against 168 s with fewer, bigger shards. `scripts/test-ci-runner-strategy.sh` counts the jobs `ci` starts
+immediately (matrices expanded) and fails when the budget is exceeded, so adding a shard or a job means merging or
+removing another. The shard counts (5 API, 2 web, 3 packages) were chosen against that budget, not only against
+their own durations.

@@ -128,7 +128,7 @@ for gone in 'Require a green dev CI run' 'check-runner-health' 'lcov.info' 'dock
 done
 
 ci_jobs=$(job_names "$ci_workflow")
-expected_jobs='branch-guard lint test-api test-web test-packages scripts changes mutation go images backup coverage gate'
+expected_jobs='branch-guard lint test-api test-web test-packages scripts mutation go images backup coverage gate'
 [ "$(printf '%s\n' "$ci_jobs" | tr '\n' ' ' | sed 's/ $//')" = "$expected_jobs" ] ||
   fail "ci jobs are '$(printf '%s\n' "$ci_jobs" | tr '\n' ' ')', expected '$expected_jobs'"
 
@@ -259,8 +259,29 @@ check_sharded_slice() {
     fail "${job} builds or migrates; its suite resolves @squad/* to source and builds its own template database"
   fi
 }
-check_sharded_slice test-api api apps/api 6
-check_sharded_slice test-web web apps/web 3
+check_sharded_slice test-api api apps/api 5
+check_sharded_slice test-web web apps/web 2
+
+# --- Concurrent job budget. ---
+# A GitHub plan runs 20 jobs at once, and a promotion starts ci beside the dev deploy (four build jobs).
+# Jobs beyond the budget queue: with 19 ci jobs a test shard started 45 s late and the run got slower
+# than with fewer, bigger shards. Count the ci jobs that start immediately (no `needs`, matrices
+# expanded) and keep them within what is left of the 20.
+deploy_build_jobs=4
+budget=$((20 - deploy_build_jobs))
+immediate=0
+for job in $ci_jobs; do
+  block=$(job_block "$ci_workflow" "$job")
+  if printf '%s\n' "$block" | grep -Eq '^    needs:'; then continue; fi
+  shard_line=$(printf '%s\n' "$block" | sed -n 's/^        shard: \[\(.*\)\]$/\1/p')
+  if [ -n "$shard_line" ]; then
+    immediate=$((immediate + $(printf '%s\n' "$shard_line" | tr ',' '\n' | wc -l | tr -d ' ')))
+  else
+    immediate=$((immediate + 1))
+  fi
+done
+[ "$immediate" -le $((budget + 1)) ] ||
+  fail "ci starts $immediate jobs at once; with the ${deploy_build_jobs} deploy build jobs that exceeds the 20 a plan runs (one job may queue, not more): merge small jobs or use fewer shards"
 
 test_api=$(job_block "$ci_workflow" test-api)
 has_line "$test_api" '      VITEST_MAX_FORKS: "4"' || fail 'test-api does not use all four hosted vCPUs'
@@ -299,13 +320,20 @@ if has_text "$scripts_job" 'turbo run build'; then
   fail 'scripts job runs the full build; pnpm test:scripts builds what it needs'
 fi
 
-changes=$(job_block "$ci_workflow" changes)
-has_text "$changes" '-- packages/shared-config' || fail 'the Stryker gate does not diff packages/shared-config'
-has_line "$changes" '          fetch-depth: 0' || fail 'the Stryker gate cannot resolve the pushed range'
 mutation=$(job_block "$ci_workflow" mutation)
-has_line "$mutation" '    needs: changes' || fail 'mutation does not wait for the change detection'
-has_line "$mutation" "    if: needs.changes.outputs.mutation == 'true'" ||
-  fail 'Stryker is not gated on a shared-config change'
+has_text "$mutation" '-- packages/shared-config' || fail 'the Stryker gate does not diff packages/shared-config'
+has_line "$mutation" '          fetch-depth: 0' || fail 'the Stryker gate cannot resolve the pushed range'
+# The change detection lives in the mutation job (no job of its own: see the job budget below); every
+# step after the decision must be conditional on it, or Stryker would run on every push.
+if has_text "$ci_workflow" '  changes:'; then
+  fail 'a separate changes job is back; it would take a runner slot from a test shard'
+fi
+ungated=$(printf '%s\n' "$mutation" | awk '
+  function check() { if (started && step !~ /shared-config.outputs.run/ && step !~ /actions\/checkout|id: shared-config/) bad++ }
+  /^      - / { check(); started = 1; step = "" }
+  { step = step "\n" $0 }
+  END { check(); print bad + 0 }')
+[ "$ungated" = 0 ] || fail "$ungated step(s) of the mutation job run without the shared-config change decision"
 has_text "$mutation" 'pnpm turbo run test:mutation --filter=@squad/shared-config' ||
   fail 'mutation job does not run Stryker on shared-config'
 printf '%s\n' "$mutation" | grep -Eq 'uses:[[:space:]]+actions/cache@[0-9a-f]{40}' ||
@@ -409,7 +437,7 @@ gate_accepts() {
 gate_accepts '' || fail 'the gate rejects a run where every job succeeded'
 gate_accepts 'mutation=skipped' || fail 'the gate rejects a run where only Stryker was skipped'
 for verdict in 'mutation=failure' 'mutation=cancelled' 'test-api=skipped' 'test-api=failure' \
-  'lint=cancelled' 'changes=skipped' 'images=failure' 'backup=skipped' 'branch-guard=failure'; do
+  'lint=cancelled' 'coverage=skipped' 'images=failure' 'backup=skipped' 'branch-guard=failure'; do
   if gate_accepts "$verdict"; then
     fail "the gate accepts a run where ${verdict/=/ was }"
   fi
