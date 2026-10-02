@@ -13,6 +13,7 @@
     "mint:owner-session": "tsx --conditions=development src/tools/mint-owner-session.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --dir test/integration",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "clean": "rm -rf dist .turbo"
