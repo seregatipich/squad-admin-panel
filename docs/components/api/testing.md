@@ -69,15 +69,15 @@ Important: all `ORDER BY` clauses use the table-qualified form `ORDER BY audit_l
 
 [`test/security/`](../../../apps/api/test/security/) contains five regression test files:
 
-### permission-matrix.test.ts — 3101 tests
+### permission-matrix.*.test.ts — 5,170 tests
 
-Programmatic permission boundary matrix. `collectProtectedRoutes()` builds a minimal Fastify app, walks `onRoute` hooks, and returns every route that declares `config.permissions` (WebSocket routes excluded from the `.inject()`-based HTTP sweep — HTTP inject is incompatible with the upgrade protocol — but still tagged into a separate `wsRoutes` set instead of being silently discarded; see #250). For each REST route, three test categories run:
+Programmatic permission boundary matrix, split over five files so the file-based CI shards (`vitest --shard=<i>/4`) can spread its roughly 20 s of sequential `inject` calls: [`permission-matrix.routes.ts`](../../../apps/api/test/security/permission-matrix.routes.ts) holds the database-free route table, [`permission-matrix.shared.ts`](../../../apps/api/test/security/permission-matrix.shared.ts) the integration app, token users and per-route sweep, and `permission-matrix.part-1..4.test.ts` each call `registerPermissionSweep(<n>)` for the routes whose index in the table is congruent to `n - 1` modulo four (disjoint and exhaustive by construction). `permission-matrix.test.ts` keeps the `permission matrix coverage` canaries and a database-free partition guard that proves the four slices cover every protected route exactly once and generate the same number of cases as the former single file. Every part builds its own integration app and creates the full set of token users, so a part costs a few seconds of fixed setup on top of its quarter of the sweep. `collectProtectedRoutes()` builds a minimal Fastify app, walks `onRoute` hooks, and returns every route that declares `config.permissions` (WebSocket routes excluded from the `.inject()`-based HTTP sweep — HTTP inject is incompatible with the upgrade protocol — but still tagged into a separate `wsRoutes` set instead of being silently discarded; see #250). For each REST route, three test categories run:
 
 1. `returns 403 to a user with no permissions` — asserts status 403.
 2. `returns not-403 to a user with all required permissions` — asserts status ≠ 403.
 3. `with only <perm>: allowed|403` — one test per permission key; asserts `allowed` if that key is the exact required set, `403` otherwise.
 
-All ~70 test users (1 no-perms, 48 single-perm, ~21 unique required-set combos) are pre-created in `beforeAll` via `Promise.all` to keep setup under 5 seconds. A `permission matrix coverage` canary test asserts `wsRoutes` equals exactly the four currently-permissioned websocket routes (`/api/v1/ws/live`, `/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`, `/api/v1/depot/progress/ws`), each requiring `['server:view']`, so a route silently added or dropped from that set fails CI; the actual unauthenticated-rejection proof for those four routes lives in `ws-auth-boundary.test.ts` below.
+All ~70 test users (1 no-perms, 48 single-perm, ~21 unique required-set combos) are pre-created in each part's `beforeAll` via `Promise.all` to keep setup under 5 seconds. A `permission matrix coverage` canary test asserts `wsRoutes` equals exactly the four currently-permissioned websocket routes (`/api/v1/ws/live`, `/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`, `/api/v1/depot/progress/ws`), each requiring `['server:view']`, so a route silently added or dropped from that set fails CI; the actual unauthenticated-rejection proof for those four routes lives in `ws-auth-boundary.test.ts` below.
 
 ### ws-auth-boundary.test.ts — 4 tests
 
