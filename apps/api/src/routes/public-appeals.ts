@@ -4,7 +4,6 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { parseBanLengthToExpiry } from '../lib/banlist-publish.js';
 
 const STEAM_ID64_RE = /^\d{17}$/;
@@ -129,7 +128,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: submitBody },
       config: {
-        audit: 'manual',
+        audit: { action: 'appeal.create', resource: 'ban_appeal' },
         selfService: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
@@ -198,21 +197,11 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: ip,
-        actionType: 'appeal.create',
-        targetType: 'ban_appeal',
+      req.auditSnapshots = {
         targetId: created.id,
         after: { number: created.number, status: created.status },
-        context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
-          steam_id64: String(steamId64),
-        },
-        statusCode: 201,
-      });
+        context: { steam_id64: String(steamId64) },
+      };
 
       app.liveBus.publish({
         type: 'appeal.created',

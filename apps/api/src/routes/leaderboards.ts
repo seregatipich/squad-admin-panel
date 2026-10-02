@@ -150,7 +150,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         summary: 'Player leaderboards over materialised stat periods',
         querystring: leaderboardsQuery,
       },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

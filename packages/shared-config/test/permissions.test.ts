@@ -103,6 +103,17 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('trigger:edit')?.dangerous).toBe(true);
   });
 
+  // Issue #99: the issue tracker had no catalogue key, so any API token with
+  // one unrelated scope could read and file issues.
+  it('exposes a production-active issue:view key in its own category', () => {
+    const byKey = new Map<string, PermissionDef>(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(PERMISSION_CATEGORIES).toContain('issues');
+    expect(byKey.get('issue:view')?.category).toBe('issues');
+    expect(byKey.get('issue:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('issue:view')?.dangerous).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

@@ -16,6 +16,7 @@ export const PERMISSION_CATEGORIES = [
   'triggers',
   'scheduler',
   'balancer',
+  'issues',
 ] as const;
 export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number];
 
@@ -206,6 +207,7 @@ export const PERMISSIONS = [
     category: 'balancer',
     label: 'Менять правила и решать по предложениям балансировщика',
   },
+  { key: 'issue:view', category: 'issues', label: 'Видеть и вести трекер задач' },
 ] as const satisfies readonly PermissionDef[];
 
 export type PermissionKey = (typeof PERMISSIONS)[number]['key'];

@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseClient } from '@squad/db';
 import {
   PLAYER_LINK_STATUSES,
   PLAYER_LINK_TYPES,
@@ -8,11 +7,11 @@ import {
   players,
 } from '@squad/db/schema';
 import { desc, eq, inArray, or } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { altEvidenceSnapshot } from '../lib/alt-candidates.js';
-import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 /**
  * Upper bound on the links `GET /players/:playerId/links` returns, newest
@@ -82,24 +81,6 @@ function snapshot(row: PlayerLinkRow) {
   };
 }
 
-async function auditMutation(
-  db: DatabaseClient | AuditTransaction,
-  req: FastifyRequest,
-  input: { action: string; targetId: string; before: unknown; after: unknown },
-): Promise<void> {
-  if (!req.user) return;
-  await writeAuditEntry(db, {
-    actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-    actorIp: req.ip ?? null,
-    actionType: input.action,
-    targetType: 'player_link',
-    targetId: input.targetId,
-    before: input.before,
-    after: input.after,
-    context: { requestId: req.id, method: req.method, url: req.url },
-  });
-}
-
 /**
  * ALT-2 (issue #120): manual confirm/reject verdicts on player pairs, the
  * durable counterpart to the ephemeral ALT-1 candidate engine
@@ -155,7 +136,10 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/links',
     {
       schema: { params: playerIdParams, body: createBody },
-      config: { permissions: ['player:view_ips'], audit: 'manual' },
+      config: {
+        permissions: ['player:view_ips'],
+        audit: { action: 'player_link.create', resource: 'player_link' },
+      },
     },
     async (req, reply) => {
       const { playerId } = req.params;
@@ -204,12 +188,9 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
           .onConflictDoNothing({ target: [playerLinks.playerAId, playerLinks.playerBId] })
           .returning();
         if (!row) return null;
-        await auditMutation(tx, req, {
-          action: 'player_link.create',
-          targetId: row.id,
-          before: null,
-          after: snapshot(row),
-        });
+        req.auditSnapshots = { targetId: row.id, before: null, after: snapshot(row) };
+        reply.code(201);
+        await auditRequestInTransaction(tx, req, reply);
         return row;
       });
       if (!inserted) {
@@ -261,10 +242,14 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/player-links/:linkId',
     {
       schema: { params: linkIdParams, body: patchBody },
-      config: { permissions: ['player:view_ips'], audit: 'manual' },
+      config: {
+        permissions: ['player:view_ips'],
+        audit: { action: 'player_link.update', resource: 'player_link' },
+      },
     },
     async (req, reply) => {
       const { linkId } = req.params;
+      req.auditSnapshots = { targetId: linkId };
       const updates: Partial<typeof playerLinks.$inferInsert> = { updatedAt: new Date() };
       if (req.body.link_type !== undefined) updates.linkType = req.body.link_type;
       if (req.body.status !== undefined) updates.status = req.body.status;
@@ -286,12 +271,12 @@ const playerLinksRoutes: FastifyPluginAsync = async (app) => {
           .where(eq(playerLinks.id, linkId))
           .returning();
         if (!row) throw new Error('player_links update returned no row');
-        await auditMutation(tx, req, {
-          action: 'player_link.update',
+        req.auditSnapshots = {
           targetId: existing.id,
           before: snapshot(existing),
           after: snapshot(row),
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
         return row;
       });
       if (!updated) {

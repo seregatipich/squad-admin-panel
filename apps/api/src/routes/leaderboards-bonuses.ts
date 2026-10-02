@@ -43,7 +43,7 @@ const leaderboardsBonusesRoutes: FastifyPluginAsync = async (app) => {
         summary: 'Bonus leaderboard: all-time balance or the rolling 30-day accrual window',
         querystring: bonusesQuery,
       },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

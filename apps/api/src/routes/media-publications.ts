@@ -13,7 +13,6 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile } from './media.js';
@@ -83,7 +82,10 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/:id/publications',
-    { schema: { params: mediaIdParams, body: mediaPublishInput }, config: { audit: 'manual' } },
+    {
+      schema: { params: mediaIdParams, body: mediaPublishInput },
+      config: { audit: { action: 'media.publish', resource: 'media_file' } },
+    },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -144,16 +146,11 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.publish',
-        targetType: 'media_file',
+      req.auditSnapshots = {
         targetId: media.id,
         after: { publications: inserted.map(serializeMediaPublication) },
         context: { request_id: req.id, destinations: requested },
-        statusCode: 201,
-      });
+      };
 
       reply.code(201);
       return { items: inserted.map(serializeMediaPublication) };
@@ -162,7 +159,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/media/:id/publications',
-    { schema: { params: mediaIdParams }, config: { audit: false } },
+    { schema: { params: mediaIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -190,7 +187,10 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/media/:id/publications/:destination',
-    { schema: { params: publicationParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: publicationParams },
+      config: { audit: { action: 'media.publish.delete', resource: 'media_file' } },
+    },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -232,16 +232,11 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'publication_not_found' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.publish.delete',
-        targetType: 'media_file',
+      req.auditSnapshots = {
         targetId: media.id,
         before: serializeMediaPublication(row),
         context: { request_id: req.id, destination: req.params.destination },
-        statusCode: 200,
-      });
+      };
 
       return { ok: true };
     },
@@ -249,7 +244,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/integrations/media-publishing',
-    { config: { audit: false } },
+    { config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -269,7 +264,12 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/integrations/media-publishing',
-    { schema: { body: mediaPublishingSettingsInput }, config: { audit: 'manual' } },
+    {
+      schema: { body: mediaPublishingSettingsInput },
+      config: {
+        audit: { action: 'media.publish.settings.update', resource: 'media_publish_settings' },
+      },
+    },
     async (req, reply) => {
       const denied = manageMediaGuard(req, reply);
       if (denied) return denied;
@@ -289,17 +289,11 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
           set: { releaseLocalFile, updatedByPlayerId: actorId, updatedAt: new Date() },
         });
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.publish.settings.update',
-        targetType: 'media_publish_settings',
-        targetId: null,
+      req.auditSnapshots = {
         before: { release_local_file: before },
         after: { release_local_file: releaseLocalFile },
         context: { request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       const response: MediaPublishingIntegrationResponse = {
         youtube_configured: Boolean(

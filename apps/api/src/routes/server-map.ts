@@ -4,7 +4,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type Redis from 'ioredis';
 import { z } from 'zod';
-import { auditMapLikeAction, requireSquadPermission } from '../lib/map-guards.js';
+import { requireSquadPermission } from '../lib/map-guards.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 
 const serverIdParams = z.object({ serverId: z.string().uuid() });
@@ -84,16 +84,9 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
       deprecated: row?.deprecated ?? false,
     };
   }
-
-  const auditMapAction = (
-    req: FastifyRequest,
-    reply: FastifyReply,
-    input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
-
   fast.get(
     '/api/v1/servers/:serverId/map',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -126,7 +119,10 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/next',
-    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: mapActionBody },
+      config: { audit: { action: 'server.map.set_next', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -164,11 +160,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
       await patchNextLayer(app.redis, serverId, layer);
 
-      await auditMapAction(req, reply, {
-        actionType: 'server.map.set_next',
-        serverId,
-        after: { layer },
-      });
+      req.auditSnapshots = { after: { layer } };
 
       app.liveBus.publish({
         type: 'server.map.changed',
@@ -182,7 +174,10 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/change',
-    { schema: { params: serverIdParams, body: mapActionBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: mapActionBody },
+      config: { audit: { action: 'server.map.change', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -218,11 +213,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'rcon_failed', reason: outcome.reason, detail: outcome.detail };
       }
 
-      await auditMapAction(req, reply, {
-        actionType: 'server.map.change',
-        serverId,
-        after: { layer },
-      });
+      req.auditSnapshots = { after: { layer } };
 
       app.liveBus.publish({
         type: 'server.map.changed',
@@ -236,7 +227,10 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:serverId/map/end-match',
-    { schema: { params: serverIdParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams },
+      config: { audit: { action: 'server.map.end_match', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -262,11 +256,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'rcon_failed', reason: outcome.reason, detail: outcome.detail };
       }
 
-      await auditMapAction(req, reply, {
-        actionType: 'server.map.end_match',
-        serverId,
-        after: { layer: status.current_map ?? null },
-      });
+      req.auditSnapshots = { after: { layer: status.current_map ?? null } };
 
       app.liveBus.publish({
         type: 'server.map.changed',

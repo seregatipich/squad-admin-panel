@@ -9,7 +9,6 @@ import { and, desc, eq, ilike, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import {
   clearChatFlagsForRule,
   reindexChatFlags,
@@ -111,25 +110,6 @@ function editGuard(
 const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  async function auditMutation(
-    req: FastifyRequest,
-    reply: FastifyReply,
-    input: { action: string; targetId: string; before: unknown; after: unknown },
-  ): Promise<void> {
-    if (!req.user) return;
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: input.action,
-      targetType: 'chat_flag_rule',
-      targetId: input.targetId,
-      before: input.before,
-      after: input.after,
-      context: { requestId: req.id, method: req.method, url: req.url },
-      statusCode: reply.statusCode,
-    });
-  }
-
   async function loadRule(id: string): Promise<typeof chatFlagRules.$inferSelect | undefined> {
     const rows = await app.db.select().from(chatFlagRules).where(eq(chatFlagRules.id, id)).limit(1);
     return rows[0];
@@ -183,7 +163,10 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/settings/chat-flag-rules',
-    { schema: { body: createBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'chat_flag_rule.create', resource: 'chat_flag_rule' } },
+    },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -228,12 +211,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'insert_failed' };
       }
       reply.code(201);
-      await auditMutation(req, reply, {
-        action: 'chat_flag_rule.create',
-        targetId: inserted.id,
-        before: null,
-        after: snapshot(inserted),
-      });
+      req.auditSnapshots = { targetId: inserted.id, before: null, after: snapshot(inserted) };
       return serializeRule({
         ...inserted,
         pattern_type: inserted.patternType,
@@ -246,7 +224,10 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/settings/chat-flag-rules/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam, body: updateBody },
+      config: { audit: { action: 'chat_flag_rule.update', resource: 'chat_flag_rule' } },
+    },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -305,12 +286,11 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      await auditMutation(req, reply, {
-        action: 'chat_flag_rule.update',
+      req.auditSnapshots = {
         targetId: updated.id,
         before: snapshot(existing),
         after: snapshot(updated),
-      });
+      };
       return serializeRule({
         ...updated,
         pattern_type: updated.patternType,
@@ -323,7 +303,10 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/settings/chat-flag-rules/:id',
-    { schema: { params: idParam }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam },
+      config: { audit: { action: 'chat_flag_rule.delete', resource: 'chat_flag_rule' } },
+    },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -338,19 +321,17 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
         await clearChatFlagsForRule(tx, req.params.id);
         await tx.delete(chatFlagRules).where(eq(chatFlagRules.id, req.params.id));
       });
-      await auditMutation(req, reply, {
-        action: 'chat_flag_rule.delete',
-        targetId: existing.id,
-        before: snapshot(existing),
-        after: null,
-      });
+      req.auditSnapshots = { targetId: existing.id, before: snapshot(existing), after: null };
       return { ok: true };
     },
   );
 
   fast.post(
     '/api/v1/settings/chat-flag-rules/reindex',
-    { schema: { body: reindexBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: reindexBody },
+      config: { audit: { action: 'chat_flag_rule.reindex', resource: 'chat_flag_rule' } },
+    },
     async (req, reply) => {
       const denied = editGuard(req, reply);
       if (denied) return denied;
@@ -362,12 +343,7 @@ const settingsChatFlagsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'reindex_in_progress' };
       }
       const summary = run.result;
-      await auditMutation(req, reply, {
-        action: 'chat_flag_rule.reindex',
-        targetId: `days:${summary.days}`,
-        before: null,
-        after: summary,
-      });
+      req.auditSnapshots = { targetId: `days:${summary.days}`, before: null, after: summary };
       return summary;
     },
   );

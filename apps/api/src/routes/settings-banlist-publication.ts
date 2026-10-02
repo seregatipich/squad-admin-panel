@@ -7,7 +7,6 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 
 const SINGLETON_ID = 1;
 
@@ -87,7 +86,15 @@ const settingsBanlistPublicationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/settings/banlist-publication',
-    { schema: { body: putBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: putBody },
+      config: {
+        audit: {
+          action: 'settings.banlist_publication.update',
+          resource: 'banlist_publication_settings',
+        },
+      },
+    },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
       if (denied) return denied;
@@ -112,17 +119,7 @@ const settingsBanlistPublicationRoutes: FastifyPluginAsync = async (app) => {
 
       const after = serialize(await loadSettings());
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'settings.banlist_publication.update',
-        targetType: 'banlist_publication_settings',
-        targetId: String(SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: String(SINGLETON_ID), before, after };
 
       return after;
     },

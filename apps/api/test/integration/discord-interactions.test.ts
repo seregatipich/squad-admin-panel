@@ -1,11 +1,12 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { auditLog, playerDiscordLinks, players, roles, servers } from '@squad/db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { rawEd25519PublicKeyHex } from '../../src/lib/discord-interactions.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import { waitForAuditRows } from '../helpers/audit-since.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
 
@@ -334,31 +335,48 @@ describeIfDb('POST /api/v1/integrations/discord/interactions', () => {
       ['online-admins', 'discord.command.online_admins'],
     ];
     for (const [name, actionType] of cases) {
-      await signedInject(command(name, ADMIN_DISCORD_ID));
-      const [row] = await h.db
-        .select({ actorPlayerId: auditLog.actorPlayerId, actorKind: auditLog.actorKind })
+      const before = await h.db
+        .select({ id: auditLog.id })
         .from(auditLog)
-        .where(and(eq(auditLog.actionType, actionType), eq(auditLog.actorPlayerId, adminPlayerId)))
-        .orderBy(desc(auditLog.createdAt))
-        .limit(1);
+        .where(and(eq(auditLog.actionType, actionType), eq(auditLog.actorPlayerId, adminPlayerId)));
+      await signedInject(command(name, ADMIN_DISCORD_ID));
+      const rows = await waitForAuditRows(
+        h.db,
+        and(eq(auditLog.actionType, actionType), eq(auditLog.actorPlayerId, adminPlayerId)),
+        before.length + 1,
+      );
+      const row = rows.at(-1);
       expect(row, `expected an audit row for ${actionType}`).toBeDefined();
       expect(row?.actorKind).toBe('steam');
+      expect(row?.targetType).toBe('discord_command');
     }
   });
 
-  it('does not audit a refused command from an unlinked account', async () => {
-    const before = await h.db
-      .select({ id: auditLog.id })
-      .from(auditLog)
-      .where(eq(auditLog.actionType, 'discord.command.status'));
+  it('audits a refused command from an unlinked account as a bare interaction, not as a command', async () => {
+    const commandRows = () =>
+      h.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(eq(auditLog.actionType, 'discord.command.status'));
+    const interactionRows = () =>
+      h.db.select().from(auditLog).where(eq(auditLog.actionType, 'discord.interaction'));
+    const commandsBefore = (await commandRows()).length;
+    const interactionsBefore = (await interactionRows()).length;
 
     await signedInject(command('status', UNLINKED_DISCORD_ID));
 
-    const after = await h.db
-      .select({ id: auditLog.id })
-      .from(auditLog)
-      .where(eq(auditLog.actionType, 'discord.command.status'));
-    expect(after.length).toBe(before.length);
+    const interactions = await waitForAuditRows(
+      h.db,
+      eq(auditLog.actionType, 'discord.interaction'),
+      interactionsBefore + 1,
+    );
+    expect(interactions.at(-1)).toMatchObject({
+      actorKind: 'system',
+      actorSystemLabel: 'http-anonymous',
+      targetType: 'discord_command',
+      statusCode: 200,
+    });
+    expect((await commandRows()).length).toBe(commandsBefore);
   });
 
   it('answers an unknown command name without crashing', async () => {

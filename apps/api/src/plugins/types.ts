@@ -4,6 +4,7 @@ import type { SessionScope } from '@squad/db/schema';
 import type { PermissionKey } from '@squad/shared-config';
 import type Redis from 'ioredis';
 import type { AppConfig } from '../config.js';
+import type { AuditActor } from '../lib/audit.js';
 import type { PermissionContext, RoleFlagName } from '../lib/rbac.js';
 
 declare module 'fastify' {
@@ -79,6 +80,28 @@ declare module 'fastify' {
      * `targetId` overrides the id the hook derives from route params, which is
      * how a POST (no `:id` param) can still name the row it created.
      */
-    auditSnapshots?: { before?: unknown; after?: unknown; targetId?: string | null };
+    auditSnapshots?: {
+      before?: unknown;
+      after?: unknown;
+      targetId?: string | null;
+      /**
+       * Narrows the declared action when one route covers several (a command
+       * dispatcher); the declared `config.audit.action` is the fallback row.
+       */
+      action?: string;
+      /**
+       * Actor of a request that carries no `req.user` of its own, e.g. a signed
+       * webhook acting on behalf of a linked player.
+       */
+      actor?: AuditActor;
+      /** Extra queryable fields merged into the row's context; the hook's own keys win. */
+      context?: Record<string, unknown>;
+    };
+    /**
+     * Set by `auditRequestInTransaction` (`lib/request-audit.ts`) once the
+     * handler has written this request's audit row inside its own
+     * transaction; the `onResponse` hook then skips the request.
+     */
+    auditWritten?: boolean;
   }
 }

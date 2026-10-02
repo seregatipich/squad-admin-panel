@@ -3,7 +3,6 @@ import { mintUploadTokenInput, type UploadTokenResponse } from '@squad/shared-ty
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
-import { writeAuditEntry } from '../lib/audit.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from '../lib/media-storage.js';
 import { mintUploadToken, uploadTokenUrl } from '../lib/media-upload-tokens.js';
 import { panelGuard } from '../lib/panel-guard.js';
@@ -24,7 +23,13 @@ const mediaUploadTokensRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/upload-tokens',
-    { schema: { body: mintUploadTokenInput }, config: { audit: 'manual' } },
+    {
+      schema: { body: mintUploadTokenInput },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'media.upload_token.mint', resource: 'media_upload_token' },
+      },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -77,11 +82,7 @@ const mediaUploadTokensRoutes: FastifyPluginAsync = async (app) => {
         target_entity_id: target_entity_id ?? null,
       };
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.upload_token.mint',
-        targetType: 'media_upload_token',
+      req.auditSnapshots = {
         targetId: id,
         // Deliberately omits `token` and `upload_url` — the raw credential must
         // never reach the audit trail.
@@ -92,9 +93,7 @@ const mediaUploadTokensRoutes: FastifyPluginAsync = async (app) => {
           target_entity_type: response.target_entity_type,
           target_entity_id: response.target_entity_id,
         },
-        context: { request_id: req.id },
-        statusCode: 201,
-      });
+      };
 
       reply.code(201);
       return response;

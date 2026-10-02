@@ -350,7 +350,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/matches',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -387,7 +387,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/matches/count',
-    { schema: { querystring: countQuery }, config: { audit: false } },
+    { schema: { querystring: countQuery }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -403,7 +403,10 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/matches/export',
-    { schema: { querystring: exportQuery }, config: { audit: false } },
+    {
+      schema: { querystring: exportQuery },
+      config: { permissions: ['events:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) {
@@ -429,7 +432,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/matches/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { permissions: ['events:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

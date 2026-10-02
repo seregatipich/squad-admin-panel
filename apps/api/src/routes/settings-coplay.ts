@@ -4,7 +4,6 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const SINGLETON_ID = 1;
@@ -62,17 +61,24 @@ const settingsCoplayRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
-  fast.get('/api/v1/settings/coplay', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    return serialize(await loadSettings());
-  });
+  fast.get(
+    '/api/v1/settings/coplay',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      return serialize(await loadSettings());
+    },
+  );
 
   fast.put(
     '/api/v1/settings/coplay',
     {
       schema: { body: putBody },
-      config: { permissions: ['player:view_ips'], audit: 'manual' },
+      config: {
+        permissions: ['player:view_ips'],
+        audit: { action: 'coplay.settings.update', resource: 'coplay_settings' },
+      },
     },
     async (req) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:view_ips permission gate
@@ -95,17 +101,7 @@ const settingsCoplayRoutes: FastifyPluginAsync = async (app) => {
         .onConflictDoUpdate({ target: coplaySettings.id, set: updates });
 
       const after = serialize(await loadSettings());
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'coplay.settings.update',
-        targetType: 'coplay_settings',
-        targetId: String(SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: String(SINGLETON_ID), before, after };
       return after;
     },
   );

@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import type { LiveEvent } from '../../src/plugins/live-bus.js';
+import { waitForAuditRows } from '../helpers/audit-since.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { wsRoundTrip } from '../helpers/ws-round-trip.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
@@ -272,11 +273,14 @@ describe('SEED-4 seed-call notifications', () => {
       expect(subscriptions.statusCode).toBe(200);
       expect(subscriptions.json()).toEqual({ subscriptions: [] });
 
-      const audit = await h.db
-        .select()
-        .from(auditLog)
-        .where(and(eq(auditLog.actionType, 'seed.call_sent'), eq(auditLog.targetId, serverId)));
-      expect(audit).toHaveLength(2);
+      const audit = await waitForAuditRows(
+        h.db,
+        and(eq(auditLog.actionType, 'seed.call_sent'), eq(auditLog.targetId, serverId)),
+        3,
+      );
+      // Two delivered calls and the rate-limited attempt between them: a
+      // rejected attempt is audited too.
+      expect(audit.map((entry) => entry.statusCode).sort()).toEqual([200, 200, 429]);
       expect(audit.every((entry) => entry.actorPlayerId === h.seed.ownerPlayerId)).toBe(true);
     } finally {
       await Promise.all([closeSocket(subscriberSocket.socket), closeSocket(actorSocket.socket)]);

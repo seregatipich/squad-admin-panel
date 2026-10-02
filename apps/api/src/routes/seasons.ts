@@ -101,7 +101,7 @@ const seasonsRoutes: FastifyPluginAsync = async (app) => {
         summary: 'List leaderboard seasons',
         querystring: listQuery,
       },
-      config: { audit: false },
+      config: { permissions: ['events:view'], audit: false },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

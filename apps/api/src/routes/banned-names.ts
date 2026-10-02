@@ -101,7 +101,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/banned-names',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -157,7 +157,7 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
   // badge never disagrees with what actually gets kicked.
   fast.get(
     '/api/v1/banned-names/check',
-    { schema: { querystring: checkQuery }, config: { audit: false } },
+    { schema: { querystring: checkQuery }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

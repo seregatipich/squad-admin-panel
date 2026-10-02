@@ -4,7 +4,6 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { csvCell } from '../lib/csv.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
@@ -47,12 +46,6 @@ interface ImportResult {
   total_rows: number;
   imported: number;
   skipped: ImportSkippedRow[];
-}
-
-function actorFrom(req: FastifyRequest): AuditActor {
-  return req.user
-    ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
-    : { kind: 'system', label: 'http-anonymous' };
 }
 
 /** Splits one CSV data row into a SteamID64 candidate and an optional trailing comment. */
@@ -171,7 +164,10 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/settings',
     {
       schema: { body: putSettingsBody },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.settings.update', resource: 'panel_meta' },
+      },
     },
     async (req, reply) => {
       const before = await settingsView();
@@ -203,17 +199,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         .set({ whitelistRoleId: roleId })
         .where(eq(panelMeta.id, PANEL_META_SINGLETON_ID));
       const after = await settingsView();
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.settings.update',
-        targetType: 'panel_meta',
-        targetId: String(PANEL_META_SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: String(PANEL_META_SINGLETON_ID), before, after };
       return after;
     },
   );
@@ -222,9 +208,14 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members',
     {
       schema: { body: memberBody },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.member.add', resource: 'player' },
+      },
     },
     async (req, reply) => {
+      // Names the target on every outcome, rejections included.
+      req.auditSnapshots = { targetId: req.body.player_id };
       const whitelistRoleId = await loadWhitelistRoleId();
       if (!whitelistRoleId) {
         reply.code(409);
@@ -247,15 +238,6 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         reply.code(200);
         return { ok: true, changed: false };
       }
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.member.add',
-        targetType: 'player',
-        targetId: req.body.player_id,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 201,
-      });
       reply.code(201);
       return { ok: true, changed: true };
     },
@@ -265,7 +247,10 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/members/:playerId',
     {
       schema: { params: memberParam },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.member.remove', resource: 'player' },
+      },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -296,15 +281,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       });
       invalidatePermissionCache(player.id);
       await revokeAllForPlayer(app.db, app.redis, player.id, app.liveBus);
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.member.remove',
-        targetType: 'player',
-        targetId: player.id,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: player.id };
       return { ok: true, changed: true };
     },
   );
@@ -313,7 +290,10 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/import',
     {
       schema: { body: importBody },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.import', resource: 'panel_meta' },
+      },
     },
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
@@ -479,16 +459,10 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
         }
       }
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.import',
-        targetType: 'panel_meta',
+      req.auditSnapshots = {
         targetId: String(PANEL_META_SINGLETON_ID),
         after: { imported: result.imported, skipped: result.skipped.length },
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      };
       return result;
     },
   );

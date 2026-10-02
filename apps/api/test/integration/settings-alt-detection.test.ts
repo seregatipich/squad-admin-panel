@@ -39,12 +39,12 @@ beforeEach(async () => {
 
 // Cases assert the migration defaults and an empty ignore list, and several
 // seed the same limited viewer: re-create the singleton row exactly as
-// migration 0055 does, empty the list and drop that viewer.
+// migration 0055 does and empty the list. The viewer itself stays: a rejected
+// request is audited with its actor, and audit_log rows pin the player.
 afterEach(async () => {
   await h.db.delete(altDetectionSettings);
   await h.db.insert(altDetectionSettings).values({ id: 1 });
   await h.db.delete(altIgnoredIps);
-  await h.db.delete(players).where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
   invalidateAllPermissionCaches();
 });
 
@@ -84,14 +84,22 @@ async function loginAsLimitedRole(
   flags: Record<string, boolean>,
   steamId: bigint = TEST_PLAYER_LIMITED_VIEWER,
 ): Promise<string> {
-  const [row] = await h.db
-    .insert(players)
-    .values({
-      steamId64: steamId,
-      canonicalName: 'LimitedViewer',
-      canonicalNameNormalized: 'limitedviewer',
-    })
-    .returning({ id: players.id });
+  const [existing] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId))
+    .limit(1);
+  const [inserted] = existing
+    ? []
+    : await h.db
+        .insert(players)
+        .values({
+          steamId64: steamId,
+          canonicalName: 'LimitedViewer',
+          canonicalNameNormalized: 'limitedviewer',
+        })
+        .returning({ id: players.id });
+  const row = existing ?? inserted;
   if (!row) throw new Error('row: insert returned no row');
 
   const ownerCookie = await loginAsOwner(h);

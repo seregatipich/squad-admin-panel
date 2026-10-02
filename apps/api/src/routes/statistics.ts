@@ -273,7 +273,10 @@ const statisticsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/statistics',
-    { config: { audit: false }, schema: { querystring: statisticsQuery } },
+    {
+      config: { permissions: ['events:view'], audit: false },
+      schema: { querystring: statisticsQuery },
+    },
     async (req, reply) => {
       const guard = panelGuard(req, reply);
       if (guard) return guard;

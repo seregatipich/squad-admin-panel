@@ -4,14 +4,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../../lib/admins-cfg-sync.js';
-import { writeAuditEntry } from '../../lib/audit.js';
 import { clanAccess } from '../../lib/clans/access.js';
-import {
-  auditActor,
-  memberParams,
-  pgError,
-  RESERVE_SQUAD_PERMISSION_KEY,
-} from '../../lib/clans/common.js';
+import { memberParams, pgError, RESERVE_SQUAD_PERMISSION_KEY } from '../../lib/clans/common.js';
+import { auditRequestInTransaction } from '../../lib/request-audit.js';
 import { requestUser } from '../../lib/request-user.js';
 
 const setPriorityBody = z.object({ enabled: z.boolean() });
@@ -33,7 +28,13 @@ const clanPriorityRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/clans/:id/members/:playerId/priority',
-    { schema: { params: memberParams, body: setPriorityBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: memberParams, body: setPriorityBody },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.priority', resource: 'clan' },
+      },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -147,16 +148,12 @@ const clanPriorityRoutes: FastifyPluginAsync = async (app) => {
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
-          await writeAuditEntry(tx, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'clan.member.priority',
-            targetType: 'clan',
+          req.auditSnapshots = {
             targetId: clan.id,
             before: { player_id: req.params.playerId, has_priority: member.hasPriority },
             after: { player_id: req.params.playerId, has_priority: enabled },
-            context: { requestId: req.id, method: req.method, url: req.url },
-          });
+          };
+          await auditRequestInTransaction(tx, req, reply);
         });
       } catch (err) {
         if (err instanceof PriorityPoolLimitError) {

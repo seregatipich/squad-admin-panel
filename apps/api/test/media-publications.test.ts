@@ -11,6 +11,7 @@ import { and, eq, gt, max } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../src/lib/rbac.js';
 import { createSession } from '../src/lib/sessions.js';
+import { waitForAuditRows } from './helpers/audit-since.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -587,16 +588,11 @@ describe('PATCH /api/v1/integrations/media-publishing', () => {
     expect(readBack.json().release_local_file).toBe(true);
 
     // Other cases write the same action on this shared harness, so only a row
-    // newer than the case start counts. The route writes it before replying.
-    const auditRows = await h.db
-      .select({ id: auditLog.id })
-      .from(auditLog)
-      .where(
-        and(
-          eq(auditLog.actionType, 'media.publish.settings.update'),
-          gt(auditLog.id, auditBaseline),
-        ),
-      );
+    // newer than the case start counts. The hook writes it just after replying.
+    const auditRows = await waitForAuditRows(
+      h.db,
+      and(eq(auditLog.actionType, 'media.publish.settings.update'), gt(auditLog.id, auditBaseline)),
+    );
     expect(auditRows).toHaveLength(1);
   });
 

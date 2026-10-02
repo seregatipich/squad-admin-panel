@@ -32,6 +32,7 @@ Current keys by category:
 | triggers | `trigger:view`, `trigger:edit` |
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
 | balancer | `balancer:view`, `balancer:edit` |
+| issues | `issue:view` |
 
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
 `admin_group:view` and `admin_group:edit` are production-active: they protect
@@ -103,6 +104,19 @@ A route guard that checks only `panel_access` lets an API token through as soon 
 | `GET /api/v1/ban-sources`, `GET /api/v1/ban-sources/options`, `GET /api/v1/ban-sources/:id` | `ban_source:view` |
 | `GET /api/v1/analytics/dashboard` | `server:view` |
 
+Issue #99 closed the rest of this gap. Every other read that authorised on `panel_access` alone now declares the key it belongs to, and keeps its `panel_access` guard:
+
+| Scope | Routes |
+|---|---|
+| `player:view` | banned names (`GET /banned-names`, `/banned-names/check`), clans (every `GET /clans*` read), economy reads (`/players/:id/bonus-balance`, `/bonus-transactions`, `/bonus-transactions/count`, `/bonus-shop/tiers`, `/settings/economy`), leaderboards (`/leaderboards`, `/leaderboards/bonuses`), media reads (`/media/:id`, `/media/:id/stream`, `/media/:id/publications`, `/players/:id/media`, `/moderation-actions/:id/media`, `/integrations/media-publishing`), `/message-templates`, `/players/:id/moderation-actions`, the notes feed (`/notes`, `/notes/authors`, `/notes/export`), `/geo-anomalies` and `/players/:id/geo-anomalies`, `/players/:id/match-summary`, `/seed-contribution`, `/steam-friend-check`, `/vote-stats`, `/subscriptions`, `/players/search`, reports (`GET /reports`, `/reports/:id`, `/reports/:id/actions`), `/settings/coplay`, `/suspects` |
+| `events:view` | `/matches` (list, `count`, `export`, `:id`), `/seasons`, `/statistics`, `/analytics/votes` |
+| `server:view` | `/layers`, `GET /servers/:id/map`, `/map-vote*` reads, `/rotation`, `/rotation-schedule`, `/seeding`, `/seed-schedule` (and `/history`), `/scheduled-tasks` (and `/history`), `/seed-call`, `/seed-subscriptions` |
+| `ban_source:view` | `GET /external-bans`, `GET /players/:id/external-bans` (external bans come from ban sources) |
+| `trigger:view` | `GET /alert-rules`, `GET /alerts` |
+| `issue:view` | every route of the issue tracker (`/issues*`, `/players/:id/issues`) |
+
+Writes whose only guard was `panel_access`, or a clan membership the token owner holds, take the module's key too: clan writes, `POST /reports`, `POST /media/link`, `POST /media/upload-tokens` need `player:view`; issue writes need `issue:view`. Reads and writes gated on a role flag (`can_manage_*`, `can_handle_reports`, `combat_view`, `can_edit_roles`) or a live-Squad permission need no key: `narrowToTokenScopes` never delegates those to a token. Own-account routes (`/me/*`, `/auth/*`) are exempt. `apps/api/test/security/api-token-scope.test.ts` probes every module with an unrelated scope (403) and with the right one.
+
 Session users with `panel_access` are unaffected: `derivePanelPermissions` grants them every catalogue key.
 
 ### Alt-detection settings (#43)
@@ -128,4 +142,4 @@ A caller without it gets `403 { error: 'forbidden', required_permission }` and t
 
 ## Audit-coverage CI gate
 
-`apps/api/test/audit-coverage.test.ts` builds the route table with `registerRoutes()` — the same list `server.ts` serves — and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a declarative `config.audit: { action, resource }`. The hook in `plugins/audit.ts` then writes an entry for every outcome, denied (`403`) and rejected (`404`/`409`/`422`) attempts included; a handler passes before/after snapshots through `req.auditSnapshots`. `'manual'` marks a handler that calls `writeAuditEntry` itself (the test checks its module does). `audit: false` is accepted only for machine-integration endpoints and for a frozen legacy list of routes that still write their own entries on the success path; that list may only shrink. Until audit #102/#116 the guard registered a hand-picked set of route modules, so `ban-sources.ts` and `banned-names.ts` shipped with `audit: false` unnoticed.
+`apps/api/test/audit-coverage.test.ts` builds the route table with `registerRoutes()` — the same list `server.ts` serves — and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a declarative `config.audit: { action, resource }`. The hook in `plugins/audit.ts` then writes one entry per request for every outcome, denied (`403`) and rejected (`404`/`409`/`422`) attempts included; a handler passes before/after snapshots through `req.auditSnapshots` (optionally `targetId`, extra `context` fields, and, for a dispatcher route or a signed webhook acting for a linked player, an `action` or `actor` override). A failed request with no user (an auth-hook 401/403, a public route's 4xx/5xx) is not recorded, so anonymous traffic cannot bloat the hash chain (#37). A handler whose change must commit atomically with its audit row calls `auditRequestInTransaction(tx, req, reply)` (`lib/request-audit.ts`) as the last statement of its transaction: the row is written there, the hook skips the request, and a failed audit insert rolls the change back. `'manual'` marks a handler that calls `writeAuditEntry` itself (the test checks its module does). `audit: false` is accepted only for machine-integration endpoints. Issue #99 moved the last 86 self-auditing routes (the frozen `LEGACY_SELF_AUDITED` list) onto the declarative form. Two flows keep per-target detail rows beside the request's own row, because each target is persisted as soon as its RCON command is confirmed: `POST /moderation-actions/bulk` and `POST /reports/:id/actions` (alts and failed targets), and `POST /reports/bulk-resolve` keeps one `report.update` row per resolved report. Until audit #102/#116 the guard registered a hand-picked set of route modules, so `ban-sources.ts` and `banned-names.ts` shipped with `audit: false` unnoticed.

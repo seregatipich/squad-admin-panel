@@ -165,7 +165,7 @@ const suspectsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/suspects',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

@@ -346,7 +346,7 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     );
   });
 
-  it('502s and writes no audit row when the worker is not connected', async () => {
+  it('502s and audits the rejected attempt, without a layer snapshot, when the worker is not connected', async () => {
     vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(notConnectedOutcome());
     await h.redis.set(`rcon:status:${serverId}`, rconStatus());
     const cookie = await asRoleWithSquadPermissions(['changemap']);
@@ -360,14 +360,13 @@ describeIfDb('POST /api/v1/servers/:serverId/map/next', () => {
     expect(resp.statusCode).toBe(502);
     expect(resp.json()).toMatchObject({ error: 'rcon_unavailable' });
 
-    await expect(
-      assertAuditRow(h, {
-        action: 'server.map.set_next',
-        resource: 'server',
-        targetId: serverId,
-        withinMs: 500,
-      }),
-    ).rejects.toThrow();
+    const audit = await assertAuditRow(h, {
+      action: 'server.map.set_next',
+      resource: 'server',
+      targetId: serverId,
+      statusCode: 502,
+    });
+    expect(audit.afterSnapshot).toBeNull();
   });
 });
 

@@ -314,6 +314,101 @@ describeIfDb('API token scopes narrow role flags and squad permissions (#7)', ()
 });
 
 /**
+ * Issue #99 — the remaining reads that authorised on `panelAccess` alone, one
+ * group per route module and the catalogue scope each belongs to. Each probe
+ * addresses a missing resource (or an empty collection), so a request that
+ * clears the guard answers 200 or 404, never 403.
+ */
+function panelReadsByScope(): Array<{ url: () => string; scope: string; allowed: number }> {
+  const missing = () => randomUUID();
+  const reads: Array<[scope: string, allowed: number, url: () => string]> = [
+    // player:view — player-centred data
+    ['player:view', 200, () => '/api/v1/banned-names'],
+    ['player:view', 200, () => '/api/v1/banned-names/check?nick=scope-probe'],
+    ['player:view', 200, () => '/api/v1/clans'],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/online`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/matches`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/members`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/roster/export`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/stats`],
+    ['player:view', 404, () => `/api/v1/clans/${missing()}/stats/export`],
+    ['player:view', 404, () => `/api/v1/players/${missing()}/bonus-balance`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/bonus-transactions`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/bonus-transactions/count`],
+    ['player:view', 200, () => '/api/v1/bonus-shop/tiers'],
+    ['player:view', 200, () => '/api/v1/leaderboards?metric=online'],
+    ['player:view', 200, () => '/api/v1/leaderboards/bonuses'],
+    ['player:view', 404, () => `/api/v1/media/${missing()}`],
+    ['player:view', 404, () => `/api/v1/media/${missing()}/stream`],
+    ['player:view', 404, () => `/api/v1/media/${missing()}/publications`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/media`],
+    ['player:view', 200, () => `/api/v1/moderation-actions/${missing()}/media`],
+    ['player:view', 200, () => '/api/v1/integrations/media-publishing'],
+    ['player:view', 200, () => '/api/v1/message-templates'],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/moderation-actions`],
+    ['player:view', 200, () => '/api/v1/notes'],
+    ['player:view', 200, () => '/api/v1/notes/authors'],
+    ['player:view', 200, () => '/api/v1/notes/export'],
+    ['player:view', 200, () => '/api/v1/geo-anomalies'],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/geo-anomalies`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/match-summary`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/seed-contribution`],
+    [
+      'player:view',
+      404,
+      () => `/api/v1/players/${missing()}/steam-friend-check?other=${missing()}`,
+    ],
+    ['player:view', 200, () => '/api/v1/players/search?q=scope-probe'],
+    ['player:view', 200, () => '/api/v1/reports'],
+    ['player:view', 404, () => `/api/v1/reports/${missing()}`],
+    ['player:view', 404, () => `/api/v1/reports/${missing()}/actions`],
+    ['player:view', 200, () => '/api/v1/settings/coplay'],
+    ['player:view', 200, () => '/api/v1/settings/economy'],
+    ['player:view', 200, () => '/api/v1/suspects'],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/vote-stats`],
+    ['player:view', 200, () => `/api/v1/players/${missing()}/subscriptions`],
+    // events:view — game data journals and statistics
+    ['events:view', 200, () => '/api/v1/matches'],
+    ['events:view', 200, () => '/api/v1/matches/count'],
+    ['events:view', 200, () => '/api/v1/matches/export'],
+    ['events:view', 404, () => `/api/v1/matches/${missing()}`],
+    ['events:view', 200, () => '/api/v1/seasons'],
+    ['events:view', 200, () => '/api/v1/statistics'],
+    ['events:view', 200, () => '/api/v1/analytics/votes'],
+    // server:view — server-scoped reads
+    ['server:view', 200, () => '/api/v1/layers'],
+    ['server:view', 200, () => `/api/v1/servers/${missing()}/map`],
+    ['server:view', 200, () => `/api/v1/servers/${missing()}/map-vote`],
+    ['server:view', 200, () => `/api/v1/servers/${missing()}/map-vote/preview`],
+    ['server:view', 200, () => `/api/v1/servers/${missing()}/map-vote/versions`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/map-vote/versions/${missing()}`],
+    ['server:view', 200, () => `/api/v1/servers/${missing()}/map-vote/picks`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/rotation`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/rotation-schedule`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/seeding`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/seed-schedule`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/seed-schedule/history`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/scheduled-tasks`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/scheduled-tasks/history`],
+    ['server:view', 404, () => `/api/v1/servers/${missing()}/seed-call`],
+    ['server:view', 200, () => '/api/v1/seed-subscriptions'],
+    // ban_source:view — external bans come from ban sources
+    ['ban_source:view', 200, () => '/api/v1/external-bans'],
+    ['ban_source:view', 404, () => `/api/v1/players/${missing()}/external-bans`],
+    // trigger:view — alert rules and the alerts they raise
+    ['trigger:view', 200, () => '/api/v1/alert-rules'],
+    ['trigger:view', 200, () => '/api/v1/alerts'],
+    // issue:view — the issue tracker
+    ['issue:view', 200, () => '/api/v1/issues'],
+    ['issue:view', 200, () => '/api/v1/issues/labels'],
+    ['issue:view', 404, () => `/api/v1/issues/${missing()}`],
+    ['issue:view', 200, () => `/api/v1/players/${missing()}/issues`],
+  ];
+  return reads.map(([scope, allowed, url]) => ({ url, scope, allowed }));
+}
+
+/**
  * Audit #89/#101/#114 — reads that used to authorise on `panelAccess` alone
  * let a token delegated ANY single scope read the chat archive, automation
  * rules (with their RCON arguments), ban-source URLs and server analytics.
@@ -328,6 +423,7 @@ const SCOPE_GATED_READS: Array<{ url: () => string; scope: string; allowed: numb
   { url: () => '/api/v1/ban-sources/options', scope: 'ban_source:view', allowed: 200 },
   { url: () => `/api/v1/ban-sources/${randomUUID()}`, scope: 'ban_source:view', allowed: 404 },
   { url: () => '/api/v1/analytics/dashboard', scope: 'server:view', allowed: 200 },
+  ...panelReadsByScope(),
 ];
 
 describeIfDb('panel reads narrow to their catalogue scope (#89/#101/#114)', () => {
@@ -351,6 +447,65 @@ describeIfDb('panel reads narrow to their catalogue scope (#89/#101/#114)', () =
         headers: { authorization: `Bearer ${token}` },
       });
       expect(res.statusCode, res.body).toBe(read.allowed);
+    });
+  }
+});
+
+/**
+ * Issue #99 — writes whose only guard was `panelAccess` (or a clan membership
+ * the token owner holds) now also need the module's catalogue scope. Probes
+ * send an empty body: a request that clears the guard answers 400/404, never
+ * 403, and nothing is mutated.
+ */
+const SCOPE_GATED_WRITES: Array<{
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  url: () => string;
+  scope: string;
+}> = [
+  { method: 'POST', url: () => '/api/v1/clans', scope: 'player:view' },
+  { method: 'PATCH', url: () => `/api/v1/clans/${randomUUID()}`, scope: 'player:view' },
+  { method: 'DELETE', url: () => `/api/v1/clans/${randomUUID()}`, scope: 'player:view' },
+  {
+    method: 'POST',
+    url: () => `/api/v1/clans/${randomUUID()}/members`,
+    scope: 'player:view',
+  },
+  {
+    method: 'PUT',
+    url: () => `/api/v1/clans/${randomUUID()}/members/${randomUUID()}/priority`,
+    scope: 'player:view',
+  },
+  { method: 'POST', url: () => '/api/v1/reports', scope: 'player:view' },
+  { method: 'POST', url: () => '/api/v1/media/link', scope: 'player:view' },
+  { method: 'POST', url: () => '/api/v1/media/upload-tokens', scope: 'player:view' },
+  { method: 'POST', url: () => '/api/v1/issues', scope: 'issue:view' },
+  { method: 'PATCH', url: () => `/api/v1/issues/${randomUUID()}`, scope: 'issue:view' },
+  { method: 'POST', url: () => `/api/v1/issues/${randomUUID()}/comments`, scope: 'issue:view' },
+];
+
+describeIfDb('panel writes narrow to their catalogue scope (#99)', () => {
+  for (const write of SCOPE_GATED_WRITES) {
+    it(`403s ${write.method} ${write.url()} for a token delegated only an unrelated scope`, async () => {
+      const token = await ownerToken(['player:view_ips']);
+      const res = await h.app.inject({
+        method: write.method,
+        url: write.url(),
+        headers: { authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      expect(res.statusCode, res.body).toBe(403);
+    });
+
+    it(`lets ${write.method} ${write.url()} past the guard for a token delegated ${write.scope}`, async () => {
+      const token = await ownerToken([write.scope]);
+      const res = await h.app.inject({
+        method: write.method,
+        url: write.url(),
+        headers: { authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      expect(res.statusCode, res.body).not.toBe(403);
+      expect(res.statusCode, res.body).toBeLessThan(500);
     });
   }
 });

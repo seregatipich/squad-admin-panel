@@ -18,7 +18,7 @@ const playerIssueRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.get(
     '/api/v1/players/:playerId/issues',
-    { schema: { params: playerIdParam } },
+    { schema: { params: playerIdParam }, config: { permissions: ['issue:view'] } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

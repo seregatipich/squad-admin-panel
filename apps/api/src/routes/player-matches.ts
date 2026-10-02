@@ -24,7 +24,7 @@ const playerMatchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/match-summary',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

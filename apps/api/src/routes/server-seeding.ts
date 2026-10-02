@@ -3,7 +3,6 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -46,7 +45,7 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/seeding',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -106,7 +105,10 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/seeding-settings',
-    { schema: { params: serverIdParams, body: seedingSettingsBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: seedingSettingsBody },
+      config: { audit: { action: 'server.seeding_settings_update', resource: 'server' } },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -164,17 +166,7 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
         seed_hysteresis: updateSet.seedHysteresis ?? before.seed_hysteresis,
       };
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.seeding_settings_update',
-        targetType: 'server',
-        targetId: id,
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { before, after };
 
       return { server_id: id, ...after };
     },

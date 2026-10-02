@@ -4,7 +4,6 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { isFileNotFoundError } from '../lib/bridge-file-errors.js';
 import {
   buildRotationSegmentBody,
@@ -52,7 +51,7 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/rotation',
-    { config: { audit: false }, schema: { params: idParams } },
+    { config: { permissions: ['server:view'], audit: false }, schema: { params: idParams } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -152,7 +151,10 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:id/rotation',
-    { config: { audit: 'manual' }, schema: { params: idParams, body: putBody } },
+    {
+      config: { audit: { action: 'server.rotation.write', resource: 'server' } },
+      schema: { params: idParams, body: putBody },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -206,19 +208,13 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
         req.ip ?? null,
       );
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.rotation.write',
-        targetType: 'server',
-        targetId: req.params.id,
+      req.auditSnapshots = {
         context: {
           before_segment: beforeSegment,
           after_segment: newBody,
           layer_count: req.body.layers.length,
         },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return { ...result, behavior: 'rotation' };
     },

@@ -13,9 +13,9 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 const COMMENT_MAX = 512;
 const DEFAULT_LIMIT = 50;
@@ -105,7 +105,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-balance',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -126,7 +126,10 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-transactions',
-    { schema: { params: playerIdParams, querystring: historyQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: historyQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -157,7 +160,10 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-transactions/count',
-    { schema: { params: playerIdParams, querystring: countQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: countQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -178,7 +184,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/bonus-adjustments',
     {
       schema: { params: playerIdParams, body: adjustBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'player.bonus.adjust', resource: 'player' } },
     },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
@@ -220,17 +226,14 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
         // Inside the transaction: a failed audit insert rolls the balance change
         // back, so no adjustment is ever committed without its audit row.
-        await writeAuditEntry(tx, {
-          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-          actorIp: req.ip ?? null,
-          actionType: 'player.bonus.adjust',
-          targetType: 'player',
+        req.auditSnapshots = {
           targetId: playerId,
           before: { bonus_balance: current.balance },
           after: { bonus_balance: nextBalance },
           context: { player_id: playerId, amount, request_id: req.id },
-          statusCode: 201,
-        });
+        };
+        reply.code(201);
+        await auditRequestInTransaction(tx, req, reply);
 
         return {
           status: 'ok' as const,
@@ -257,27 +260,31 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/bonus-shop/tiers', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select()
-      .from(vipTiers)
-      .where(and(eq(vipTiers.isActive, true), isNotNull(vipTiers.priceBonuses)))
-      .orderBy(asc(vipTiers.sortOrder), asc(vipTiers.name));
-    return {
-      tiers: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        role_id: row.roleId,
-        description: row.description,
-        default_days: row.defaultDays,
-        sort_order: row.sortOrder,
-        is_active: row.isActive,
-        price_bonuses: row.priceBonuses,
-      })),
-    };
-  });
+  fast.get(
+    '/api/v1/bonus-shop/tiers',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const rows = await app.db
+        .select()
+        .from(vipTiers)
+        .where(and(eq(vipTiers.isActive, true), isNotNull(vipTiers.priceBonuses)))
+        .orderBy(asc(vipTiers.sortOrder), asc(vipTiers.name));
+      return {
+        tiers: rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          role_id: row.roleId,
+          description: row.description,
+          default_days: row.defaultDays,
+          sort_order: row.sortOrder,
+          is_active: row.isActive,
+          price_bonuses: row.priceBonuses,
+        })),
+      };
+    },
+  );
 
   fast.post(
     '/api/v1/players/:playerId/bonus-purchases',

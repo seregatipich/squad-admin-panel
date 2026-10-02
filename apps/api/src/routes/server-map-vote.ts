@@ -15,7 +15,7 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { auditMapLikeAction, requireSquadPermission } from '../lib/map-guards.js';
+import { requireSquadPermission } from '../lib/map-guards.js';
 import {
   MAP_VOTE_VERSION_FILENAME,
   type MapVoteSnapshot,
@@ -187,16 +187,9 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
       ),
     });
   }
-
-  const auditMapVoteWrite = (
-    req: FastifyRequest,
-    reply: FastifyReply,
-    input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
-
   fast.get(
     '/api/v1/servers/:serverId/map-vote',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -233,7 +226,10 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/settings',
-    { schema: { params: serverIdParams, body: settingsBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: settingsBody },
+      config: { audit: { action: 'server.map_vote.settings.write', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -273,18 +269,17 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(serverSettings.serverId, serverId));
 
       await versionMapVote(req, serverId, 'изменены правила автовыбора карты');
-      await auditMapVoteWrite(req, reply, {
-        actionType: 'server.map_vote.settings.write',
-        serverId,
-        after: body,
-      });
+      req.auditSnapshots = { after: body };
       return { ok: true };
     },
   );
 
   fast.put(
     '/api/v1/servers/:serverId/map-vote/candidates',
-    { schema: { params: serverIdParams, body: candidatesBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: candidatesBody },
+      config: { audit: { action: 'server.map_vote.candidates.write', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
       if (denied) return denied;
@@ -343,18 +338,14 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
       });
 
       await versionMapVote(req, serverId, `изменён пул слоёв (${candidates.length})`);
-      await auditMapVoteWrite(req, reply, {
-        actionType: 'server.map_vote.candidates.write',
-        serverId,
-        after: { count: candidates.length, candidates },
-      });
+      req.auditSnapshots = { after: { count: candidates.length, candidates } };
       return { ok: true, count: candidates.length };
     },
   );
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/preview',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -424,7 +415,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/map-vote/versions',
     {
       schema: { params: serverIdParams, querystring: versionsQuery },
-      config: { audit: false },
+      config: { permissions: ['server:view'], audit: false },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -474,7 +465,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/versions/:versionId',
-    { schema: { params: versionParams }, config: { audit: false } },
+    { schema: { params: versionParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -503,7 +494,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/map-vote/versions/:versionId/restore',
     {
       schema: { params: versionParams, body: restoreBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'server.map_vote.restore', resource: 'server' } },
     },
     async (req, reply) => {
       const denied = requireChangemap(req, reply);
@@ -573,18 +564,19 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
       });
 
       await versionMapVote(req, serverId, `откат к версии ${versionId.slice(0, 8)}`);
-      await auditMapVoteWrite(req, reply, {
-        actionType: 'server.map_vote.restore',
-        serverId,
+      req.auditSnapshots = {
         after: { version_id: versionId, dropped_layers: missing, count: restored.length },
-      });
+      };
       return { ok: true, count: restored.length, dropped_layers: missing };
     },
   );
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/picks',
-    { schema: { params: serverIdParams, querystring: picksQuery }, config: { audit: false } },
+    {
+      schema: { params: serverIdParams, querystring: picksQuery },
+      config: { permissions: ['server:view'], audit: false },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

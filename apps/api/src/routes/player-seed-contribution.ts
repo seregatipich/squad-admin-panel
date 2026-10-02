@@ -45,7 +45,7 @@ const playerSeedContributionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/seed-contribution',
     {
       schema: { params: playerIdParams, querystring: seedContributionQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

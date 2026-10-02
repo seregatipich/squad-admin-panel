@@ -4,9 +4,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../../lib/admins-cfg-sync.js';
-import { writeAuditEntry } from '../../lib/audit.js';
 import { clanAccess } from '../../lib/clans/access.js';
-import { auditActor, clanIdParams, memberParams, pgError } from '../../lib/clans/common.js';
+import { clanIdParams, memberParams, pgError } from '../../lib/clans/common.js';
+import { auditRequestInTransaction } from '../../lib/request-audit.js';
 import { requestUser } from '../../lib/request-user.js';
 
 const assignableMemberRole = z.enum(['deputy', 'member']);
@@ -27,7 +27,13 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans/:id/members',
-    { schema: { params: clanIdParams, body: addMemberBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams, body: addMemberBody },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.add', resource: 'clan' },
+      },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -82,16 +88,13 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
             memberRole,
             hasPriority: false,
           });
-          await writeAuditEntry(tx, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'clan.member.add',
-            targetType: 'clan',
+          req.auditSnapshots = {
             targetId: clan.id,
             before: null,
             after: { player_id: req.body.player_id, member_role: memberRole },
-            context: { requestId: req.id, method: req.method, url: req.url },
-          });
+          };
+          reply.code(201);
+          await auditRequestInTransaction(tx, req, reply);
         });
       } catch (err) {
         const { code } = pgError(err);
@@ -129,7 +132,13 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/members/:playerId',
-    { schema: { params: memberParams, body: setMemberRoleBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: memberParams, body: setMemberRoleBody },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.role', resource: 'clan' },
+      },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -160,16 +169,12 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
               and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
             );
         }
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'clan.member.role',
-          targetType: 'clan',
+        req.auditSnapshots = {
           targetId: clan.id,
           before: { player_id: req.params.playerId, member_role: currentRole },
           after: { player_id: req.params.playerId, member_role: req.body.member_role },
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
       });
       return {
         clan_id: clan.id,
@@ -181,7 +186,13 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/clans/:id/members/:playerId',
-    { schema: { params: memberParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: memberParams },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.remove', resource: 'clan' },
+      },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -224,16 +235,12 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
             request_id: req.id,
           });
         }
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'clan.member.remove',
-          targetType: 'clan',
+        req.auditSnapshots = {
           targetId: clan.id,
           before: { player_id: req.params.playerId, member_role: currentRole },
           after: null,
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
       });
       return { ok: true };
     },
@@ -241,7 +248,13 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans/:id/transfer-leadership',
-    { schema: { params: clanIdParams, body: transferBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams, body: transferBody },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.leadership.transfer', resource: 'clan' },
+      },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -287,16 +300,12 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
             .where(
               and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.body.player_id)),
             );
-          await writeAuditEntry(tx, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'clan.leadership.transfer',
-            targetType: 'clan',
+          req.auditSnapshots = {
             targetId: clan.id,
             before: { leader_id: previousLeaderId },
             after: { leader_id: req.body.player_id },
-            context: { requestId: req.id, method: req.method, url: req.url },
-          });
+          };
+          await auditRequestInTransaction(tx, req, reply);
           return { ok: true, previousLeaderId } as const;
         });
       } catch (err) {

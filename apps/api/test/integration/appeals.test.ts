@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  auditLog,
   banAppeals,
   discordWebhooks,
   events,
@@ -11,7 +12,7 @@ import {
 } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { moderationActionPayload, STREAM_NAME } from '@squad/shared-types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import pino from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -894,27 +895,39 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     expect(await h.redis.xlen(STREAM_NAME.eventsServer(serverId))).toBeGreaterThan(before);
   });
 
-  it('approving writes both an appeal.status_change and an appeal.unban audit row', async () => {
+  it('approving writes one appeal.status_change audit row that names the reverted bans', async () => {
     const appealId = await openAppeal(testSteamId(987190), 'AppealTarget190');
 
     const approved = await patch(appealId, { status: 'approved' });
     expect(approved.statusCode).toBe(200);
     const { revert } = approved.json() as { revert: { reverted_action_ids: string[] } };
 
-    await assertAuditRow(h, {
+    const audit = await assertAuditRow(h, {
       action: 'appeal.status_change',
       resource: 'ban_appeal',
       targetId: appealId,
     });
-    const unbanAudit = await assertAuditRow(h, {
-      action: 'appeal.unban',
-      resource: 'ban_appeal',
-      targetId: appealId,
-    });
     expect(revert.reverted_action_ids).not.toHaveLength(0);
-    expect((unbanAudit.context as { reverted_action_ids?: string[] }).reverted_action_ids).toEqual(
+    expect((audit.context as { reverted_action_ids?: string[] }).reverted_action_ids).toEqual(
       revert.reverted_action_ids,
     );
+    expect(audit.afterSnapshot).toMatchObject({ status: 'approved' });
+
+    // One request, one row: no second appeal.unban row beside it.
+    const rows = await h.db
+      .select({ id: auditLog.id, action: auditLog.actionType })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.targetId, appealId),
+          inArray(auditLog.actionType, [
+            'appeal.status_change',
+            'appeal.unban',
+            'appeal.unban_partial',
+          ]),
+        ),
+      );
+    expect(rows.map((row) => row.action)).toEqual(['appeal.status_change']);
   });
 
   it('reports and audits a partial revert when a later server conflicts (#93)', async () => {

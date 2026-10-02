@@ -2,7 +2,7 @@ import { playerDiscordLinks, players, roles, servers } from '@squad/db/schema';
 import { and, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import type { AuditActor } from '../lib/audit.js';
 import {
   buildPlayerCardContent,
   buildStatusContent,
@@ -101,7 +101,12 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/api/v1/integrations/discord/interactions',
-    { config: { audit: 'manual', public: true } },
+    {
+      config: {
+        audit: { action: 'discord.interaction', resource: 'discord_command' },
+        public: true,
+      },
+    },
     async (req, reply) => {
       const publicKeyHex = app.config.DISCORD_PUBLIC_KEY;
       if (!publicKeyHex) {
@@ -155,16 +160,12 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
       const auditActor: AuditActor = { kind: 'steam', playerId: link.playerId, tokenId: null };
       const name = body.data?.name ?? '';
 
-      const audit = async (actionType: string) => {
-        await writeAuditEntry(app.db, {
+      const audit = (action: string) => {
+        req.auditSnapshots = {
+          action,
           actor: auditActor,
-          actorIp: req.ip ?? null,
-          actionType,
-          targetType: 'discord_command',
-          targetId: null,
           context: { request_id: req.id, command: name },
-          statusCode: 200,
-        });
+        };
       };
 
       if (name === 'status') {
@@ -186,7 +187,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
             return { displayName: s.displayName, status };
           }),
         );
-        await audit('discord.command.status');
+        audit('discord.command.status');
         return ephemeral(buildStatusContent(lines));
       }
 
@@ -213,7 +214,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
               .from(players)
               .where(ilike(players.canonicalName, containsPattern(query)))
               .limit(1);
-        await audit('discord.command.player');
+        audit('discord.command.player');
         if (!found) return ephemeral('Игрок не найден.');
         return ephemeral(
           buildPlayerCardContent(
@@ -250,7 +251,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
             // A malformed roster snapshot is not worth failing the command over.
           }
         }
-        await audit('discord.command.online_admins');
+        audit('discord.command.online_admins');
         if (rosterNames.size === 0) return ephemeral('Админов онлайн нет.');
         // innerJoin on roles + panelAccess: only roster players whose role grants
         // panel access count as admins, so a plain player on the server is not listed.

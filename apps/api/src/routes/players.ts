@@ -166,7 +166,10 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/search',
-    { schema: { querystring: searchQuery }, config: { audit: false } },
+    {
+      schema: { querystring: searchQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

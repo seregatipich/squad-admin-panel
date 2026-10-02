@@ -17,7 +17,7 @@ const playerSteamFriendCheckRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/steam-friend-check',
     {
       schema: { params: playerIdParams, querystring: query },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
