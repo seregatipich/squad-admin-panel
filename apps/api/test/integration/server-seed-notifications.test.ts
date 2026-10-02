@@ -276,7 +276,9 @@ describe('SEED-4 seed-call notifications', () => {
         .select()
         .from(auditLog)
         .where(and(eq(auditLog.actionType, 'seed.call_sent'), eq(auditLog.targetId, serverId)));
-      expect(audit).toHaveLength(2);
+      // Two delivered calls and the rate-limited attempt between them: a
+      // rejected attempt is audited too.
+      expect(audit.map((entry) => entry.statusCode).sort()).toEqual([200, 200, 429]);
       expect(audit.every((entry) => entry.actorPlayerId === h.seed.ownerPlayerId)).toBe(true);
     } finally {
       await Promise.all([closeSocket(subscriberSocket.socket), closeSocket(actorSocket.socket)]);

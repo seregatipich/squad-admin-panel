@@ -3,7 +3,6 @@ import { and, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { enforceModerationAction } from '../lib/moderation-enforce.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { containsPattern } from '../lib/sql-like.js';
@@ -224,7 +223,10 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/players/:playerId/external-bans/:externalBanId/local-ban',
-    { schema: { params: localBanParams, body: localBanBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: localBanParams, body: localBanBody },
+      config: { audit: { action: 'external_ban.local_ban', resource: 'player' } },
+    },
     async (req, reply) => {
       const denied = localBanGuard(req, reply);
       if (denied) return denied;
@@ -322,15 +324,7 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'action_failed' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: {
-          kind: 'steam',
-          playerId: actorPlayerId,
-          tokenId: req.apiTokenId ?? null,
-        },
-        actorIp: req.ip ?? null,
-        actionType: 'external_ban.local_ban',
-        targetType: 'player',
+      req.auditSnapshots = {
         targetId: req.params.playerId,
         after: {
           action_type: 'ban',
@@ -340,9 +334,7 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
           external_ban_id: externalBan.id,
           source_id: externalBan.sourceId,
         },
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return {
         id: result.actionId,

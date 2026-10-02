@@ -6,11 +6,12 @@ import {
   players,
 } from '@squad/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
+import type { AuditTransaction } from '../lib/audit.js';
 import { isNarrowEnoughToIgnore, isValidIpOrCidr } from '../lib/ip-cidr.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 const SINGLETON_ID = 1;
 const WEIGHT_MAX = 1000;
@@ -104,24 +105,6 @@ function serializeSettings(row: AltDetectionSettingsRow | null): SettingsView {
   };
 }
 
-async function auditMutation(
-  db: DatabaseClient | AuditTransaction,
-  req: FastifyRequest,
-  input: { action: string; targetType: string; targetId: string; before: unknown; after: unknown },
-): Promise<void> {
-  if (!req.user) return;
-  await writeAuditEntry(db, {
-    actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-    actorIp: req.ip ?? null,
-    actionType: input.action,
-    targetType: input.targetType,
-    targetId: input.targetId,
-    before: input.before,
-    after: input.after,
-    context: { requestId: req.id, method: req.method, url: req.url },
-  });
-}
-
 /**
  * ALT-1 settings routes: CRUD for the `alt_ignored_ips` VPN/CGNAT exclusion
  * list and the `alt_detection_settings` scoring-weight singleton consumed by
@@ -173,7 +156,10 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection',
     {
       schema: { body: putBody },
-      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
+      config: {
+        permissions: ['player:manage_alt_detection'],
+        audit: { action: 'alt_detection.settings.update', resource: 'alt_detection_settings' },
+      },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
@@ -217,13 +203,8 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
           .onConflictDoUpdate({ target: altDetectionSettings.id, set: updates });
 
         const after = serializeSettings(await loadSettings(tx));
-        await auditMutation(tx, req, {
-          action: 'alt_detection.settings.update',
-          targetType: 'alt_detection_settings',
-          targetId: String(SINGLETON_ID),
-          before,
-          after,
-        });
+        req.auditSnapshots = { targetId: String(SINGLETON_ID), before, after };
+        await auditRequestInTransaction(tx, req, reply);
         return after;
       });
       if (!result) {
@@ -238,7 +219,10 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips',
     {
       schema: { body: createIgnoredIpBody },
-      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
+      config: {
+        permissions: ['player:manage_alt_detection'],
+        audit: { action: 'alt_detection.ignored_ip.create', resource: 'alt_ignored_ip' },
+      },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: guaranteed by the player:manage_alt_detection permission gate
@@ -251,13 +235,13 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
             .values({ cidr: req.body.cidr, note: req.body.note ?? null, createdBy: actorId })
             .returning();
           if (row) {
-            await auditMutation(tx, req, {
-              action: 'alt_detection.ignored_ip.create',
-              targetType: 'alt_ignored_ip',
+            req.auditSnapshots = {
               targetId: row.id,
               before: null,
               after: { id: row.id, cidr: row.cidr, note: row.note },
-            });
+            };
+            reply.code(201);
+            await auditRequestInTransaction(tx, req, reply);
           }
           return row;
         });
@@ -291,7 +275,10 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/alt-detection/ignored-ips/:id',
     {
       schema: { params: idParam },
-      config: { permissions: ['player:manage_alt_detection'], audit: 'manual' },
+      config: {
+        permissions: ['player:manage_alt_detection'],
+        audit: { action: 'alt_detection.ignored_ip.delete', resource: 'alt_ignored_ip' },
+      },
     },
     async (req, reply) => {
       const existingRows = await app.db
@@ -306,13 +293,12 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
       }
       await app.db.transaction(async (tx) => {
         await tx.delete(altIgnoredIps).where(eq(altIgnoredIps.id, req.params.id));
-        await auditMutation(tx, req, {
-          action: 'alt_detection.ignored_ip.delete',
-          targetType: 'alt_ignored_ip',
+        req.auditSnapshots = {
           targetId: existing.id,
           before: { id: existing.id, cidr: existing.cidr, note: existing.note },
           after: null,
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
       });
       return { ok: true };
     },

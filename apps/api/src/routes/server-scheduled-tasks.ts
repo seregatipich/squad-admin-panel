@@ -12,8 +12,6 @@ import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
-import { panelGuard } from '../lib/panel-guard.js';
 import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -213,11 +211,8 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/scheduled-tasks',
-    { config: { audit: false }, schema: { params: serverIdParams } },
+    { config: { permissions: ['server:view'], audit: false }, schema: { params: serverIdParams } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);
@@ -252,11 +247,11 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/scheduled-tasks/history',
-    { config: { audit: false }, schema: { params: serverIdParams, querystring: historyQuery } },
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: serverIdParams, querystring: historyQuery },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);
@@ -303,7 +298,10 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/scheduled-tasks',
-    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: createBody } },
+    {
+      config: { audit: { action: 'server.scheduled_task.create', resource: 'scheduled_task' } },
+      schema: { params: serverIdParams, body: createBody },
+    },
     async (req, reply) => {
       const denied = taskTypeGuard(req, reply, req.body.task_type);
       if (denied) return denied;
@@ -396,20 +394,16 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
       const primary = insertedRows[0];
       if (!primary) throw new Error('scheduled_tasks insert returned no row');
 
-      // biome-ignore lint/style/noNonNullAssertion: taskTypeGuard above requires req.user
-      const user = req.user!;
-      for (const inserted of insertedRows) {
-        await writeAuditEntry(app.db, {
-          actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-          actorIp: req.ip ?? null,
-          actionType: 'server.scheduled_task.create',
-          targetType: 'scheduled_task',
-          targetId: inserted.id,
-          after: serialize(inserted),
-          context: { server_id: inserted.serverId },
-          statusCode: 201,
-        });
-      }
+      // A fan-out creates one task per target server; the request is audited
+      // once, naming the primary task and listing the others in its context.
+      req.auditSnapshots = {
+        targetId: primary.id,
+        after: serialize(primary),
+        context: {
+          server_id: primary.serverId,
+          also_created: insertedRows.slice(1).map((r) => ({ id: r.id, server_id: r.serverId })),
+        },
+      };
 
       reply.code(201);
       return {
@@ -421,7 +415,10 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/servers/:id/scheduled-tasks/:taskId',
-    { config: { audit: 'manual' }, schema: { params: taskParams, body: updateBody } },
+    {
+      config: { audit: { action: 'server.scheduled_task.update', resource: 'scheduled_task' } },
+      schema: { params: taskParams, body: updateBody },
+    },
     async (req, reply) => {
       const server = await loadServer(req.params.id);
       if (!server) {
@@ -506,19 +503,12 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
         .returning();
       if (!row) throw new Error('scheduled_tasks update returned no row');
 
-      // biome-ignore lint/style/noNonNullAssertion: taskTypeGuard above requires req.user
-      const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.scheduled_task.update',
-        targetType: 'scheduled_task',
+      req.auditSnapshots = {
         targetId: row.id,
         before: serialize(existing),
         after: serialize(row),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return serialize(row);
     },
@@ -526,7 +516,10 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/scheduled-tasks/:taskId',
-    { config: { audit: 'manual' }, schema: { params: taskParams } },
+    {
+      config: { audit: { action: 'server.scheduled_task.delete', resource: 'scheduled_task' } },
+      schema: { params: taskParams },
+    },
     async (req, reply) => {
       const server = await loadServer(req.params.id);
       if (!server) {
@@ -550,18 +543,11 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
 
       await app.db.delete(scheduledTasks).where(eq(scheduledTasks.id, req.params.taskId));
 
-      // biome-ignore lint/style/noNonNullAssertion: taskTypeGuard above requires req.user
-      const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.scheduled_task.delete',
-        targetType: 'scheduled_task',
+      req.auditSnapshots = {
         targetId: existing.id,
         before: serialize(existing),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return { deleted: true, id: existing.id };
     },

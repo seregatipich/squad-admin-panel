@@ -7,15 +7,9 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../../lib/admins-cfg-sync.js';
-import { writeAuditEntry } from '../../lib/audit.js';
 import { clanAccess } from '../../lib/clans/access.js';
-import {
-  auditActor,
-  clanIdParams,
-  clanSnapshot,
-  pgError,
-  toClanDto,
-} from '../../lib/clans/common.js';
+import { clanIdParams, clanSnapshot, pgError, toClanDto } from '../../lib/clans/common.js';
+import { auditRequestInTransaction } from '../../lib/request-audit.js';
 import { requestUser } from '../../lib/request-user.js';
 
 const NAME_MAX = 32;
@@ -84,7 +78,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/clans',
-    { schema: { body: createBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'clan.create', resource: 'clan' } },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.canManageClans) {
@@ -109,16 +106,8 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
             })
             .returning();
           if (!row) throw new Error('clans insert returned no row');
-          await writeAuditEntry(tx, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'clan.create',
-            targetType: 'clan',
-            targetId: id,
-            before: null,
-            after: clanSnapshot(row),
-            context: { requestId: req.id, method: req.method, url: req.url },
-          });
+          req.auditSnapshots = { targetId: id, before: null, after: clanSnapshot(row) };
+          await auditRequestInTransaction(tx, req, reply);
           return row;
         });
       } catch (err) {
@@ -142,7 +131,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id',
-    { schema: { params: clanIdParams, body: updateBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams, body: updateBody },
+      config: { audit: { action: 'clan.update', resource: 'clan' } },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -183,16 +175,8 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
             .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)))
             .returning();
           if (!row) return undefined;
-          await writeAuditEntry(tx, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'clan.update',
-            targetType: 'clan',
-            targetId: clan.id,
-            before,
-            after: clanSnapshot(row),
-            context: { requestId: req.id, method: req.method, url: req.url },
-          });
+          req.auditSnapshots = { targetId: clan.id, before, after: clanSnapshot(row) };
+          await auditRequestInTransaction(tx, req, reply);
           return row;
         });
       } catch (err) {
@@ -223,7 +207,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/settings',
-    { schema: { params: clanIdParams, body: settingsBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams, body: settingsBody },
+      config: { audit: { action: 'clan.settings.update', resource: 'clan' } },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -250,16 +237,8 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
           .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)))
           .returning();
         if (!row) return undefined;
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'clan.settings.update',
-          targetType: 'clan',
-          targetId: clan.id,
-          before,
-          after: clanSnapshot(row),
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        req.auditSnapshots = { targetId: clan.id, before, after: clanSnapshot(row) };
+        await auditRequestInTransaction(tx, req, reply);
         return row;
       });
       if (!updated) {
@@ -272,7 +251,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/clans/:id/expire',
-    { schema: { params: clanIdParams, body: expireBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams, body: expireBody },
+      config: { audit: { action: 'clan.expire.update', resource: 'clan' } },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -310,16 +292,8 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
           enqueued_at: now.toISOString(),
           request_id: req.id,
         });
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'clan.expire.update',
-          targetType: 'clan',
-          targetId: clan.id,
-          before,
-          after: clanSnapshot(row),
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        req.auditSnapshots = { targetId: clan.id, before, after: clanSnapshot(row) };
+        await auditRequestInTransaction(tx, req, reply);
         return row;
       });
       if (!updated) {
@@ -332,7 +306,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/clans/:id',
-    { schema: { params: clanIdParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: clanIdParams },
+      config: { audit: { action: 'clan.disband', resource: 'clan' } },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       const clan = await loadActiveClan(req.params.id);
@@ -371,16 +348,12 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
           enqueued_at: disbandedAt.toISOString(),
           request_id: req.id,
         });
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'clan.disband',
-          targetType: 'clan',
+        req.auditSnapshots = {
           targetId: clan.id,
           before: { ...clanSnapshot(clan), members: releasedMembers },
           after: after ? clanSnapshot(after) : null,
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
       });
       return { ok: true };
     },

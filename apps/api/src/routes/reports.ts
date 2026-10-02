@@ -8,11 +8,10 @@ import {
 } from '@squad/db/schema';
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
@@ -58,15 +57,6 @@ const patchBody = z
   .refine((body) => body.status !== undefined || body.resolution_note !== undefined, {
     message: 'empty_update',
   });
-
-function auditActor(req: FastifyRequest): AuditActor {
-  return {
-    kind: 'steam',
-    // biome-ignore lint/style/noNonNullAssertion: callers guard req.user first
-    playerId: req.user!.playerId,
-    tokenId: req.apiTokenId ?? null,
-  };
-}
 
 interface EvidenceItem {
   id: string;
@@ -313,7 +303,10 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/reports',
-    { schema: { body: createBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'report.create', resource: 'report' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -384,16 +377,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
       const evidence = evidenceByReport.get(reportId) ?? [];
       const after = serializeReport(created, evidence);
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'report.create',
-        targetType: 'report',
-        targetId: reportId,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: reportId, after };
       app.liveBus.publish({
         type: 'report.created',
         ts: new Date().toISOString(),
@@ -407,7 +391,10 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/reports/:id',
-    { schema: { params: idParam, body: patchBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam, body: patchBody },
+      config: { audit: { action: 'report.update', resource: 'report' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -500,24 +487,12 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'report.update',
-        targetType: 'report',
+      req.auditSnapshots = {
         targetId: existing.id,
         before,
         after,
-        context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
-          notified,
-          notify_failed: notifyFailed,
-          recompute_failed: recomputeFailed,
-        },
-        statusCode: reply.statusCode,
-      });
+        context: { notified, notify_failed: notifyFailed, recompute_failed: recomputeFailed },
+      };
       app.liveBus.publish({
         type: 'report.updated',
         ts: new Date().toISOString(),

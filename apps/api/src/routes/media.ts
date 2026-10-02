@@ -15,7 +15,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { insertUploadedMedia, softDeleteMedia } from '../lib/media-files.js';
 import {
   MediaMagicByteMismatchError,
@@ -103,102 +102,104 @@ function parseRangeHeader(
 const mediaRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.post('/api/v1/media', { config: { audit: 'manual' } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const actorId = req.user?.playerId;
-    if (!actorId) {
-      reply.code(401);
-      return { error: 'unauthenticated' };
-    }
+  fast.post(
+    '/api/v1/media',
+    { config: { audit: { action: 'media.upload', resource: 'media_file' } } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const actorId = req.user?.playerId;
+      if (!actorId) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
 
-    if (!req.isMultipart()) {
-      reply.code(400);
-      return { error: 'expected_multipart' };
-    }
-
-    const filePart = await req.file();
-    if (!filePart) {
-      reply.code(400);
-      return { error: 'missing_file' };
-    }
-
-    if (!isUploadMimeType(filePart.mimetype)) {
-      filePart.file.resume();
-      reply.code(415);
-      return { error: 'unsupported_media_type', mime_type: filePart.mimetype };
-    }
-    const mimeType = filePart.mimetype;
-
-    const metadataParse = mediaUploadMetadata.safeParse({
-      title: multipartFieldValue(filePart.fields.title),
-      description: multipartFieldValue(filePart.fields.description),
-    });
-    if (!metadataParse.success) {
-      filePart.file.resume();
-      reply.code(400);
-      return { error: 'invalid_metadata', issues: metadataParse.error.issues };
-    }
-
-    const id = uuidv7();
-    let stored: Awaited<ReturnType<typeof storeMediaUpload>>;
-    try {
-      stored = await storeMediaUpload({
-        baseDir: app.config.MEDIA_STORAGE_DIR,
-        id,
-        mimeType,
-        source: filePart.file,
-      });
-    } catch (err) {
-      if (err instanceof MediaMagicByteMismatchError) {
+      if (!req.isMultipart()) {
         reply.code(400);
-        return { error: 'magic_byte_mismatch' };
+        return { error: 'expected_multipart' };
       }
-      if (err instanceof MediaSizeLimitExceededError) {
-        reply.code(413);
-        return { error: 'file_too_large' };
+
+      const filePart = await req.file();
+      if (!filePart) {
+        reply.code(400);
+        return { error: 'missing_file' };
       }
-      throw err;
-    }
 
-    const kind = mimeType.startsWith('video/') ? 'video' : 'image';
+      if (!isUploadMimeType(filePart.mimetype)) {
+        filePart.file.resume();
+        reply.code(415);
+        return { error: 'unsupported_media_type', mime_type: filePart.mimetype };
+      }
+      const mimeType = filePart.mimetype;
 
-    // Dedup by content hash: identical bytes reuse the existing row's
-    // storage_path and the file just written is discarded.
-    const { row, deduped } = await insertUploadedMedia(
-      app.db,
-      app.config.MEDIA_STORAGE_DIR,
-      stored,
-      {
-        id,
-        uploaderPlayerId: actorId,
-        kind,
-        originalFilename: filePart.filename,
-        mimeType,
-        externalUrl: null,
-        title: metadataParse.data.title ?? null,
-        description: metadataParse.data.description ?? null,
-      },
-    );
+      const metadataParse = mediaUploadMetadata.safeParse({
+        title: multipartFieldValue(filePart.fields.title),
+        description: multipartFieldValue(filePart.fields.description),
+      });
+      if (!metadataParse.success) {
+        filePart.file.resume();
+        reply.code(400);
+        return { error: 'invalid_metadata', issues: metadataParse.error.issues };
+      }
 
-    await writeAuditEntry(app.db, {
-      actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-      actorIp: req.ip ?? null,
-      actionType: 'media.upload',
-      targetType: 'media_file',
-      targetId: id,
-      after: serializeMediaFile(row),
-      context: { request_id: req.id, deduped },
-      statusCode: 201,
-    });
+      const id = uuidv7();
+      let stored: Awaited<ReturnType<typeof storeMediaUpload>>;
+      try {
+        stored = await storeMediaUpload({
+          baseDir: app.config.MEDIA_STORAGE_DIR,
+          id,
+          mimeType,
+          source: filePart.file,
+        });
+      } catch (err) {
+        if (err instanceof MediaMagicByteMismatchError) {
+          reply.code(400);
+          return { error: 'magic_byte_mismatch' };
+        }
+        if (err instanceof MediaSizeLimitExceededError) {
+          reply.code(413);
+          return { error: 'file_too_large' };
+        }
+        throw err;
+      }
 
-    reply.code(201);
-    return serializeMediaFile(row);
-  });
+      const kind = mimeType.startsWith('video/') ? 'video' : 'image';
+
+      // Dedup by content hash: identical bytes reuse the existing row's
+      // storage_path and the file just written is discarded.
+      const { row, deduped } = await insertUploadedMedia(
+        app.db,
+        app.config.MEDIA_STORAGE_DIR,
+        stored,
+        {
+          id,
+          uploaderPlayerId: actorId,
+          kind,
+          originalFilename: filePart.filename,
+          mimeType,
+          externalUrl: null,
+          title: metadataParse.data.title ?? null,
+          description: metadataParse.data.description ?? null,
+        },
+      );
+
+      req.auditSnapshots = {
+        targetId: id,
+        after: serializeMediaFile(row),
+        context: { deduped },
+      };
+
+      reply.code(201);
+      return serializeMediaFile(row);
+    },
+  );
 
   fast.post(
     '/api/v1/media/link',
-    { schema: { body: mediaLinkInput }, config: { audit: 'manual' } },
+    {
+      schema: { body: mediaLinkInput },
+      config: { audit: { action: 'media.link.create', resource: 'media_file' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -229,16 +230,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
       const row = inserted[0];
       if (!row) throw new Error('media_files insert returned no row');
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.link.create',
-        targetType: 'media_file',
-        targetId: id,
-        after: serializeMediaFile(row),
-        context: { request_id: req.id },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: id, after: serializeMediaFile(row) };
 
       reply.code(201);
       return serializeMediaFile(row);
@@ -313,7 +305,10 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/media/:id',
-    { schema: { params: idParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParams },
+      config: { audit: { action: 'media.delete', resource: 'media_file' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -337,16 +332,11 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
       await softDeleteMedia(app.db, app.config.MEDIA_STORAGE_DIR, row);
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.delete',
-        targetType: 'media_file',
+      req.auditSnapshots = {
         targetId: row.id,
         before: serializeMediaFile(row),
         context: { request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       return { ok: true };
     },

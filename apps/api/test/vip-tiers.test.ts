@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, roles, vipSubscriptions, vipTiers } from '@squad/db/schema';
+import { auditLog, players, roles, vipSubscriptions, vipTiers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -99,7 +99,17 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     }
     for (const id of createdPlayerIds) {
       const sid = playerSteams.get(id);
-      if (sid !== undefined) {
+      if (sid === undefined) continue;
+      // A rejected request is audited with its actor, and audit_log rows pin
+      // the player: keep those, only releasing the role the suite deletes next.
+      const audited = await h.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(eq(auditLog.actorPlayerId, id))
+        .limit(1);
+      if (audited.length > 0) {
+        await h.db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
+      } else {
         await h.db.delete(players).where(eq(players.steamId64, sid));
       }
     }

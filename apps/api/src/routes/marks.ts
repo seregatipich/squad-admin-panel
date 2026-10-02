@@ -5,7 +5,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { ensureMarkTypes } from '../lib/mark-types.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { isUniqueViolation } from '../lib/pg-errors.js';
@@ -211,7 +210,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/marks',
     {
       schema: { params: playerIdParams, body: createMarkBody },
-      config: { permissions: ['player:set_flags'], audit: 'manual' },
+      config: {
+        permissions: ['player:set_flags'],
+        audit: { action: 'player.mark.set', resource: 'player_mark' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -288,17 +290,12 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player.mark.set',
-        targetType: 'player_mark',
+      req.auditSnapshots = {
         targetId: row.id,
         before: null,
         after: serializeMark(row),
         context: { player_id: playerId, mark_type_id: markTypeId, request_id: req.id },
-        statusCode: 201,
-      });
+      };
 
       await publishMarkChange(playerId, row.id, 'set');
 
@@ -311,7 +308,10 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/marks/:markId',
     {
       schema: { params: markParams, body: clearMarkBody },
-      config: { permissions: ['player:set_flags'], audit: 'manual' },
+      config: {
+        permissions: ['player:set_flags'],
+        audit: { action: 'player.mark.clear', resource: 'player_mark' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -360,17 +360,12 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'mark_already_cleared' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'player.mark.clear',
-        targetType: 'player_mark',
+      req.auditSnapshots = {
         targetId: row.id,
         before,
         after: serializeMark(row),
         context: { player_id: playerId, mark_type_id: row.markTypeId, request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       await publishMarkChange(playerId, row.id, 'cleared');
 

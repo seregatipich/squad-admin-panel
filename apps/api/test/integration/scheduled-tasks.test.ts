@@ -1,4 +1,5 @@
 import {
+  auditLog,
   players,
   roleSquadPermissions,
   roles,
@@ -6,7 +7,7 @@ import {
   scheduledTasks,
   servers,
 } from '@squad/db/schema';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
@@ -791,13 +792,22 @@ describe('MSG-4 (#187): broadcast rotation, fan-out, and the role:edit gate', ()
     const rows = await h.db.select().from(scheduledTasks).where(inArray(scheduledTasks.id, allIds));
     expect(rows).toHaveLength(3);
 
-    for (const id of allIds) {
-      await assertAuditRow(h, {
-        action: 'server.scheduled_task.create',
-        resource: 'scheduled_task',
-        targetId: id,
-      });
-    }
+    // One request, one audit row: it names the primary task and lists the
+    // tasks the fan-out created on the other servers in its context.
+    const audit = await assertAuditRow(h, {
+      action: 'server.scheduled_task.create',
+      resource: 'scheduled_task',
+      targetId: body.id,
+    });
+    expect(audit.afterSnapshot).toMatchObject({ id: body.id, server_id: serverA });
+    expect(audit.context).toMatchObject({ server_id: serverA, also_created: body.also_created });
+    const requestRows = await h.db
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        sql`${auditLog.context}->>'requestId' = ${(audit.context as { requestId: string }).requestId}`,
+      );
+    expect(requestRows).toHaveLength(1);
   });
 
   // #317: server_ids is documented as a broadcast-only fan-out, but any

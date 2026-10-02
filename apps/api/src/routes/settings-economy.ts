@@ -9,8 +9,9 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { type AuditTransaction, writeAuditEntry } from '../lib/audit.js';
+import type { AuditTransaction } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 const SINGLETON_ID = 1;
 const COEFFICIENT_MAX = 1000;
@@ -163,7 +164,10 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/settings/economy',
-    { schema: { body: putBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: putBody },
+      config: { audit: { action: 'economy.settings.update', resource: 'economy_settings' } },
+    },
     async (req, reply) => {
       const denied = updateGuard(req, reply, req.body);
       if (denied) return denied;
@@ -243,17 +247,8 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
 
         const after = serialize(await loadSettings(tx));
 
-        await writeAuditEntry(tx, {
-          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-          actorIp: req.ip ?? null,
-          actionType: 'economy.settings.update',
-          targetType: 'economy_settings',
-          targetId: String(SINGLETON_ID),
-          before,
-          after,
-          context: { requestId: req.id, method: req.method, url: req.url },
-          statusCode: 200,
-        });
+        req.auditSnapshots = { targetId: String(SINGLETON_ID), before, after };
+        await auditRequestInTransaction(tx, req, reply);
 
         return after;
       });

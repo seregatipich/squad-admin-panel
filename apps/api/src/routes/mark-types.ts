@@ -3,7 +3,6 @@ import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import {
   isMarkTypeIcon,
   MARK_TYPE_CREATE_LOCK,
@@ -76,7 +75,13 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/mark-types',
-    { schema: { body: createBody }, config: { permissions: ['role:edit'], audit: 'manual' } },
+    {
+      schema: { body: createBody },
+      config: {
+        permissions: ['role:edit'],
+        audit: { action: 'mark_type.create', resource: 'mark_type' },
+      },
+    },
     async (req, reply) => {
       const actorId = req.user?.playerId;
       if (!actorId) {
@@ -135,17 +140,12 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'mark_type.create',
-        targetType: 'mark_type',
+      req.auditSnapshots = {
         targetId: String(row.id),
         before: null,
         after: serialize(row),
         context: { request_id: req.id },
-        statusCode: 201,
-      });
+      };
 
       app.liveBus.publish({
         type: 'mark_type.changed',
@@ -162,7 +162,10 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/mark-types/:id',
     {
       schema: { params: idParam, body: updateBody },
-      config: { permissions: ['role:edit'], audit: 'manual' },
+      config: {
+        permissions: ['role:edit'],
+        audit: { action: 'mark_type.update', resource: 'mark_type' },
+      },
     },
     async (req, reply) => {
       const actorId = req.user?.playerId;
@@ -200,17 +203,12 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'update_failed' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'mark_type.update',
-        targetType: 'mark_type',
+      req.auditSnapshots = {
         targetId: String(row.id),
         before: serialize(current),
         after: serialize(row),
         context: { request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       app.liveBus.publish({
         type: 'mark_type.changed',
@@ -224,7 +222,13 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/mark-types/reorder',
-    { schema: { body: reorderBody }, config: { permissions: ['role:edit'], audit: 'manual' } },
+    {
+      schema: { body: reorderBody },
+      config: {
+        permissions: ['role:edit'],
+        audit: { action: 'mark_type.reorder', resource: 'mark_type' },
+      },
+    },
     async (req, reply) => {
       const actorId = req.user?.playerId;
       if (!actorId) {
@@ -257,17 +261,11 @@ const markTypesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'unknown_mark_type_id' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'mark_type.reorder',
-        targetType: 'mark_type',
-        targetId: null,
+      req.auditSnapshots = {
         before: null,
         after: { ordered_ids: orderedIds },
         context: { request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       app.liveBus.publish({
         type: 'mark_type.changed',

@@ -4,7 +4,6 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import type { PlayerIdentity } from '../lib/moderation-enforce.js';
 import { unbanPlayerOnServer } from './moderation-actions.js';
 
@@ -140,8 +139,9 @@ function isAppealStatus(value: string): value is AppealStatus {
  * the ledger is what `GET /api/v1/public/banlist` reads, an approved appeal
  * also drops the player out of outbound ban federation.
  *
- * Audit is written by hand (`config.audit: false`) so every transition
- * carries real before/after snapshots, matching `whitelist-applications.ts`.
+ * Audit is declarative (`config.audit` plus `req.auditSnapshots`): every
+ * transition, and every denied or rejected attempt, writes exactly one row,
+ * with before/after snapshots on a transition.
  */
 const appealsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -208,7 +208,10 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/appeals/:id',
     {
       schema: { params: idParams, body: patchBody },
-      config: { permissions: ['mod:unban'], audit: 'manual' },
+      config: {
+        permissions: ['mod:unban'],
+        audit: { action: 'appeal.status_change', resource: 'ban_appeal' },
+      },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: the mod:unban gate guarantees req.user
@@ -291,23 +294,16 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
           const partial = outcome.partial;
           const partialRevert = partial.unban_action_ids.length > 0 ? partial : null;
           if (partialRevert) {
-            await writeAuditEntry(app.db, {
-              actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-              actorIp: req.ip ?? null,
-              actionType: 'appeal.unban_partial',
-              targetType: 'ban_appeal',
+            req.auditSnapshots = {
+              action: 'appeal.unban_partial',
               targetId: existing.id,
               context: {
-                requestId: req.id,
-                method: req.method,
-                url: req.url,
                 player_id: existing.playerId,
                 reverted_action_ids: partialRevert.reverted_action_ids,
                 unban_action_ids: partialRevert.unban_action_ids,
                 conflict_server_id: outcome.conflictServerId,
               },
-              statusCode: 409,
-            });
+            };
           }
           reply.code(outcome.error === 'bans_cfg_unavailable' ? 502 : 409);
           return { error: outcome.error, partial_revert: partialRevert };
@@ -319,43 +315,23 @@ const appealsRoutes: FastifyPluginAsync = async (app) => {
       if (!updated) throw new Error('ban_appeals row missing immediately after update');
       const after = serializeAppeal(updated);
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'appeal.status_change',
-        targetType: 'ban_appeal',
+      // One row per request: the transition, with the bans an approval reverted
+      // in its context.
+      req.auditSnapshots = {
         targetId: existing.id,
         before: { status: before.status, decision_note: before.decision_note },
         after: { status: after.status, decision_note: after.decision_note },
         context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
           player_id: existing.playerId,
           moderation_action_id: existing.actionId,
+          ...(revert
+            ? {
+                reverted_action_ids: revert.reverted_action_ids,
+                unban_action_ids: revert.unban_action_ids,
+              }
+            : {}),
         },
-        statusCode: 200,
-      });
-
-      if (revert) {
-        await writeAuditEntry(app.db, {
-          actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-          actorIp: req.ip ?? null,
-          actionType: 'appeal.unban',
-          targetType: 'ban_appeal',
-          targetId: existing.id,
-          after: { status: after.status },
-          context: {
-            requestId: req.id,
-            method: req.method,
-            url: req.url,
-            player_id: existing.playerId,
-            reverted_action_ids: revert.reverted_action_ids,
-            unban_action_ids: revert.unban_action_ids,
-          },
-          statusCode: 200,
-        });
-      }
+      };
 
       app.liveBus.publish({
         type: 'appeal.updated',

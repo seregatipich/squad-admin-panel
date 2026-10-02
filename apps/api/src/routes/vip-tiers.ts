@@ -4,7 +4,6 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 
 const DEFAULT_DAYS_MAX = 3650;
 const SORT_ORDER_MAX = 100_000;
@@ -130,7 +129,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/vip-tiers',
-    { schema: { body: createBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: createBody },
+      config: { audit: { action: 'vip_tier.create', resource: 'vip_tier' } },
+    },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -180,17 +182,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'persist_failed' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'vip_tier.create',
-        targetType: 'vip_tier',
-        targetId: id,
-        before: null,
-        after: serialize(after),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: id, before: null, after: serialize(after) };
 
       reply.code(201);
       return serialize(after);
@@ -199,7 +191,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.put(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam, body: updateBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam, body: updateBody },
+      config: { audit: { action: 'vip_tier.update', resource: 'vip_tier' } },
+    },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -257,17 +252,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'persist_failed' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'vip_tier.update',
-        targetType: 'vip_tier',
-        targetId: req.params.id,
-        before: serialize(before),
-        after: serialize(after),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { before: serialize(before), after: serialize(after) };
 
       return serialize(after);
     },
@@ -275,7 +260,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/vip-tiers/:id',
-    { schema: { params: idParam }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam },
+      config: { audit: { action: 'vip_tier.delete', resource: 'vip_tier' } },
+    },
     async (req, reply) => {
       const denied = editRolesGuard(req, reply);
       if (denied) return denied;
@@ -335,17 +323,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'vip_tier.delete',
-        targetType: 'vip_tier',
-        targetId: req.params.id,
-        before: serialize(before),
-        after: null,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { before: serialize(before), after: null };
 
       return { ok: true };
     },

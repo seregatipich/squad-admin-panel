@@ -4,8 +4,6 @@ import { and, asc, desc, eq, gte, inArray, isNull, lt, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
-import { panelGuard } from '../lib/panel-guard.js';
 import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -158,11 +156,8 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/seed-schedule',
-    { config: { audit: false }, schema: { params: serverIdParams } },
+    { config: { permissions: ['server:view'], audit: false }, schema: { params: serverIdParams } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);
@@ -184,11 +179,11 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/seed-schedule/history',
-    { config: { audit: false }, schema: { params: serverIdParams, querystring: historyQuery } },
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: serverIdParams, querystring: historyQuery },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);
@@ -253,7 +248,10 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/seed-schedule',
-    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: createBody } },
+    {
+      config: { audit: { action: 'server.seed_schedule.create', resource: 'seed_schedule' } },
+      schema: { params: serverIdParams, body: createBody },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -288,18 +286,11 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
         .returning();
       if (!row) throw new Error('seed_schedule insert returned no row');
 
-      // biome-ignore lint/style/noNonNullAssertion: changemapGuard above requires req.user
-      const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.seed_schedule.create',
-        targetType: 'seed_schedule',
+      req.auditSnapshots = {
         targetId: row.id,
         after: serialize(row),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
 
       reply.code(201);
       return serialize(row);
@@ -308,7 +299,10 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.patch(
     '/api/v1/servers/:id/seed-schedule/:entryId',
-    { config: { audit: 'manual' }, schema: { params: entryParams, body: updateBody } },
+    {
+      config: { audit: { action: 'server.seed_schedule.update', resource: 'seed_schedule' } },
+      schema: { params: entryParams, body: updateBody },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -368,19 +362,12 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
         .returning();
       if (!row) throw new Error('seed_schedule update returned no row');
 
-      // biome-ignore lint/style/noNonNullAssertion: changemapGuard above requires req.user
-      const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.seed_schedule.update',
-        targetType: 'seed_schedule',
+      req.auditSnapshots = {
         targetId: row.id,
         before: serialize(existing),
         after: serialize(row),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return serialize(row);
     },
@@ -388,7 +375,10 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
   fast.delete(
     '/api/v1/servers/:id/seed-schedule/:entryId',
-    { config: { audit: 'manual' }, schema: { params: entryParams } },
+    {
+      config: { audit: { action: 'server.seed_schedule.delete', resource: 'seed_schedule' } },
+      schema: { params: entryParams },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -412,18 +402,11 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
 
       await app.db.delete(seedSchedule).where(eq(seedSchedule.id, req.params.entryId));
 
-      // biome-ignore lint/style/noNonNullAssertion: changemapGuard above requires req.user
-      const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.seed_schedule.delete',
-        targetType: 'seed_schedule',
+      req.auditSnapshots = {
         targetId: existing.id,
         before: serialize(existing),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
 
       return { deleted: true, id: existing.id };
     },

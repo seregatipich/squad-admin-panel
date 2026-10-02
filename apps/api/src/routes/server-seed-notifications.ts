@@ -12,8 +12,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
-import { panelGuard } from '../lib/panel-guard.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
 export const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
@@ -145,29 +143,35 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
     };
   }
 
-  fast.get('/api/v1/seed-subscriptions', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select({
-        server_id: seedSubscriptions.serverId,
-        server_name: servers.displayName,
-        channel: seedSubscriptions.channel,
-      })
-      .from(seedSubscriptions)
-      .innerJoin(servers, eq(servers.id, seedSubscriptions.serverId))
-      .where(
-        and(eq(seedSubscriptions.playerId, req.user?.playerId ?? ''), isNull(servers.deletedAt)),
-      );
-    return { subscriptions: rows };
-  });
+  fast.get(
+    '/api/v1/seed-subscriptions',
+    { config: { permissions: ['server:view'], audit: false } },
+    async (req) => {
+      const rows = await app.db
+        .select({
+          server_id: seedSubscriptions.serverId,
+          server_name: servers.displayName,
+          channel: seedSubscriptions.channel,
+        })
+        .from(seedSubscriptions)
+        .innerJoin(servers, eq(servers.id, seedSubscriptions.serverId))
+        .where(
+          and(eq(seedSubscriptions.playerId, req.user?.playerId ?? ''), isNull(servers.deletedAt)),
+        );
+      return { subscriptions: rows };
+    },
+  );
 
   fast.put(
     '/api/v1/servers/:id/seed-subscription',
-    { schema: { params: serverIdParams, body: subscriptionBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams, body: subscriptionBody },
+      config: {
+        permissions: ['server:view'],
+        audit: { action: 'seed.subscription.update', resource: 'server' },
+      },
+    },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });
@@ -194,26 +198,15 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
             ),
           );
       }
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: values.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'seed.subscription.update',
-        targetType: 'server',
-        targetId: req.params.id,
-        after: { channel: req.body.channel, enabled: req.body.enabled },
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { after: { channel: req.body.channel, enabled: req.body.enabled } };
       return { server_id: req.params.id, channel: req.body.channel, enabled: req.body.enabled };
     },
   );
 
   fast.get(
     '/api/v1/servers/:id/seed-call',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
       const context = await loadServerContext(req.params.id);
       if (!context) {
         reply.code(404);
@@ -230,7 +223,10 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/seed-call',
-    { schema: { params: serverIdParams }, config: { audit: 'manual' } },
+    {
+      schema: { params: serverIdParams },
+      config: { audit: { action: 'seed.call_sent', resource: 'server' } },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -291,16 +287,10 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
         await app.redis.del(cooldownKey(req.params.id)).catch(() => undefined);
         throw err;
       }
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'seed.call_sent',
-        targetType: 'server',
-        targetId: req.params.id,
+      req.auditSnapshots = {
         after: { ...payload, notified },
-        context: { requestId: req.id, event_id: envelope.event_id },
-        statusCode: reply.statusCode,
-      });
+        context: { event_id: envelope.event_id },
+      };
       return {
         ok: true,
         event_id: envelope.event_id,

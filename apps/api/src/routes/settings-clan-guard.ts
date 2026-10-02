@@ -7,7 +7,6 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { requestUser } from '../lib/request-user.js';
 
 const SINGLETON_ID = 1;
@@ -75,7 +74,10 @@ const settingsClanGuardRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/settings/clan-guard',
     {
       schema: { body: patchBody },
-      config: { audit: 'manual', roleFlags: ['canManageClans'] },
+      config: {
+        audit: { action: 'clan_guard.settings.update', resource: 'clan_guard_settings' },
+        roleFlags: ['canManageClans'],
+      },
     },
     async (req) => {
       const actorId = requestUser(req).playerId;
@@ -97,17 +99,7 @@ const settingsClanGuardRoutes: FastifyPluginAsync = async (app) => {
 
       const after = serialize(await loadSettings());
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'clan_guard.settings.update',
-        targetType: 'clan_guard_settings',
-        targetId: String(SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: String(SINGLETON_ID), before, after };
 
       return after;
     },

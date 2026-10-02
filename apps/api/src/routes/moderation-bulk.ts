@@ -106,7 +106,10 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/moderation-actions/bulk',
-    { schema: { body: bulkBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: bulkBody },
+      config: { audit: { action: 'moderation.bulk_action', resource: 'server' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -270,11 +273,10 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
 
       const applied = results.filter((row) => row.status === 'applied').length;
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'moderation.bulk_action',
-        targetType: 'server',
+      // The summary row is the request's declarative audit row (written by the
+      // audit hook, so it also covers a denied or rejected request); the
+      // per-target rows above stay as written during the loop.
+      req.auditSnapshots = {
         targetId: server.id,
         after: {
           action_type: actionType,
@@ -284,15 +286,8 @@ const moderationBulkRoutes: FastifyPluginAsync = async (app) => {
           applied,
           failed: results.length - applied,
         },
-        context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
-          bulk_group: bulkGroup,
-          bulk_size: bulkSize,
-        },
-        statusCode: reply.statusCode,
-      });
+        context: { bulk_group: bulkGroup, bulk_size: bulkSize },
+      };
 
       return {
         bulk_group: bulkGroup,

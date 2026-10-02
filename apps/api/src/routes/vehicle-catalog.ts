@@ -3,7 +3,6 @@ import { asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 
 const assetIdParam = z.object({
   assetId: z
@@ -74,13 +73,12 @@ const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/vehicle-catalog/:assetId',
     {
       schema: { params: assetIdParam, body: putBody },
-      config: { permissions: ['config:edit'], audit: 'manual' },
+      config: {
+        permissions: ['config:edit'],
+        audit: { action: 'vehicle_catalog.upsert', resource: 'vehicle_catalog' },
+      },
     },
     async (req, reply) => {
-      // config.permissions above already requires req.user to be present.
-      // biome-ignore lint/style/noNonNullAssertion: guaranteed by config.permissions above
-      const actorId = req.user!.playerId;
-
       const { assetId } = req.params;
       const body = req.body;
       const before = await loadRow(assetId);
@@ -112,17 +110,11 @@ const vehicleCatalogRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'persist_failed' };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'vehicle_catalog.upsert',
-        targetType: 'vehicle_catalog',
+      req.auditSnapshots = {
         targetId: assetId,
         before: before ? serialize(before) : null,
         after: serialize(after),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      };
 
       return serialize(after);
     },

@@ -13,9 +13,9 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 const COMMENT_MAX = 512;
 const DEFAULT_LIMIT = 50;
@@ -178,7 +178,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/bonus-adjustments',
     {
       schema: { params: playerIdParams, body: adjustBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'player.bonus.adjust', resource: 'player' } },
     },
     async (req, reply) => {
       const denied = manageGuard(req, reply);
@@ -220,17 +220,14 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
         // Inside the transaction: a failed audit insert rolls the balance change
         // back, so no adjustment is ever committed without its audit row.
-        await writeAuditEntry(tx, {
-          actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-          actorIp: req.ip ?? null,
-          actionType: 'player.bonus.adjust',
-          targetType: 'player',
+        req.auditSnapshots = {
           targetId: playerId,
           before: { bonus_balance: current.balance },
           after: { bonus_balance: nextBalance },
           context: { player_id: playerId, amount, request_id: req.id },
-          statusCode: 201,
-        });
+        };
+        reply.code(201);
+        await auditRequestInTransaction(tx, req, reply);
 
         return {
           status: 'ok' as const,

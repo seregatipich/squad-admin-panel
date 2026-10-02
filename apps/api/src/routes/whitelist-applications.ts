@@ -1,11 +1,10 @@
 import { panelMeta, players, roles, whitelistApplications } from '@squad/db/schema';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 import { callerCanManageRoles, whitelistRoleWriteDenial } from '../lib/whitelist-role-guard.js';
@@ -105,12 +104,6 @@ function serializeApplication(row: ApplicationRow) {
   };
 }
 
-function actorFrom(req: FastifyRequest): AuditActor {
-  return req.user
-    ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
-    : { kind: 'system', label: 'http-anonymous' };
-}
-
 /**
  * Public whitelist/VIP application portal + panel approval workflow (WL-3, #67).
  *
@@ -205,7 +198,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     {
       schema: { body: submitBody },
       config: {
-        audit: 'manual',
+        audit: { action: 'whitelist.application.create', resource: 'whitelist_application' },
         // `public` so an anonymous caller gets the explicit 401 below;
         // `selfService` so a Steam login without panel access is honoured.
         public: true,
@@ -268,16 +261,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         throw err;
       }
 
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.application.create',
-        targetType: 'whitelist_application',
-        targetId: created.id,
-        after: serializeApplication(created),
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: created.id, after: serializeApplication(created) };
 
       reply.code(201);
       return serializeApplication(created);
@@ -295,7 +279,10 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/settings',
     {
       schema: { body: settingsBody },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.application.settings.update', resource: 'panel_meta' },
+      },
     },
     async (req) => {
       const before = await loadSettings();
@@ -307,17 +294,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         })
         .where(eq(panelMeta.id, PANEL_META_SINGLETON_ID));
       const after = await loadSettings();
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.application.settings.update',
-        targetType: 'panel_meta',
-        targetId: String(PANEL_META_SINGLETON_ID),
-        before,
-        after,
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: 200,
-      });
+      req.auditSnapshots = { targetId: String(PANEL_META_SINGLETON_ID), before, after };
       return after;
     },
   );
@@ -361,7 +338,10 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/whitelist/applications/:id',
     {
       schema: { params: idParam, body: patchBody },
-      config: { permissions: ['whitelist:edit'], audit: 'manual' },
+      config: {
+        permissions: ['whitelist:edit'],
+        audit: { action: 'whitelist.application.review', resource: 'whitelist_application' },
+      },
     },
     async (req, reply) => {
       // biome-ignore lint/style/noNonNullAssertion: whitelist:edit gate guarantees req.user
@@ -400,17 +380,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'not_found' };
         }
         const after = serializeApplication(updated);
-        await writeAuditEntry(app.db, {
-          actor: actorFrom(req),
-          actorIp: req.ip ?? null,
-          actionType: 'whitelist.application.review',
-          targetType: 'whitelist_application',
+        req.auditSnapshots = {
           targetId: existing.id,
           before,
           after,
-          context: { requestId: req.id, method: req.method, url: req.url, decision: 'rejected' },
-          statusCode: 200,
-        });
+          context: { decision: 'rejected' },
+        };
         return after;
       }
 
@@ -527,24 +502,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
       const after = serializeApplication(updated);
-      await writeAuditEntry(app.db, {
-        actor: actorFrom(req),
-        actorIp: req.ip ?? null,
-        actionType: 'whitelist.application.review',
-        targetType: 'whitelist_application',
+      req.auditSnapshots = {
         targetId: existing.id,
         before,
         after,
-        context: {
-          requestId: req.id,
-          method: req.method,
-          url: req.url,
-          decision: 'approved',
-          granted_role_id: resolvedRoleId,
-          player_id: applicant.id,
-        },
-        statusCode: 200,
-      });
+        context: { decision: 'approved', granted_role_id: resolvedRoleId, player_id: applicant.id },
+      };
       return after;
     },
   );

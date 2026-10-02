@@ -10,7 +10,6 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
-import { writeAuditEntry } from '../lib/audit.js';
 import {
   MediaMagicByteMismatchError,
   MediaSizeLimitExceededError,
@@ -21,6 +20,7 @@ import {
   loadUploadTokenByRaw,
   redeemUploadToken,
 } from '../lib/media-upload-tokens.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 /** Anonymous uploads allowed from one IP per hour before the endpoint answers 429. */
 export const PUBLIC_MEDIA_UPLOADS_PER_HOUR = 10;
@@ -61,7 +61,10 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/public/media',
-    { schema: { querystring: publicMediaUploadQuery }, config: { audit: 'manual', public: true } },
+    {
+      schema: { querystring: publicMediaUploadQuery },
+      config: { audit: { action: 'media.public_upload', resource: 'media_file' }, public: true },
+    },
     async (req, reply) => {
       const rateKey = `${PUBLIC_MEDIA_RATE_LIMIT_PREFIX}${req.ip}`;
       const hits = await app.redis.incr(rateKey).catch(() => 0);
@@ -173,12 +176,9 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
             });
           }
 
-          await writeAuditEntry(tx, {
-            actor: { kind: 'system', label: PUBLIC_UPLOAD_ACTOR_LABEL },
-            actorIp: req.ip ?? null,
-            actionType: 'media.public_upload',
-            targetType: 'media_file',
+          req.auditSnapshots = {
             targetId: id,
+            actor: { kind: 'system', label: PUBLIC_UPLOAD_ACTOR_LABEL },
             after: {
               id,
               upload_token_id: token.id,
@@ -187,9 +187,10 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
               target_entity_type: targetType,
               target_entity_id: token.targetEntityId,
             },
-            context: { request_id: req.id, token_id: token.id, deduped: Boolean(dedupPath) },
-            statusCode: 201,
-          });
+            context: { token_id: token.id, deduped: Boolean(dedupPath) },
+          };
+          reply.code(201);
+          await auditRequestInTransaction(tx, req, reply);
           return { claimed: true, dedupPath } as const;
         });
       } catch (err) {

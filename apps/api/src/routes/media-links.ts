@@ -21,7 +21,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { isUniqueViolation } from '../lib/pg-errors.js';
 import { loadActiveMediaFile, serializeMediaFile } from './media.js';
@@ -148,7 +147,10 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media/:id/links',
-    { schema: { params: mediaIdParams, body: mediaLinkAttachInput }, config: { audit: 'manual' } },
+    {
+      schema: { params: mediaIdParams, body: mediaLinkAttachInput },
+      config: { audit: { action: 'media.link.attach', resource: 'media_link' } },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -211,16 +213,7 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
       if (!row) throw new Error('media_links insert returned no row');
 
       const response = serializeMediaLink(row);
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.link.attach',
-        targetType: 'media_link',
-        targetId: row.id,
-        after: response,
-        context: { request_id: req.id },
-        statusCode: 201,
-      });
+      req.auditSnapshots = { targetId: row.id, after: response, context: { request_id: req.id } };
 
       reply.code(201);
       return response;
@@ -231,7 +224,7 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/media/:id/links',
     {
       schema: { params: mediaIdParams, querystring: mediaLinkDetachQuery },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'media.link.detach', resource: 'media_link' } },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -268,16 +261,11 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
 
       await app.db.delete(mediaLinks).where(eq(mediaLinks.id, row.id));
 
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actorId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'media.link.detach',
-        targetType: 'media_link',
+      req.auditSnapshots = {
         targetId: row.id,
         before: serializeMediaLink(row),
         context: { request_id: req.id },
-        statusCode: 200,
-      });
+      };
 
       return { ok: true };
     },

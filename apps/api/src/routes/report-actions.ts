@@ -12,6 +12,7 @@ import { enforceModerationAction, type PlayerIdentity } from '../lib/moderation-
 import { panelGuard } from '../lib/panel-guard.js';
 import { notifyReporter } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 import { parseStoredRoster } from '../lib/roster.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
@@ -187,7 +188,10 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/reports/:id/actions',
-    { schema: { params: idParam, body: actionBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam, body: actionBody },
+      config: { audit: { action: 'report.action', resource: 'report' } },
+    },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -329,11 +333,9 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         if (isPrimary && result.ok) {
-          await writeAuditEntry(app.db, {
-            actor: auditActor(req),
-            actorIp: req.ip ?? null,
-            actionType: 'report.action',
-            targetType: 'report',
+          // The request's own row, written by the audit hook; the per-target
+          // rows above stay as written during the loop.
+          req.auditSnapshots = {
             targetId: report.id,
             after: {
               action_type: actionType,
@@ -341,14 +343,8 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
               target_player_id: report.targetPlayerId,
               also_player_ids: alsoPlayerIds,
             },
-            context: {
-              requestId: req.id,
-              method: req.method,
-              url: req.url,
-              moderation_action_id: result.actionId,
-            },
-            statusCode: 200,
-          });
+            context: { moderation_action_id: result.actionId },
+          };
         }
 
         if (!result.ok) {
@@ -438,7 +434,10 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   /** Sends the reporter an AdminWarn status template, if they're online. */
   fast.post(
     '/api/v1/reports/:id/notify-reporter',
-    { schema: { params: idParam, body: notifyBody }, config: { audit: 'manual' } },
+    {
+      schema: { params: idParam, body: notifyBody },
+      config: { audit: { action: 'report.notify_reporter', resource: 'report' } },
+    },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -468,16 +467,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         };
       }
 
-      await writeAuditEntry(app.db, {
-        actor: auditActor(req),
-        actorIp: req.ip ?? null,
-        actionType: 'report.notify_reporter',
-        targetType: 'report',
-        targetId: report.id,
-        after: { template: req.body.template },
-        context: { requestId: req.id, method: req.method, url: req.url },
-        statusCode: reply.statusCode,
-      });
+      req.auditSnapshots = { targetId: report.id, after: { template: req.body.template } };
 
       return { ok: true };
     },
@@ -493,7 +483,10 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
    */
   fast.post(
     '/api/v1/reports/bulk-resolve',
-    { schema: { body: bulkResolveBody }, config: { audit: 'manual' } },
+    {
+      schema: { body: bulkResolveBody },
+      config: { audit: { action: 'report.bulk_resolve', resource: 'player' } },
+    },
     async (req, reply) => {
       const denied = handlerGuard(req, reply);
       if (denied) return denied;
@@ -507,6 +500,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
       const handlerPlayerId = req.user!.playerId;
       const resolvedAt = new Date();
       const bulkGroup = uuidv7();
+      req.auditSnapshots = { targetId: targetPlayerId, context: { bulk_group: bulkGroup } };
 
       // Lock, update and audit in one transaction. `FOR UPDATE` re-checks the
       // status filter against the latest committed row, so a report another
@@ -581,6 +575,15 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
             statusCode: 200,
           });
         }
+        // The request's own row, beside the per-report rows above: it names the
+        // target and every report resolved. Written in this transaction, so a
+        // failed audit insert rolls the resolution back.
+        req.auditSnapshots = {
+          targetId: targetPlayerId,
+          after: { status, resolution_note: resolutionNote, report_ids: rows.map((r) => r.id) },
+          context: { bulk_group: bulkGroup },
+        };
+        await auditRequestInTransaction(tx, req, reply);
         return rows;
       });
 

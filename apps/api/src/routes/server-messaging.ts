@@ -1,9 +1,8 @@
 import { chatMessages, players } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { auditMapLikeAction } from '../lib/map-guards.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { parseStoredRoster } from '../lib/roster.js';
 
@@ -41,13 +40,6 @@ function hasChatPermission(req: FastifyRequest): boolean {
 
 const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
-
-  const auditMessagingAction = (
-    req: FastifyRequest,
-    reply: FastifyReply,
-    input: { actionType: string; serverId: string; after: unknown },
-  ): Promise<void> => auditMapLikeAction(app.db, req, reply, input);
-
   /**
    * Sends a server-wide message via RCON `AdminBroadcast`, routed through the
    * worker-rcon command queue. On success, records the broadcast in
@@ -58,7 +50,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/broadcast',
     {
       schema: { params: serverIdParams, body: messageBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'server.broadcast', resource: 'server' } },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -99,11 +91,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
         sentAt,
       });
 
-      await auditMessagingAction(req, reply, {
-        actionType: 'server.broadcast',
-        serverId,
-        after: { message },
-      });
+      req.auditSnapshots = { after: { message } };
 
       return { ok: true, request_id: viaWorker.requestId, response: viaWorker.response };
     },
@@ -121,7 +109,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/squads/:squadId/message',
     {
       schema: { params: squadParams, querystring: squadQuery, body: messageBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'server.squad_message', resource: 'server' } },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -180,11 +168,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
       const fullyFailed = recipients.length > 0 && !delivered;
       if (fullyFailed) reply.code(502);
 
-      await auditMessagingAction(req, reply, {
-        actionType: 'server.squad_message',
-        serverId,
-        after: { squad_id: squadId, team_id, message, recipients },
-      });
+      req.auditSnapshots = { after: { squad_id: squadId, team_id, message, recipients } };
 
       if (fullyFailed) {
         return { error: 'squad_message_failed', squad_id: squadId, team_id, recipients };
@@ -207,7 +191,7 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/players/:playerId/message',
     {
       schema: { params: playerMessageParams, body: playerMessageBody },
-      config: { audit: 'manual' },
+      config: { audit: { action: 'server.player_message', resource: 'server' } },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -266,11 +250,9 @@ const serverMessagingRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      await auditMessagingAction(req, reply, {
-        actionType: 'server.player_message',
-        serverId,
+      req.auditSnapshots = {
         after: { player_id: playerId, target, message, log_to_card: logToCard },
-      });
+      };
 
       return { ok: true, request_id: viaWorker.requestId, response: viaWorker.response };
     },

@@ -35,6 +35,15 @@ async function seedPlayer(steamId64: bigint | null, name: string): Promise<strin
   return row.id;
 }
 
+async function ensurePlayer(steamId64: bigint, name: string): Promise<string> {
+  const [existing] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  return existing?.id ?? seedPlayer(steamId64, name);
+}
+
 async function loginAsSteam(steamId64: bigint): Promise<string> {
   const [row] = await h.db
     .select({ id: players.id })
@@ -53,7 +62,9 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
 }
 
 // Every SteamID-bearing player a case may seed besides the owner.
-const TEST_PLAYER_STEAM_IDS = [PLAYER_A, PLAYER_B, PLAYER_C, TEST_PLAYER_LIMITED_VIEWER];
+// The limited viewer is not among them: a rejected request is audited with its
+// actor, and audit_log rows pin the player.
+const TEST_PLAYER_STEAM_IDS = [PLAYER_A, PLAYER_B, PLAYER_C];
 
 beforeAll(async () => {
   h = await buildIntegrationApp({
@@ -228,7 +239,7 @@ describe('POST /api/v1/players/:playerId/links', () => {
   it('rejects a logged-in user whose role lacks can_view_ips', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B, 'PlayerB');
-    await seedPlayer(TEST_PLAYER_LIMITED_VIEWER, 'LimitedViewer');
+    await ensurePlayer(TEST_PLAYER_LIMITED_VIEWER, 'LimitedViewer');
 
     const ownerCookie = await loginAsOwner(h);
     const created = await h.app.inject({

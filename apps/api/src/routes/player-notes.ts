@@ -4,7 +4,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { auditRequestInTransaction } from '../lib/request-audit.js';
 
 const BODY_MAX = 2000;
 const PAGE_SIZE_DEFAULT = 50;
@@ -119,10 +119,6 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     return req.user!.playerId;
   }
 
-  function auditActor(req: FastifyRequest): AuditActor {
-    return { kind: 'steam', playerId: auditActorId(req), tokenId: req.apiTokenId ?? null };
-  }
-
   fast.get(
     '/api/v1/players/:playerId/notes',
     {
@@ -174,7 +170,10 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/notes',
     {
       schema: { params: playerIdParams, body: noteBody },
-      config: { permissions: ['player:view'], audit: 'manual' },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'player_note.create', resource: 'player_note' },
+      },
     },
     async (req, reply) => {
       const playerId = req.params.playerId;
@@ -195,16 +194,13 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           .values({ id, playerId, authorId: auditActorId(req), body: req.body.body })
           .returning();
         if (!inserted) throw new Error('player_notes insert returned no row');
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'player_note.create',
-          targetType: 'player_note',
+        req.auditSnapshots = {
           targetId: id,
           before: null,
           after: snapshot(inserted),
-          context: { requestId: req.id, method: req.method, url: req.url, playerId },
-        });
+          context: { playerId },
+        };
+        await auditRequestInTransaction(tx, req, reply);
       });
 
       const dtoRows = await noteRowsQuery().where(eq(playerNotes.id, id)).limit(1);
@@ -237,7 +233,10 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/notes/:noteId',
     {
       schema: { params: noteIdParams, body: noteBody },
-      config: { permissions: ['player:view'], audit: 'manual' },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'player_note.update', resource: 'player_note' },
+      },
     },
     async (req, reply) => {
       const noteId = req.params.noteId;
@@ -259,16 +258,12 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           .returning();
         if (!updated) return { code: 404, error: 'note_not_found' } as const;
 
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'player_note.update',
-          targetType: 'player_note',
+        req.auditSnapshots = {
           targetId: noteId,
           before: snapshot(existing),
           after: snapshot(updated),
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
         return { playerId: existing.playerId, code: 200 } as const;
       });
       if ('error' in outcome) {
@@ -296,7 +291,10 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/notes/:noteId',
     {
       schema: { params: noteIdParams },
-      config: { permissions: ['player:view'], audit: 'manual' },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'player_note.delete', resource: 'player_note' },
+      },
     },
     async (req, reply) => {
       const noteId = req.params.noteId;
@@ -322,16 +320,12 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           .returning();
         if (!deleted) return { code: 404, error: 'note_not_found' } as const;
 
-        await writeAuditEntry(tx, {
-          actor: auditActor(req),
-          actorIp: req.ip ?? null,
-          actionType: 'player_note.delete',
-          targetType: 'player_note',
+        req.auditSnapshots = {
           targetId: noteId,
           before: snapshot(existing),
           after: snapshot(deleted),
-          context: { requestId: req.id, method: req.method, url: req.url },
-        });
+        };
+        await auditRequestInTransaction(tx, req, reply);
         return { playerId: existing.playerId, code: 200 } as const;
       });
       if ('error' in outcome) {

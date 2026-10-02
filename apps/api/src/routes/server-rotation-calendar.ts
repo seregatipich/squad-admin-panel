@@ -12,7 +12,6 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { writeAuditEntry } from '../lib/audit.js';
 import { panelGuard } from '../lib/panel-guard.js';
 import { validateLayerName } from '../lib/rotation-segment.js';
 import { rescheduledCursor } from '../lib/schedule-cursor.js';
@@ -312,7 +311,12 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/servers/:id/rotation-schedule',
-    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: scheduleBody } },
+    {
+      config: {
+        audit: { action: 'server.rotation_schedule.create', resource: 'rotation_schedule' },
+      },
+      schema: { params: serverIdParams, body: scheduleBody },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -352,28 +356,27 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
       // reply.code() must be called first for statusCode to reflect what the
       // client received.
       reply.code(201);
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.rotation_schedule.create',
-        targetType: 'rotation_schedule',
+      req.auditSnapshots = {
         targetId: row.id,
         after: serializeSchedule(row),
         context: { server_id: req.params.id, warnings },
-        statusCode: reply.statusCode,
-      });
+      };
       return { ...serializeSchedule(row), warnings };
     },
   );
 
   fast.patch(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: 'manual' }, schema: { params: entryParams, body: scheduleUpdateBody } },
+    {
+      config: {
+        audit: { action: 'server.rotation_schedule.update', resource: 'rotation_schedule' },
+      },
+      schema: { params: entryParams, body: scheduleUpdateBody },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
       if (!req.user) throw new Error('changemap guard did not establish a user');
-      const actor = req.user;
       if (!(await loadServer(req.params.id))) {
         reply.code(404);
         return { error: 'not_found' };
@@ -428,29 +431,28 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         await loadWarningContext(app, req.params.id),
         row.scheduledAt,
       );
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.rotation_schedule.update',
-        targetType: 'rotation_schedule',
+      req.auditSnapshots = {
         targetId: row.id,
         before: serializeSchedule(existing),
         after: serializeSchedule(row),
         context: { server_id: req.params.id, warnings },
-        statusCode: reply.statusCode,
-      });
+      };
       return { ...serializeSchedule(row), warnings };
     },
   );
 
   fast.delete(
     '/api/v1/servers/:id/rotation-schedule/:entryId',
-    { config: { audit: 'manual' }, schema: { params: entryParams } },
+    {
+      config: {
+        audit: { action: 'server.rotation_schedule.delete', resource: 'rotation_schedule' },
+      },
+      schema: { params: entryParams },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
       if (!req.user) throw new Error('changemap guard did not establish a user');
-      const actor = req.user;
       if (!(await loadServer(req.params.id))) {
         reply.code(404);
         return { error: 'not_found' };
@@ -466,23 +468,21 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
       await app.db.delete(rotationSchedule).where(eq(rotationSchedule.id, existing.id));
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.rotation_schedule.delete',
-        targetType: 'rotation_schedule',
+      req.auditSnapshots = {
         targetId: existing.id,
         before: serializeSchedule(existing),
         context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      };
       return { deleted: true, id: existing.id };
     },
   );
 
   fast.put(
     '/api/v1/servers/:id/rotation-profiles',
-    { config: { audit: 'manual' }, schema: { params: serverIdParams, body: profilesBody } },
+    {
+      config: { audit: { action: 'server.rotation_profiles.replace', resource: 'server' } },
+      schema: { params: serverIdParams, body: profilesBody },
+    },
     async (req, reply) => {
       const denied = changemapGuard(req, reply);
       if (denied) return denied;
@@ -535,17 +535,11 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
           )
           .returning();
       });
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: actor.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.rotation_profiles.replace',
-        targetType: 'server',
-        targetId: req.params.id,
+      req.auditSnapshots = {
         before: before.map(serializeProfile),
         after: after.map(serializeProfile),
         context: { server_id: req.params.id, profile_count: after.length },
-        statusCode: reply.statusCode,
-      });
+      };
       return { profiles: after.map(serializeProfile) };
     },
   );
