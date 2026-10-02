@@ -53,8 +53,8 @@ async function makeServer(): Promise<string> {
   return id;
 }
 
-function insertEvent(serverId: string | null, kind: string) {
-  return drizzle(sql).insert(events).values({
+function eventRow(serverId: string | null, kind: string) {
+  return {
     eventId: randomUUID(),
     serverId,
     occurredAt: new Date(),
@@ -62,7 +62,23 @@ function insertEvent(serverId: string | null, kind: string) {
     version: 1,
     actorKind: 'system',
     payload: {},
-  });
+  };
+}
+
+function insertEvent(serverId: string | null, kind: string) {
+  return drizzle(sql).insert(events).values(eventRow(serverId, kind));
+}
+
+/**
+ * Stores several rows in ONE statement, hence one transaction: Postgres sends
+ * the rows' notifications together at commit, so they always land inside the
+ * coalescing window, however slow the host is. Sequential awaited inserts
+ * would spread them over a time that can exceed the window.
+ */
+function insertEventsAtOnce(rows: Array<[serverId: string | null, kind: string]>) {
+  return drizzle(sql)
+    .insert(events)
+    .values(rows.map(([serverId, kind]) => eventRow(serverId, kind)));
 }
 
 async function openSocket(): Promise<{ ws: WebSocket; frames: LiveEvent[] }> {
@@ -107,11 +123,13 @@ describe('events feed (NOTIFY → live-bus → WebSocket)', () => {
     const { ws, frames } = await openSocket();
     const a = await makeServer();
     const b = await makeServer();
-    await insertEvent(a, 'combat_damage');
-    await insertEvent(a, 'combat_damage');
-    await insertEvent(a, 'combat_death');
-    await insertEvent(b, 'match.started');
-    await insertEvent(null, 'bansync.completed');
+    await insertEventsAtOnce([
+      [a, 'combat_damage'],
+      [a, 'combat_damage'],
+      [a, 'combat_death'],
+      [b, 'match.started'],
+      [null, 'bansync.completed'],
+    ]);
 
     await waitFor(() => appended(frames).length >= 3);
     // A burst that failed to coalesce would leave more frames for a, b or the

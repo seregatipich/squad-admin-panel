@@ -24,10 +24,12 @@
 # command is safe to `eval`. Idempotent: re-running for the same slug reuses the DB.
 #
 # TEST_REDIS_URL names an isolated Redis logical database in 8..15 derived from the
-# slug, so worktrees with different slugs rarely land on the same one. The API
-# harness still remaps the index per Vitest worker slot (workerRedisDatabase in
-# apps/api/test/integration/isolated-db.ts), so worktrees that must not share Redis
-# state at all need their own Redis (see "Several worktrees" in
+# slug. The API harness uses it as the BASE of its per-worker-slot databases
+# (workerRedisDatabase in apps/api/test/integration/isolated-db.ts: a run holds
+# VITEST_MAX_FORKS databases from the base on), so two worktrees stay apart on one
+# Redis only when their bases are at least VITEST_MAX_FORKS apart modulo 8; the slug
+# hash does not guarantee that, so edit the db number in the exported URL or give
+# each worktree its own Redis (see "Several worktrees" in
 # docs/development/local-development.md).
 #
 # Env overrides:

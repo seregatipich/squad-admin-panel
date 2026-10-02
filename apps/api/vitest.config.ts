@@ -3,7 +3,8 @@ import { defineConfig } from 'vitest/config';
 // Bounded worker count keeps parallel database clones within the Postgres
 // connection budget; overridable via VITEST_MAX_FORKS so a memory-constrained
 // CI runner can lower it. Capped at eight because each pool slot owns one of
-// the eight Redis logical DBs 8..15 (see workerRedisDatabase in isolated-db.ts).
+// the eight Redis logical DBs 8..15, counted from the base DB of TEST_REDIS_URL
+// (see workerRedisDatabase in isolated-db.ts).
 const maxForks = Math.min(Number(process.env.VITEST_MAX_FORKS) || 4, 8);
 
 export default defineConfig({
