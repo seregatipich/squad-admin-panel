@@ -12,8 +12,8 @@ import { describe, expect, it } from 'vitest';
  * an error, which an ungated suite never does (#120).
  *
  * Not covered, on purpose: `contract.test.ts` files, whose shared harness
- * (apps/workers/_test-shared/contract.ts) supplies its own service defaults and
- * spawns the built worker; `global-setup.ts` and the helper directories, which
+ * (apps/workers/_test-shared/contract.ts) spawns the built worker and gates its
+ * suite itself with `describeIfRedis`; `global-setup.ts` and the helper directories, which
  * are not suites; and apps/api, whose harness has its own gating rules.
  */
 

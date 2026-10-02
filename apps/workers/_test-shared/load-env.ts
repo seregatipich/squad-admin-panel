@@ -46,7 +46,11 @@ if (!process.env.DATABASE_URL) {
 if (!process.env.TEST_DATABASE_URL && process.env.DATABASE_URL) {
   process.env.TEST_DATABASE_URL = process.env.DATABASE_URL;
 }
-if (!process.env.REDIS_URL) process.env.REDIS_URL = 'redis://127.0.0.1:6379';
+// REDIS_URL is deliberately NOT defaulted: the stack's Redis requires a
+// password, so a made-up `redis://127.0.0.1:6379` never worked, and it made
+// `describeIfRedis` believe a service was configured. Without REDIS_URL the
+// Redis suites are skipped locally and refused under `CI` (#120); export it, or
+// run `eval "$(bash scripts/new-test-db.sh <slug>)"`, to run them.
 for (const key of ['APP_ENCRYPTION_KEY', 'PANEL_BRIDGE_SOCKET']) {
   const v = dotenv.get(key);
   if (!process.env[key] && v) process.env[key] = v;

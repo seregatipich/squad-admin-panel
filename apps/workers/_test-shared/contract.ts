@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
+import { describeIfRedis } from '../../../packages/db/test/helpers/describe-if.js';
 
 const TEST_REDIS_DB = process.env.TEST_REDIS_DB ?? '14';
 // Use the CI/host-provided redis endpoint — the self-hosted CI runner maps redis
@@ -116,7 +117,8 @@ export function workerContract(opts: ContractOpts) {
     redis = null;
   });
 
-  describe(`${opts.name} worker contract`, () => {
+  // Gated like every Redis suite (#120): skipped locally without REDIS_URL, refused under CI.
+  describeIfRedis(`${opts.name} worker contract`, () => {
     it('publishes heartbeat within 30s of start', async () => {
       redis = opts.createRedis(REDIS_URL);
       await redis.del(opts.expectedHeartbeatKey);

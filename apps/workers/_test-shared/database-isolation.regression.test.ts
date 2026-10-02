@@ -10,7 +10,7 @@
  */
 import path from 'node:path';
 import { describe, expect, inject, it } from 'vitest';
-import { describeIfDb } from '../../../packages/db/test/helpers/describe-if.js';
+import { describeIfDb, describeIfRedis } from '../../../packages/db/test/helpers/describe-if.js';
 
 const packageName = path.basename(process.cwd());
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -31,7 +31,11 @@ describeIfDb(`${packageName} package resource isolation`, () => {
   });
 });
 
-describe.runIf(usesRedis)(`${packageName} package Redis isolation`, () => {
+// The setup files assign a Redis database only when a Redis is configured (#120): without
+// REDIS_URL the suite is skipped locally and refused under CI, like every Redis suite.
+const describeRedisIsolation = usesRedis ? describeIfRedis : describe.skip;
+
+describeRedisIsolation(`${packageName} package Redis isolation`, () => {
   it("points every Redis setting at its worker slot's own logical database", () => {
     const database = String(1 + ((Number(process.env.VITEST_POOL_ID) - 1) % 7));
     expect(process.env.TEST_REDIS_DB).toBe(database);

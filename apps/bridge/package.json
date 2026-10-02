@@ -5,7 +5,7 @@
   "scripts": {
     "build": "sh -c 'if ! command -v go >/dev/null 2>&1; then echo \"[bridge] skipping go build: go not on PATH (built by the go CI job and the docker images)\"; exit 0; fi; GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags=\"-s -w\" -o bin/panel-host-bridge ./cmd/panel-host-bridge'",
     "test": "sh -c 'if [ \"$(go env GOOS 2>/dev/null)\" != linux ]; then echo \"[bridge] skipping go test: Linux-only syscalls, run on a Linux host or in CI\"; exit 0; fi; go test -race -count=1 ./...'",
-    "test:unit": "go test -race -count=1 ./internal/...",
+    "test:unit": "sh scripts/test-unit.sh",
     "lint": "sh -c 'go vet ./... || exit 1; unformatted=\"$(gofmt -l -s .)\"; if [ -n \"$unformatted\" ]; then echo \"$unformatted\"; echo \"[bridge] gofmt -s found unformatted files (run: gofmt -w -s .)\" >&2; exit 1; fi'",
     "typecheck": "sh -c 'if ! command -v go >/dev/null 2>&1; then echo \"[bridge] skipping go typecheck: go not on PATH (compilation is covered by the go CI job)\"; exit 0; fi; GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -o /dev/null ./...'",
     "clean": "rm -rf bin"

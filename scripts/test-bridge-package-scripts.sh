@@ -54,5 +54,29 @@ for name in build typecheck; do
 done
 rm -rf "$NOGO"
 
+# test:unit (#120): skipped with a message and exit 0 where it cannot run (no go,
+# or a non-Linux go), an error under CI, and a real go failure still fails it.
+NOGO=$(mktemp -d)
+ln -s "$(command -v sh)" "$NOGO/sh"
+(cd "$SRC/apps/bridge" && env -u CI PATH="$NOGO" sh -c "$(script test:unit)" >"$FAKE/out" 2>&1)
+assert 0 "test:unit skips with exit 0 when go is not on PATH" "$?"
+assert 1 "test:unit says why it skipped" "$(grep -c 'skipping test:unit: go is not on PATH' "$FAKE/out")"
+(cd "$SRC/apps/bridge" && CI=true PATH="$NOGO" sh -c "$(script test:unit)" >"$FAKE/out" 2>&1)
+assert 1 "test:unit fails under CI when go is not on PATH" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+assert 1 "test:unit explains the CI refusal" "$(grep -c 'CI is set: refusing to skip' "$FAKE/out")"
+rm -rf "$NOGO"
+
+NONLINUX=$(mktemp -d)
+printf '#!/bin/sh\nif [ "$1" = env ]; then echo darwin; exit 0; fi\nexit 1\n' >"$NONLINUX/go"
+chmod +x "$NONLINUX/go"
+(cd "$SRC/apps/bridge" && env -u CI PATH="$NONLINUX:$PATH" sh -c "$(script test:unit)" >/dev/null 2>&1)
+assert 0 "test:unit skips with exit 0 on a non-Linux go" "$?"
+(cd "$SRC/apps/bridge" && CI=true PATH="$NONLINUX:$PATH" sh -c "$(script test:unit)" >/dev/null 2>&1)
+assert 1 "test:unit fails under CI on a non-Linux go" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+rm -rf "$NONLINUX"
+
+(cd "$SRC/apps/bridge" && env -u CI PATH="$FAKE:$PATH" sh -c "$(script test:unit)" >/dev/null 2>&1)
+assert 1 "test:unit fails when go test itself fails" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+
 echo "bridge-package-scripts: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]
