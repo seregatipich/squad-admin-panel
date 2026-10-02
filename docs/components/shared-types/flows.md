@@ -9,11 +9,11 @@ worker-rcon                         events:server:{uuid}       apps/api XREVRANG
   rcon.players_polled       ──────►                    ──────► GET /api/v1/servers/:id/events
   rcon.connected/disconnected        events:global             web polling (SSE or fetch)
 
-worker-log-ingest                   events:server:{uuid}       players-projector consumer group
-  player.connected          ──────►                    ──────► UPSERT players, player_name_history
-  player.disconnected
-  player.name_changed                                          audit-archiver consumer group
-  match.started / ended     ──────► events:server:{uuid} ───► cold-archive rows older than 90d
+worker-log-ingest                   events:server:{uuid}       worker-discord, worker-automation
+  player.connected          ──────►                    ──────► notifications / automation rules
+  player.disconnected                                          (persisted to `events` by log-ingest
+  player.name_changed                                          itself, not by a stream consumer)
+  match.started / ended
 
 apps/api (install flow)             events:server:{uuid}       web install WebSocket
   server.install.started    ──────►                    ──────► progress bar, log lines
@@ -38,16 +38,18 @@ apps/api (bridge plugin)            events:global              web health card
 
 ### Idempotency protocol
 
-Every consumer follows the dual-layer idempotency pattern before acting:
+Idempotency is a single Redis layer, per consumer group (`worker-discord`, `worker-automation`, ...):
 
-1. `SET dedup:{group}:{event_id} 1 EX 86400 NX` — fast path, survives Redis restart only up to TTL.
-2. `INSERT INTO processed_events (event_id, group_name) ON CONFLICT DO NOTHING` — durable guarantee.
+1. Before acting, the consumer checks `dedup:{group}:{event_id}`; if present it only `XACK`s.
+2. After the side effect succeeds it runs `SET dedup:{group}:{event_id} 1 EX 86400 NX`, then `XACK`s.
 
-`XACK` runs only after the side-effect commits. If the consumer crashes after commit but before `XACK`, the event is redelivered; idempotency prevents double-processing.
+If the consumer crashes after the side effect but before the key is set or the `XACK`, the event is redelivered and the effect can run again, so side effects should tolerate a repeat. The `processed_events` table is no longer written by any producer or consumer (#62); `worker-event-partition` only prunes leftover rows. `events` rows are deduplicated by their `(event_id, occurred_at)` primary key.
+
+Producers (`worker-log-ingest`, `worker-ban-sync`) also set a `dedup:` key under their own group so a replayed log line is not appended to the stream twice; it is released when `XADD` fails.
 
 ### Reclaim
 
-Consumer group names, the `XAUTOCLAIM` idle threshold and the tick interval are owned by each worker (for example `DISPATCH_CONSUMER_GROUP` in `apps/workers/automation/src/dispatch.ts`); this package no longer exports shared constants for them. `STREAM_NAME.eventsDlq()` names the `events:dlq` stream, but no consumer moves messages into it today.
+Consumer group names, the `XAUTOCLAIM` idle threshold and the tick interval are owned by each worker (for example `DISPATCH_CONSUMER_GROUP` in `apps/workers/automation/src/dispatch.ts`); this package no longer exports shared constants for them. `STREAM_NAME.eventsDlq()` names the `events:dlq` stream, but nothing writes it today: a consumer that keeps failing stays pending, except that `worker-discord` acks an entry after `MAX_DELIVERY_ATTEMPTS` failed deliveries.
 
 ---
 
@@ -77,7 +79,7 @@ import { validatePayload } from '@squad/shared-types/events';
 
 const result = validatePayload(envelope.type, envelope.payload);
 if (!result.ok) {
-  // move to DLQ or skip
+  // skip or log: no DLQ writer exists today
 }
 ```
 

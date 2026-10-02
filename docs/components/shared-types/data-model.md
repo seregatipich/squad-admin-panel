@@ -29,20 +29,20 @@ Validated with `eventEnvelope` (Zod, `.strict()`).
 | `server.stopped` | `worker-log-ingest` / `api` | API state updater |
 | `server.crashed` | `worker-log-ingest` | API state updater (plus metric) |
 | `server.restarted` | `api` | UI mirror |
-| `server.ready` | `worker-log-ingest` | players-projector, API |
+| `server.ready` | `worker-log-ingest` | API |
 | `server.installed` | `api` install flow | UI mirror |
 | `server.updated` | `api` (post `depot_update`) | UI mirror |
 | `server.install.started` | `api` install WS | UI |
 | `server.install.progress` | `api` install WS | UI |
 | `server.install.failed` | `api` install WS | UI |
 | `server.install.completed` | `api` install WS | UI |
-| `player.connected` | `worker-log-ingest` | players-projector (UPSERT players) |
-| `player.disconnected` | `worker-log-ingest` | players-projector (last_seen) |
-| `player.name_changed` | `worker-log-ingest` / `worker-rcon` | players-projector (`player_name_history`) |
-| `match.started` / `match.ended` | `worker-log-ingest` | future stats projector |
+| `player.connected` | `worker-log-ingest` | worker-discord, worker-automation |
+| `player.disconnected` | `worker-log-ingest` | worker-discord, worker-automation |
+| `player.name_changed` | `worker-log-ingest` / `worker-rcon` | worker-discord, worker-automation |
+| `match.started` / `match.ended` | `worker-log-ingest` | worker-discord, worker-automation |
 | `rcon.connected` / `rcon.disconnected` | `worker-rcon` | UI health card |
 | `rcon.admin_command` | `worker-log-ingest` | Events journal (admin command seen in SquadGame.log) |
-| `rcon.players_polled` | `worker-rcon` | players-projector |
+| `rcon.players_polled` | `worker-rcon` | none (events journal only) |
 | `squad.created` / `squad.leader_changed` / `squad.disbanded` | `worker-rcon` (squad history; also inserted into `events`) | events journal, per-player lookups by `actor_id` |
 | `bridge.connected` / `bridge.disconnected` | `api` (bridge plugin) | UI health card |
 
@@ -81,24 +81,19 @@ Validated with `eventEnvelope` (Zod, `.strict()`).
 ```
 events:server:{uuid}  — per-server pipeline
 events:global         — host-scope events (bridge connect/disconnect)
-events:dlq            — messages that exhausted the retry budget
+events:dlq            — reserved name; nothing writes it today
 ```
 
-Consumer groups are named `<service>:v<schema-version>`, e.g. `players-projector:v1`. Bumping the version starts a fresh group that replays the stream from the tail.
+Consumer groups are named `<service>:v<schema-version>`, e.g. `automation-dispatch:v1`, `discord-notify:v1` (a few groups, such as `config-sync` and `diag-flush`, are unversioned). Bumping the version starts a fresh group that replays the stream from the tail.
 
-## Idempotency (dual-layer)
+## Idempotency
 
-Every consumer does both before acting:
+A single Redis layer per consumer group: the consumer skips an event whose `dedup:${group}:${event_id}` key exists, runs the side effect, then `SET`s that key (`EX 86400 NX`) and `XACK`s. A failed side effect leaves the entry pending and sets no key, so the reclaim retries it. `processed_events` is no longer written (#62); `events` rows rely on their `(event_id, occurred_at)` primary key. See [flows.md](flows.md#idempotency-protocol).
 
-1. `SET dedup:${group}:${event_id} 1 EX 86400 NX` — fast short-circuit on redelivery.
-2. `INSERT INTO processed_events (event_id, group_name) ON CONFLICT DO NOTHING` — durable guarantee that survives Redis restarts.
+## Reclaim and retries
 
-`XACK` runs only after the side-effect commits. On consumer failure the Redis dedup key is `DEL`-ed so `XAUTOCLAIM`'s retry can proceed.
-
-## Reclaim and DLQ
-
-- `XAUTOCLAIM` runs every 30 s with a 120 s idle threshold.
-- After five deliveries to the same pending entry, the reclaimer moves the message to `events:dlq` and `XACK`s the original.
+- `worker-discord`, `worker-automation` and `worker-config-sync` run `XAUTOCLAIM` on a 30 s tick; the idle threshold is 30 s (60 s for config-sync) and each worker owns its constants.
+- There is no DLQ writer. `worker-discord` acks an entry after `MAX_DELIVERY_ATTEMPTS` (10) failed deliveries; the other consumers leave it pending until it succeeds.
 
 ## Upcasting (when `version` changes)
 

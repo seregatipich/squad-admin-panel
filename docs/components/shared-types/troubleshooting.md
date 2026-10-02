@@ -23,7 +23,7 @@ Common causes:
 
 **Fix**:
 1. Add the new type to `EVENT_TYPES` in `packages/shared-types/src/events.ts`.
-2. If you need to tolerate unknown types transiently (rolling deploy), use `eventEnvelope.passthrough()` or catch the error and move the message to DLQ.
+2. If you need to tolerate unknown types transiently (rolling deploy), use `eventEnvelope.passthrough()` or catch the error and skip the message (no DLQ writer exists today).
 
 ## `validatePayload` returns `ok: false` with unexpected errors
 
