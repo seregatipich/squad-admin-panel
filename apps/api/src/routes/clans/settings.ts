@@ -107,6 +107,7 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
             .returning();
           if (!row) throw new Error('clans insert returned no row');
           req.auditSnapshots = { targetId: id, before: null, after: clanSnapshot(row) };
+          reply.code(201);
           await auditRequestInTransaction(tx, req, reply);
           return row;
         });

@@ -1,10 +1,11 @@
 import { auditLog, clanMembers, clans, players, roles } from '@squad/db/schema';
 import { and, desc, eq, gt } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForAuditRows } from '../helpers/audit-since.js';
 import { withFailingAuditInsert } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
@@ -28,6 +29,8 @@ const OWNER_STEAM = testSteamId(884001);
 const VIEWER_STEAM = testSteamId(884002);
 const MEMBER_STEAM = testSteamId(884003);
 
+const SENTINEL_ACTION = 'clan_guard.settings.update';
+
 let h: IntegrationHarness;
 let ownerCookie: string;
 let viewerCookie: string;
@@ -47,24 +50,18 @@ async function auditMark(): Promise<bigint> {
 async function rowsSince(mark: bigint, action: string) {
   // The hook writes after the response is sent and audit writes are serialised
   // on the hash chain, so once a later audited request has its own row, every
-  // earlier request's hook has finished.
-  const sentinel = await auditMark();
+  // earlier request's hook has finished. The sentinel is a request no case
+  // above sends, so its row cannot be mistaken for a case's.
+  const sentinelMark = await auditMark();
   await h.app.inject({
-    method: 'PUT',
-    url: '/api/v1/settings/coplay',
+    method: 'PATCH',
+    url: '/api/v1/settings/clan-guard',
     headers: { cookie: ownerCookie },
     payload: {},
   });
-  await vi.waitFor(
-    async () => {
-      const [latest] = await h.db
-        .select({ id: auditLog.id })
-        .from(auditLog)
-        .where(and(eq(auditLog.actionType, 'coplay.settings.update'), gt(auditLog.id, sentinel)))
-        .limit(1);
-      if (!latest) throw new Error('sentinel audit row not written yet');
-    },
-    { timeout: 5_000, interval: 25 },
+  await waitForAuditRows(
+    h.db,
+    and(eq(auditLog.actionType, SENTINEL_ACTION), gt(auditLog.id, sentinelMark)),
   );
   return h.db
     .select()
@@ -141,17 +138,17 @@ describeIfDb('a denied attempt on a migrated route is audited once, with its act
     });
   });
 
-  it('records the 403 of a role-flag guard (clan guard settings)', async () => {
+  it('records the 403 of a catalogue-key guard (coplay settings need player:view_ips)', async () => {
     const mark = await auditMark();
     const res = await h.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/settings/clan-guard',
+      method: 'PUT',
+      url: '/api/v1/settings/coplay',
       headers: { cookie: viewerCookie },
-      payload: {},
+      payload: { min_shared_sessions: 3 },
     });
     expect(res.statusCode).toBe(403);
 
-    const rows = await rowsSince(mark, 'clan_guard.settings.update');
+    const rows = await rowsSince(mark, 'coplay.settings.update');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ actorPlayerId: viewerPlayerId, statusCode: 403 });
   });

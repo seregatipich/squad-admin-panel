@@ -1,12 +1,12 @@
-import { players, roleSquadPermissions, roles, serverSettings } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { auditLog, players, roleSquadPermissions, roles, serverSettings } from '@squad/db/schema';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { auditLogMark, waitForAuditRows } from '../helpers/audit-since.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
-  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
@@ -233,6 +233,10 @@ describeIfDb('PUT /api/v1/servers/:id/seeding-settings', () => {
 
   it('updates server_settings and writes an audit entry with before/after (Owner)', async () => {
     const cookie = await loginAsOwner(h);
+    // Earlier cases write the same action for this server, some after their
+    // response: only a successful row newer than the case start that holds this
+    // request's values is its own.
+    const mark = await auditLogMark(h.db);
     const resp = await h.app.inject({
       method: 'PUT',
       url: `/api/v1/servers/${SERVER_ID}/seeding-settings`,
@@ -249,13 +253,19 @@ describeIfDb('PUT /api/v1/servers/:id/seeding-settings', () => {
     expect(row?.seedLiveAt).toBe(90);
     expect(row?.seedHysteresis).toBe(10);
 
-    const audit = await assertAuditRow(h, {
-      action: 'server.seeding_settings_update',
-      resource: 'server',
-      targetId: SERVER_ID,
-    });
-    expect(audit.beforeSnapshot).toMatchObject({ seed_live_at: 60, seed_hysteresis: 5 });
-    expect(audit.afterSnapshot).toMatchObject({ seed_live_at: 90, seed_hysteresis: 10 });
+    const [audit] = await waitForAuditRows(
+      h.db,
+      and(
+        eq(auditLog.actionType, 'server.seeding_settings_update'),
+        eq(auditLog.targetType, 'server'),
+        eq(auditLog.targetId, SERVER_ID),
+        eq(auditLog.statusCode, 200),
+        sql`${auditLog.afterSnapshot}->>'seed_live_at' = '90'`,
+        gt(auditLog.id, mark),
+      ),
+    );
+    expect(audit?.beforeSnapshot).toMatchObject({ seed_live_at: 60, seed_hysteresis: 5 });
+    expect(audit?.afterSnapshot).toMatchObject({ seed_live_at: 90, seed_hysteresis: 10 });
   });
 
   it('rejects seed_live_at = 0 (400)', async () => {

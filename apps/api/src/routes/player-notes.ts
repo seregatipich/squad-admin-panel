@@ -200,6 +200,7 @@ const playerNotesRoutes: FastifyPluginAsync = async (app) => {
           after: snapshot(inserted),
           context: { playerId },
         };
+        reply.code(201);
         await auditRequestInTransaction(tx, req, reply);
       });
 

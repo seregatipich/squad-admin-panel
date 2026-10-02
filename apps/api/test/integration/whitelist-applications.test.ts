@@ -6,7 +6,7 @@ import {
   servers,
   whitelistApplications,
 } from '@squad/db/schema';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
@@ -20,6 +20,7 @@ import {
 } from '../../../workers/role-expirer/src/tick.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForAuditRows } from '../helpers/audit-since.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -265,17 +266,10 @@ describeIfDb('public portal — settings + submit', () => {
     expect(body.steam_id64).toBe(HAPPY_STEAM.toString());
     expect(body.player_id).toBe(happyPlayerId);
 
-    const [audit] = await h.db
-      .select()
-      .from(auditLog)
-      .where(
-        and(
-          eq(auditLog.actionType, 'whitelist.application.create'),
-          eq(auditLog.targetId, body.id),
-        ),
-      )
-      .orderBy(desc(auditLog.createdAt))
-      .limit(1);
+    const [audit] = await waitForAuditRows(
+      h.db,
+      and(eq(auditLog.actionType, 'whitelist.application.create'), eq(auditLog.targetId, body.id)),
+    );
     expect(audit?.actorKind).toBe('steam');
     expect(audit?.actorPlayerId).toBe(happyPlayerId);
   });
@@ -805,12 +799,14 @@ describeIfDb('concurrent review decisions (#374)', () => {
       patchApplication(appId, { status: 'approved', role_id: vipRoleId }),
     ]);
     expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
-    const reviews = await h.db
-      .select({ id: auditLog.id })
-      .from(auditLog)
-      .where(
-        and(eq(auditLog.actionType, 'whitelist.application.review'), eq(auditLog.targetId, appId)),
-      );
-    expect(reviews).toHaveLength(1);
+    // Both attempts are audited, the rejected one included: one row per
+    // request, and only the winner carries the approved state.
+    const reviews = await waitForAuditRows(
+      h.db,
+      and(eq(auditLog.actionType, 'whitelist.application.review'), eq(auditLog.targetId, appId)),
+      2,
+    );
+    expect(reviews.map((row) => row.statusCode).sort()).toEqual([200, 409]);
+    expect(reviews.filter((row) => row.afterSnapshot !== null)).toHaveLength(1);
   });
 });

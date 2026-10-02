@@ -1,6 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { auditLog } from '@squad/db/schema';
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, type SQL } from 'drizzle-orm';
 import { expect } from 'vitest';
 
 // Audit assertions for suites that share one integration harness across their
@@ -52,4 +52,31 @@ export async function expectAuditRowSince(
       { timeout: 1_200, interval: 50 },
     )
     .toBe(1);
+}
+
+/**
+ * Waits up to 5 s for at least `count` audit rows matching `where` and returns
+ * every match, oldest first. The audit hook writes after the response is sent,
+ * so a case that reads `audit_log` right after `inject` resolves must poll.
+ *
+ * @param db - the harness database the audit plugin writes to
+ * @param where - filter selecting the case's own rows (action, target, actor)
+ * @param count - how many rows must exist before the rows are returned
+ */
+export async function waitForAuditRows(
+  db: DatabaseClient,
+  where: SQL | undefined,
+  count = 1,
+): Promise<(typeof auditLog.$inferSelect)[]> {
+  let rows: (typeof auditLog.$inferSelect)[] = [];
+  await expect
+    .poll(
+      async () => {
+        rows = await db.select().from(auditLog).where(where).orderBy(auditLog.id);
+        return rows.length;
+      },
+      { timeout: 5_000, interval: 25 },
+    )
+    .toBeGreaterThanOrEqual(count);
+  return rows;
 }

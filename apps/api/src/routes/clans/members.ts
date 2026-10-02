@@ -93,6 +93,7 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
             before: null,
             after: { player_id: req.body.player_id, member_role: memberRole },
           };
+          reply.code(201);
           await auditRequestInTransaction(tx, req, reply);
         });
       } catch (err) {

@@ -23,6 +23,7 @@ import {
   type WorkerRconCommandOutcome,
 } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForAuditRows } from '../helpers/audit-since.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -391,10 +392,10 @@ describeIfDb('report ban through the shared MOD-2 pipeline (#41)', () => {
       .where(and(eq(events.serverId, serverId), eq(events.kind, 'moderation.ban')));
     expect(ledgerEvents).toHaveLength(1);
 
-    const reportAudit = await h.db
-      .select()
-      .from(auditLog)
-      .where(and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, reportId)));
+    const reportAudit = await waitForAuditRows(
+      h.db,
+      and(eq(auditLog.actionType, 'report.action'), eq(auditLog.targetId, reportId)),
+    );
     expect(reportAudit).toHaveLength(1);
     expect(reportAudit[0]?.context).toMatchObject({
       moderation_action_id: body.applied[0]?.moderation_action_id,
