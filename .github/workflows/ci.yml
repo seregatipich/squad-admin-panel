@@ -114,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     services:
       # Dynamic host ports (Docker assigns a free one); the resolved ports are
       # read back below via the job.services context. tmpfs keeps an interrupted
@@ -192,13 +192,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run the API test shard with coverage
-        run: bash scripts/ci-test-shard.sh api ${{ matrix.shard }} 4
+        run: bash scripts/ci-test-shard.sh api ${{ matrix.shard }} 6
       # The gate job merges all four blobs and enforces the coverage thresholds.
       - name: Upload the shard's blob report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vitest-blob-api-${{ matrix.shard }}
-          path: apps/api/.vitest-reports/blob-${{ matrix.shard }}-4.json
+          path: apps/api/.vitest-reports/blob-${{ matrix.shard }}-6.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -211,7 +211,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
@@ -229,13 +229,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run the web test shard with coverage
-        run: bash scripts/ci-test-shard.sh web ${{ matrix.shard }} 2
+        run: bash scripts/ci-test-shard.sh web ${{ matrix.shard }} 3
       # The gate job merges both blobs and enforces the coverage thresholds.
       - name: Upload the shard's blob report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vitest-blob-web-${{ matrix.shard }}
-          path: apps/web/.vitest-reports/blob-${{ matrix.shard }}-2.json
+          path: apps/web/.vitest-reports/blob-${{ matrix.shard }}-3.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -505,6 +505,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       packages: read
     steps:
@@ -516,9 +517,34 @@ jobs:
           password: ${{ github.token }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         id: buildx
-      # rnsquadjs is not part of a release, so no deploy pushes a registry
-      # cache for it; it keeps its GitHub Actions layer cache instead.
+      # The promoted commit was pushed to dev first, so the stand deploy is building the same release
+      # images right now. Building them again here took 180-230 s whenever source layers changed (the
+      # deploy's layer cache is not pushed yet) and made this the slowest job of the run; reuse the
+      # ones the smoke tests need (api, workers) instead. With no deploy run for the commit, or one that
+      # ended without the images, reuse=false and the step below builds everything as before.
+      - name: Reuse the images the stand deploy built
+        id: deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-reuse-deploy-images.sh
+      # rnsquadjs is not part of a release, so no deploy builds or pushes it; it is always built here
+      # and keeps its GitHub Actions layer cache instead of the registry cache.
+      - name: build the rnsquadjs image
+        if: steps.deployed.outputs.reuse == 'true'
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        env:
+          TAG: ${{ github.sha }}
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          source: .
+          files: docker/docker-bake.hcl
+          targets: rnsquadjs
+          load: true
+          set: |
+            rnsquadjs.cache-from=type=gha,scope=rnsquadjs
+            rnsquadjs.cache-to=type=gha,scope=rnsquadjs,mode=max
       - name: build images
+        if: steps.deployed.outputs.reuse != 'true'
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         env:
           TAG: ${{ github.sha }}

@@ -154,7 +154,8 @@ for suite in test-git-guard test-verify-done test-pre-push-checklist test-workfl
   test-dependency-pins test-migration-lint test-gitignore-patterns test-workflow-security \
   test-codeql-default-setup test-ci-runner-strategy test-ci-test-shard \
   test-image-preserve-labels test-rnsquadjs-runtime-copy test-bridge-package-scripts \
-  test-compose-env-passthrough test-postgres-max-connections test-local-dev-isolation; do
+  test-compose-env-passthrough test-postgres-max-connections test-local-dev-isolation \
+  test-ci-reuse-deploy-images; do
   has_line "$(sed -n '/^SUITES=($/,/^)$/p' "$contracts_runner")" "  ${suite}" ||
     fail "scripts/test-repo-contracts.sh does not run ${suite}"
   [ -f "$repo_root/scripts/${suite}.sh" ] || fail "scripts/${suite}.sh does not exist"
@@ -258,8 +259,8 @@ check_sharded_slice() {
     fail "${job} builds or migrates; its suite resolves @squad/* to source and builds its own template database"
   fi
 }
-check_sharded_slice test-api api apps/api 4
-check_sharded_slice test-web web apps/web 2
+check_sharded_slice test-api api apps/api 6
+check_sharded_slice test-web web apps/web 3
 
 test_api=$(job_block "$ci_workflow" test-api)
 has_line "$test_api" '      VITEST_MAX_FORKS: "4"' || fail 'test-api does not use all four hosted vCPUs'
@@ -347,6 +348,15 @@ printf '%s\n' "$images" | grep -Eq 'uses:[[:space:]]+docker/bake-action@[0-9a-f]
 has_text "$images" 'TAG: ${{ github.sha }}' || fail 'images are not tagged with the commit they were built from'
 has_text "$images" 'source: .' || fail 'bake builds a remote Git context instead of the checked-out tree'
 has_line "$images" '          targets: release,rnsquadjs' || fail 'images job does not build the release group and rnsquadjs'
+# The images the stand deploy builds for the same commit are reused when they exist; ci builds them
+# only as the fallback, and rnsquadjs (which no deploy builds) is built either way.
+has_line "$images" '      actions: read' || fail 'images job cannot look up the deploy run of its commit'
+has_text "$images" 'run: bash scripts/ci-reuse-deploy-images.sh' ||
+  fail 'images job does not try to reuse the stand deploy images'
+has_text "$images" "if: steps.deployed.outputs.reuse != 'true'" ||
+  fail 'the full image build is not the fallback of the reuse step'
+has_line "$images" '          targets: rnsquadjs' ||
+  fail 'rnsquadjs is not built when the release images are reused'
 has_line "$images" '          load: true' || fail 'images are not loaded for the smoke tests'
 has_line "$images" '      packages: read' || fail 'images job cannot read the GHCR layer cache'
 if has_text "$images" 'packages: write' || has_text "$images" 'cache-to=type=registry'; then

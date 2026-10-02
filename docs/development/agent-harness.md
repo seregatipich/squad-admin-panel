@@ -148,13 +148,13 @@ the newest SHA matters and nothing deploys from it.
 |---|---|
 | `branch-guard` | the master ancestry audit (on `master` pushes), then every repository-contract suite through `scripts/test-repo-contracts.sh` (see below) |
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
-| `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
-| `test-web` (2 shards) | half of the web suite each — no services, no build |
+| `test-api` (6 shards) | a sixth of the API suite by test file, against Postgres and Redis services — no build, no migration |
+| `test-web` (3 shards) | a third of the web suite each — no services, no build |
 | `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; the packages are spread over the shards by measured weight (longest-processing-time-first onto the least-loaded shard), so each starts with one of the three longest suites and the shards finish together; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
-| `images` | the `release` group and `rnsquadjs` of `docker/docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
+| `images` | reuses the `api` and `workers` release images the stand deploy built for the same commit (`scripts/ci-reuse-deploy-images.sh` waits boundedly while that deploy run exists and tags them like bake), and builds `rnsquadjs` itself; with no deploy run for the commit, or one that ended without the images, it builds the `release` group and `rnsquadjs` of `docker/docker-bake.hcl` as before, reading (never writing) the GHCR layer cache the stand deploy writes. Then smoke tests: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
 | `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
 | `coverage` | `needs` only `test-api` and `test-web` and merges their blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite; it overlaps the slower package shards instead of running after them |
 | `gate` | `needs` every other job (including `coverage`) with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); it installs nothing |
