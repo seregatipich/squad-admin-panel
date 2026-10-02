@@ -28,6 +28,9 @@ RD1="rd1-${SFX}"; RD2="rd2-${SFX}"
 TOOL_IMG="squad-panel/restic:citest-${SFX}"
 PG_IMG="postgres:16-alpine"
 RD_IMG="redis:7-alpine"
+# Same shape as the stack: Redis requires a password (#32, #97) and redis-cli reads it from
+# REDISCLI_AUTH, as in the compose redis/backup services and scripts/restore.sh.
+REDIS_PW="citest-$RANDOM$RANDOM"
 TMP="$(mktemp -d)"
 
 CANARY_TABLE="canary"
@@ -67,7 +70,7 @@ chmod -R 0777 "$TMP"
 # redis-cli. Override the resticker entrypoint so we can run ad-hoc commands.
 tool() {
   docker run --rm --network "$NET" --entrypoint /bin/sh \
-    -e RESTIC_REPOSITORY=/repo -e RESTIC_PASSWORD=citest \
+    -e RESTIC_REPOSITORY=/repo -e RESTIC_PASSWORD=citest -e REDISCLI_AUTH="$REDIS_PW" \
     -e POSTGRES_PASSWORD=admin -e PGPASSWORD=admin \
     -v "$TMP/dump:/data" -v "$TMP/repo:/repo" -v "$TMP/restore:/restore" \
     "$TOOL_IMG" -c "$1"
@@ -101,7 +104,7 @@ wait_pg() {
 }
 wait_redis() {
   for _ in $(seq 1 60); do
-    [ "$(docker exec "$1" redis-cli ping 2>/dev/null)" = "PONG" ] && return 0
+    [ "$(docker exec -e REDISCLI_AUTH="$REDIS_PW" "$1" redis-cli ping 2>/dev/null)" = "PONG" ] && return 0
     sleep 1
   done
   fail "redis container $1 never answered PING"
@@ -126,7 +129,7 @@ step "Starting source Postgres + Redis and seeding known data"
 docker run -d --name "$PG1" --network "$NET" --network-alias postgres \
   -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=admin "$PG_IMG" >/dev/null
 docker run -d --name "$RD1" --network "$NET" --network-alias redis \
-  "$RD_IMG" redis-server --appendonly yes --save 60 1000 >/dev/null
+  "$RD_IMG" redis-server --appendonly yes --save 60 1000 --requirepass "$REDIS_PW" >/dev/null
 # Neither container is given an explicit -v, so each gets an anonymous volume
 # for its image's declared VOLUME (postgres: /var/lib/postgresql/data, redis:
 # /data). Captured here so the removals below can assert they didn't leak.
@@ -138,7 +141,7 @@ docker exec "$PG1" psql -U admin -d admin -v ON_ERROR_STOP=1 \
   -c "CREATE TABLE ${CANARY_TABLE} (id int primary key, note text);" \
   -c "INSERT INTO ${CANARY_TABLE} VALUES (1, '${CANARY_VALUE}');" >/dev/null \
   || fail "seeding postgres failed"
-docker exec "$RD1" redis-cli set "$REDIS_KEY" "$REDIS_VALUE" >/dev/null || fail "seeding redis failed"
+docker exec -e REDISCLI_AUTH="$REDIS_PW" "$RD1" redis-cli set "$REDIS_KEY" "$REDIS_VALUE" >/dev/null || fail "seeding redis failed"
 ok "seeded postgres row and redis key"
 
 # ── run the EXACT compose PRE_COMMANDS, then restic backup ──────────────────
@@ -215,16 +218,17 @@ step "Converting the staged RDB to an AOF (restore.sh Redis script)"
 # The restored redis boots with --appendonly yes, which loads the AOF and would
 # ignore a bare dump.rdb, so restore.sh loads the RDB into a one-off server with
 # AOF off and rewrites it. As in restore.sh, the redis volume is /data and the
-# staged dump is mounted read-only at /restore; no password is configured here.
+# staged dump is mounted read-only at /restore; REDISCLI_AUTH carries the password
+# the one-off server takes (--requirepass "$REDISCLI_AUTH").
 docker run --rm --entrypoint /bin/sh -v "$TMP/redis-restore:/data" -v "$TMP/dump/restore:/restore:ro" \
-  -e REDIS_READY_ATTEMPTS=600 -e REDIS_REWRITE_ATTEMPTS=2000 "$RD_IMG" -c "$REDIS_CONVERT" \
+  -e REDISCLI_AUTH="$REDIS_PW" -e REDIS_READY_ATTEMPTS=600 -e REDIS_REWRITE_ATTEMPTS=2000 "$RD_IMG" -c "$REDIS_CONVERT" \
   || fail "RDB->AOF conversion failed"
 ok "AOF rebuilt from restored RDB"
 
 step "Starting fresh Redis on the restored AOF"
 docker run -d --name "$RD2" --network "$NET" --network-alias redis \
   -v "$TMP/redis-restore:/data" "$RD_IMG" \
-  redis-server --dir /data --appendonly yes --save 60 1000 >/dev/null
+  redis-server --dir /data --appendonly yes --save 60 1000 --requirepass "$REDIS_PW" >/dev/null
 wait_redis "$RD2"
 
 # ── assertions ──────────────────────────────────────────────────────────────
@@ -234,7 +238,7 @@ got_pg="$(docker exec "$PG2" psql -U admin -d admin -tAc \
 [ "$got_pg" = "$CANARY_VALUE" ] || fail "postgres row not restored (got '${got_pg}', want '${CANARY_VALUE}')"
 ok "postgres canary row restored"
 
-got_rd="$(docker exec "$RD2" redis-cli get "$REDIS_KEY" 2>/dev/null)"
+got_rd="$(docker exec -e REDISCLI_AUTH="$REDIS_PW" "$RD2" redis-cli get "$REDIS_KEY" 2>/dev/null)"
 [ "$got_rd" = "$REDIS_VALUE" ] || fail "redis key not restored (got '${got_rd}', want '${REDIS_VALUE}')"
 ok "redis canary key restored"
 

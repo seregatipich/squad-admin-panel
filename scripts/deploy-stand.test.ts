@@ -247,6 +247,37 @@ describe('the stand host release deploy', { concurrency: true }, () => {
     assert.doesNotMatch(second.stdout, /generated REDIS/);
   });
 
+  it('deploys from a pre-Redis-auth .env.stand without either secret and keeps existing values (#97)', async () => {
+    const fixture = deployFixture();
+    const envFile = path.join(fixture.root, '.env.stand');
+    // An old stand file: neither key present, no trailing newline.
+    writeFileSync(
+      envFile,
+      'ACME_EMAIL=ops@stand.example\nDUCKDNS_TOKEN=token-value\nAPP_DOMAIN=stand.example',
+    );
+    const env = { DOCKER_IDS_AFTER: 'postgres p1,redis r1,api a2,web w2,caddy c2,worker-rcon k2' };
+    const read = (key: string) =>
+      readFileSync(envFile, 'utf8')
+        .split('\n')
+        .filter((line) => line.startsWith(`${key}=`));
+
+    const first = await deploy(fixture, env);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(read('REDIS_PASSWORD').length, 1);
+    assert.equal(read('REDIS_SIDECAR_PASSWORD').length, 1);
+    assert.match(read('REDIS_PASSWORD')[0] ?? '', /^REDIS_PASSWORD=[0-9a-f]{64}$/);
+
+    // An operator-chosen password is never replaced, and a repeat deploy changes nothing.
+    const before = readFileSync(envFile, 'utf8').replace(
+      /^REDIS_PASSWORD=.*$/m,
+      'REDIS_PASSWORD=operator-chosen',
+    );
+    writeFileSync(envFile, before);
+    const second = await deploy(fixture, env);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(readFileSync(envFile, 'utf8'), before);
+  });
+
   it('refuses to start without a real ACME_EMAIL and a DUCKDNS_TOKEN in .env.stand', async () => {
     const base = 'APP_DOMAIN=stand.example\n';
     const cases: Array<[string, RegExp]> = [

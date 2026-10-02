@@ -99,11 +99,14 @@ done
 # before that gets them generated once (hex, since they are embedded in
 # redis:// URLs); an existing value is never rotated.
 ensure_env_secret() {
-  local key="$1" value
+  local key="$1" value updated
   grep -qE "^${key}=.+" "$ENV_FILE" && return 0
   value="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   if grep -qE "^${key}=$" "$ENV_FILE"; then
-    sed -i "s/^${key}=\$/${key}=${value}/" "$ENV_FILE"
+    # No `sed -i`: its flag differs between GNU and BSD sed. Overwriting in place
+    # keeps the file's owner and mode.
+    updated="$(sed "s/^${key}=\$/${key}=${value}/" "$ENV_FILE")"
+    printf '%s\n' "$updated" > "$ENV_FILE"
   else
     # Never glue the new line onto a last line that lacks its newline.
     [[ -z "$(tail -c 1 "$ENV_FILE")" ]] || echo >> "$ENV_FILE"
