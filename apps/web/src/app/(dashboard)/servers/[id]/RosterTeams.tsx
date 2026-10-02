@@ -85,7 +85,7 @@ export function TeamRoster({
       {team.squads.length === 0 ? (
         <p className="px-3 py-4 text-center text-xs text-ink-3">В этой команде пока никого нет</p>
       ) : (
-        <Table ariaLabel={`Игроки: ${title}`} layout="fixed">
+        <Table ariaLabel={`Игроки: ${title}`} layout="fixed" dense>
           <TableHead>
             <TableRow>
               {rowProps.canBulk ? (
@@ -175,7 +175,7 @@ function SquadGroupRows({
         <th
           scope="colgroup"
           colSpan={colSpan}
-          className="px-3 py-1.5 text-left text-xs font-semibold text-ink-2"
+          className="px-3 py-1 text-left text-xs font-semibold text-ink-2"
         >
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">

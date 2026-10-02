@@ -116,7 +116,6 @@ describe('MatchesPage', () => {
   });
 
   it('shows the empty state when no match was ever recorded', async () => {
-    mockSearchParams = new URLSearchParams('seeding=show');
     stubFetch({ items: [], total: 0 });
     render(<MatchesPage />);
 
@@ -140,7 +139,17 @@ describe('MatchesPage', () => {
     expect(replace).toHaveBeenCalledWith('/matches?sort=layer&order=asc');
   });
 
+  it('does not count the default seeding hiding as an applied filter', async () => {
+    mockSearchParams = new URLSearchParams();
+    stubFetch({ items: [], total: 0 });
+    render(<MatchesPage />);
+
+    expect(await screen.findByText('Матчей ещё не было')).toBeInTheDocument();
+    expect(screen.queryByText('Нет совпадений.')).not.toBeInTheDocument();
+  });
+
   it('tells an empty filter result apart from an empty history', async () => {
+    mockSearchParams = new URLSearchParams('layer=Narva');
     stubFetch({ items: [], total: 0 });
     render(<MatchesPage />);
 

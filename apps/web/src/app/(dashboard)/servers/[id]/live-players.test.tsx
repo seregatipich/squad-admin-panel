@@ -152,6 +152,24 @@ describe('LivePlayers', () => {
   });
 
   it(
+    'renders every team roster table in the compact dense layout (#26)',
+    async () => {
+      render(<LivePlayers serverId="srv-1" canChat={true} />);
+      await screen.findByText('Leader');
+      const tables = screen.getAllByRole('table');
+      expect(tables.length).toBeGreaterThanOrEqual(2);
+      for (const table of tables) {
+        expect(table.className).toContain('[&_tr]:h-8');
+        expect(table.className).toContain('[&_td]:py-1');
+      }
+      // Compact rows keep every per-row control reachable.
+      expect(screen.getByRole('link', { name: 'Leader' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Сообщение игроку: Leader' })).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'hides the per-squad message button without the chat permission',
     async () => {
       render(<LivePlayers serverId="srv-1" canChat={false} />);

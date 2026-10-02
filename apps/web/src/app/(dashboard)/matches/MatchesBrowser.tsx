@@ -296,7 +296,7 @@ export function MatchesBrowser() {
   const filtersApplied =
     filters.layer.trim() !== '' ||
     filters.servers.length > 0 ||
-    filters.hideSeeding ||
+    filters.playerId !== '' ||
     filters.preset !== 'all';
 
   return (
