@@ -18,7 +18,10 @@ const issueLinkRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/issues/:id/links',
     {
       schema: { params: idParam, body: linkInput },
-      config: { audit: { action: 'issue.link.create', resource: 'issue' } },
+      config: {
+        permissions: ['issue:view'],
+        audit: { action: 'issue.link.create', resource: 'issue' },
+      },
     },
     async (req, reply) => {
       const user = currentUser(req, reply);
@@ -82,7 +85,10 @@ const issueLinkRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/issues/:id/links/:linkId',
     {
       schema: { params: linkIdParam },
-      config: { audit: { action: 'issue.link.delete', resource: 'issue' } },
+      config: {
+        permissions: ['issue:view'],
+        audit: { action: 'issue.link.delete', resource: 'issue' },
+      },
     },
     async (req, reply) => {
       const user = currentUser(req, reply);

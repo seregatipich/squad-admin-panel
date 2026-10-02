@@ -17,7 +17,10 @@ const issueUpdateRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/issues/:id',
     {
       schema: { params: idParam, body: patchBody },
-      config: { audit: { action: 'issue.update', resource: 'issue' } },
+      config: {
+        permissions: ['issue:view'],
+        audit: { action: 'issue.update', resource: 'issue' },
+      },
     },
     async (req, reply) => {
       const user = currentUser(req, reply);
@@ -115,7 +118,10 @@ const issueUpdateRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/issues/:id/comments',
     {
       schema: { params: idParam, body: commentBody },
-      config: { audit: { action: 'issue.comment.create', resource: 'issue' } },
+      config: {
+        permissions: ['issue:view'],
+        audit: { action: 'issue.comment.create', resource: 'issue' },
+      },
     },
     async (req, reply) => {
       const user = currentUser(req, reply);

@@ -36,7 +36,10 @@ const clanDirectoryRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/clans',
-    { schema: { querystring: clanListQuery }, config: { audit: false } },
+    {
+      schema: { querystring: clanListQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.panelAccess) {
@@ -110,7 +113,7 @@ const clanDirectoryRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     {
       schema: { params: clanIdParams, querystring: clanDetailQuery },
-      config: { audit: false },
+      config: { permissions: ['player:view'], audit: false },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -164,7 +167,7 @@ const clanDirectoryRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/clans/:id/online',
-    { schema: { params: clanIdParams }, config: { audit: false } },
+    { schema: { params: clanIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.panelAccess) {

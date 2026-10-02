@@ -149,7 +149,10 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/media/:id/links',
     {
       schema: { params: mediaIdParams, body: mediaLinkAttachInput },
-      config: { audit: { action: 'media.link.attach', resource: 'media_link' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'media.link.attach', resource: 'media_link' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -273,7 +276,7 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/media',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -323,7 +326,10 @@ const mediaLinksRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/moderation-actions/:id/media',
-    { schema: { params: moderationActionIdParams }, config: { audit: false } },
+    {
+      schema: { params: moderationActionIdParams },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

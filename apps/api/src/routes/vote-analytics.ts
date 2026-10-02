@@ -81,7 +81,10 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/analytics/votes',
-    { config: { audit: false }, schema: { querystring: dashboardQuery } },
+    {
+      config: { permissions: ['events:view'], audit: false },
+      schema: { querystring: dashboardQuery },
+    },
     async (req, reply) => {
       const guard = panelGuard(req, reply);
       if (guard) return guard;
@@ -272,7 +275,7 @@ const voteAnalyticsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/vote-stats',
-    { config: { audit: false }, schema: { params: playerParams } },
+    { config: { permissions: ['player:view'], audit: false }, schema: { params: playerParams } },
     async (req, reply) => {
       const guard = panelGuard(req, reply);
       if (guard) return guard;

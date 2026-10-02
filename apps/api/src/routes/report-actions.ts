@@ -407,7 +407,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
   /** Lists the moderation actions linked to a report, for the report card. */
   fast.get(
     '/api/v1/reports/:id/actions',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

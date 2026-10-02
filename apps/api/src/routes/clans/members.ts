@@ -29,7 +29,10 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members',
     {
       schema: { params: clanIdParams, body: addMemberBody },
-      config: { audit: { action: 'clan.member.add', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.add', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -130,7 +133,10 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId',
     {
       schema: { params: memberParams, body: setMemberRoleBody },
-      config: { audit: { action: 'clan.member.role', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.role', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -181,7 +187,10 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId',
     {
       schema: { params: memberParams },
-      config: { audit: { action: 'clan.member.remove', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.remove', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -240,7 +249,10 @@ const clanMembersRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/transfer-leadership',
     {
       schema: { params: clanIdParams, body: transferBody },
-      config: { audit: { action: 'clan.leadership.transfer', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.leadership.transfer', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);

@@ -189,7 +189,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
   }
   fast.get(
     '/api/v1/servers/:serverId/map-vote',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -345,7 +345,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/preview',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -415,7 +415,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:serverId/map-vote/versions',
     {
       schema: { params: serverIdParams, querystring: versionsQuery },
-      config: { audit: false },
+      config: { permissions: ['server:view'], audit: false },
     },
     async (req, reply) => {
       if (!req.user) {
@@ -465,7 +465,7 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/versions/:versionId',
-    { schema: { params: versionParams }, config: { audit: false } },
+    { schema: { params: versionParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);
@@ -573,7 +573,10 @@ const serverMapVoteRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:serverId/map-vote/picks',
-    { schema: { params: serverIdParams, querystring: picksQuery }, config: { audit: false } },
+    {
+      schema: { params: serverIdParams, querystring: picksQuery },
+      config: { permissions: ['server:view'], audit: false },
+    },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

@@ -3,6 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -46,6 +47,9 @@ const serverSeedingRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/seeding',
     { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const { id } = req.params;
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, id), isNull(servers.deletedAt)),

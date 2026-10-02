@@ -43,7 +43,10 @@ const clanRosterRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/clans/:id/members',
-    { schema: { params: clanIdParams, querystring: rosterQuery }, config: { audit: false } },
+    {
+      schema: { params: clanIdParams, querystring: rosterQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.panelAccess) {
@@ -152,7 +155,10 @@ const clanRosterRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/clans/:id/roster/export',
-    { schema: { params: clanIdParams, querystring: rosterExportQuery }, config: { audit: false } },
+    {
+      schema: { params: clanIdParams, querystring: rosterExportQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.panelAccess) {

@@ -74,15 +74,16 @@ Streaming methods (deliver `BridgeStreamFrame` before the final response): `cont
 | `triggers` | `trigger:edit` | | ✓ |
 | `scheduler` | `scheduler:view` | | ✓ |
 | `scheduler` | `scheduler:edit` | | ✓ |
+| `issues` | `issue:view` | | |
 
 `dangerous: true` — requires explicit confirmation in the UI; visible to roles-editor as high-risk.  
 `unimplemented: true` — key exists in the registry and DB but the feature has no active code path.
 
-### `PermissionCategory` values (16)
+### `PermissionCategory` values (18)
 
 ```
 servers  configs  players  moderation  admin_groups  whitelist
-host  audit  events  users  roles  backup  api_tokens  discord  triggers  scheduler
+host  audit  events  users  roles  backup  api_tokens  discord  triggers  scheduler  balancer  issues
 ```
 
 ## Role color palette

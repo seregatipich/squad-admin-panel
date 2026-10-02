@@ -30,7 +30,10 @@ const clanPriorityRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/members/:playerId/priority',
     {
       schema: { params: memberParams, body: setPriorityBody },
-      config: { audit: { action: 'clan.member.priority', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.member.priority', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);

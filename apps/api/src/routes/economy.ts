@@ -105,7 +105,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-balance',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    { schema: { params: playerIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -126,7 +126,10 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-transactions',
-    { schema: { params: playerIdParams, querystring: historyQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: historyQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -157,7 +160,10 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/bonus-transactions/count',
-    { schema: { params: playerIdParams, querystring: countQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: countQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -254,27 +260,31 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/bonus-shop/tiers', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select()
-      .from(vipTiers)
-      .where(and(eq(vipTiers.isActive, true), isNotNull(vipTiers.priceBonuses)))
-      .orderBy(asc(vipTiers.sortOrder), asc(vipTiers.name));
-    return {
-      tiers: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        role_id: row.roleId,
-        description: row.description,
-        default_days: row.defaultDays,
-        sort_order: row.sortOrder,
-        is_active: row.isActive,
-        price_bonuses: row.priceBonuses,
-      })),
-    };
-  });
+  fast.get(
+    '/api/v1/bonus-shop/tiers',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const rows = await app.db
+        .select()
+        .from(vipTiers)
+        .where(and(eq(vipTiers.isActive, true), isNotNull(vipTiers.priceBonuses)))
+        .orderBy(asc(vipTiers.sortOrder), asc(vipTiers.name));
+      return {
+        tiers: rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          role_id: row.roleId,
+          description: row.description,
+          default_days: row.defaultDays,
+          sort_order: row.sortOrder,
+          is_active: row.isActive,
+          price_bonuses: row.priceBonuses,
+        })),
+      };
+    },
+  );
 
   fast.post(
     '/api/v1/players/:playerId/bonus-purchases',

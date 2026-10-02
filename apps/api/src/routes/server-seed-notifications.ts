@@ -12,6 +12,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
 
 export const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
@@ -146,7 +147,10 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/seed-subscriptions',
     { config: { permissions: ['server:view'], audit: false } },
-    async (req) => {
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const rows = await app.db
         .select({
           server_id: seedSubscriptions.serverId,
@@ -172,6 +176,9 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const server = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });
@@ -207,6 +214,9 @@ const serverSeedNotificationRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/seed-call',
     { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const context = await loadServerContext(req.params.id);
       if (!context) {
         reply.code(404);

@@ -12,6 +12,7 @@ import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { panelGuard } from '../lib/panel-guard.js';
 import { rescheduledCursor } from '../lib/schedule-cursor.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -213,6 +214,9 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/scheduled-tasks',
     { config: { permissions: ['server:view'], audit: false }, schema: { params: serverIdParams } },
     async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);
@@ -252,6 +256,9 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams, querystring: historyQuery },
     },
     async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
       const server = await loadServer(req.params.id);
       if (!server) {
         reply.code(404);

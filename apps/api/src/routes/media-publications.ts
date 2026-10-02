@@ -159,7 +159,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/media/:id/publications',
-    { schema: { params: mediaIdParams }, config: { audit: false } },
+    { schema: { params: mediaIdParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -244,7 +244,7 @@ const mediaPublicationsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/integrations/media-publishing',
-    { config: { audit: false } },
+    { config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

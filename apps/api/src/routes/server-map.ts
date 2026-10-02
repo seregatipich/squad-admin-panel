@@ -86,7 +86,7 @@ const serverMapRoutes: FastifyPluginAsync = async (app) => {
   }
   fast.get(
     '/api/v1/servers/:serverId/map',
-    { schema: { params: serverIdParams }, config: { audit: false } },
+    { schema: { params: serverIdParams }, config: { permissions: ['server:view'], audit: false } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

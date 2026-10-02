@@ -235,7 +235,10 @@ const serverRotationCalendarRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/rotation-schedule',
-    { config: { audit: false }, schema: { params: serverIdParams, querystring: calendarQuery } },
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: serverIdParams, querystring: calendarQuery },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

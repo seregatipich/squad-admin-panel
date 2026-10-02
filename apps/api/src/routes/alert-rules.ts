@@ -143,14 +143,18 @@ function denyRead(req: FastifyRequest, reply: FastifyReply): boolean {
 const alertRulesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get('/api/v1/alert-rules', { config: { audit: false } }, async (req, reply) => {
-    if (denyRead(req, reply)) return;
-    const rows = (await app.db
-      .select()
-      .from(alertRules)
-      .orderBy(desc(alertRules.createdAt))) as unknown as RuleRow[];
-    return rows.map(serializeRule);
-  });
+  fast.get(
+    '/api/v1/alert-rules',
+    { config: { permissions: ['trigger:view'], audit: false } },
+    async (req, reply) => {
+      if (denyRead(req, reply)) return;
+      const rows = (await app.db
+        .select()
+        .from(alertRules)
+        .orderBy(desc(alertRules.createdAt))) as unknown as RuleRow[];
+      return rows.map(serializeRule);
+    },
+  );
 
   fast.post(
     '/api/v1/alert-rules',
@@ -262,7 +266,10 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/alerts',
-    { schema: { querystring: historyQuery }, config: { audit: false } },
+    {
+      schema: { querystring: historyQuery },
+      config: { permissions: ['trigger:view'], audit: false },
+    },
     async (req, reply) => {
       if (denyRead(req, reply)) return;
       // `role_expiring` reminders are admin-audience alerts: hidden unless the

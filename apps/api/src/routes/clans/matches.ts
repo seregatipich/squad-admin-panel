@@ -49,7 +49,10 @@ const clanMatchesRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/clans/:id/matches',
-    { schema: { params: clanIdParams, querystring: matchesQuery }, config: { audit: false } },
+    {
+      schema: { params: clanIdParams, querystring: matchesQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const user = requestUser(req);
       if (!user.permissions.panelAccess) {

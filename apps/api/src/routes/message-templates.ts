@@ -69,17 +69,21 @@ function serialize(row: TemplateRow) {
 const messageTemplatesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get('/api/v1/message-templates', { config: { audit: false } }, async (req, reply) => {
-    if (!req.user) {
-      reply.code(401);
-      return { error: 'unauthenticated' };
-    }
-    const rows = await app.db
-      .select()
-      .from(messageTemplates)
-      .orderBy(asc(messageTemplates.sortOrder), asc(messageTemplates.createdAt));
-    return rows.map(serialize);
-  });
+  fast.get(
+    '/api/v1/message-templates',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const rows = await app.db
+        .select()
+        .from(messageTemplates)
+        .orderBy(asc(messageTemplates.sortOrder), asc(messageTemplates.createdAt));
+      return rows.map(serialize);
+    },
+  );
 
   fast.post(
     '/api/v1/message-templates',

@@ -61,11 +61,15 @@ const settingsCoplayRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
-  fast.get('/api/v1/settings/coplay', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    return serialize(await loadSettings());
-  });
+  fast.get(
+    '/api/v1/settings/coplay',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      return serialize(await loadSettings());
+    },
+  );
 
   fast.put(
     '/api/v1/settings/coplay',

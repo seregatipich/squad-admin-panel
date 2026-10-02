@@ -21,21 +21,28 @@ const issueTicketRoutes: FastifyPluginAsync = async (app) => {
     linksForIssue,
   } = issueQueries(app);
 
-  fast.get('/api/v1/issues/labels', async (req, reply) => {
-    const user = currentUser(req, reply);
-    if (!user) return;
-    const rows = await app.db
-      .select({ id: issueLabels.id, name: issueLabels.name, color: issueLabels.color })
-      .from(issueLabels)
-      .orderBy(issueLabels.name);
-    return { items: rows };
-  });
+  fast.get(
+    '/api/v1/issues/labels',
+    { config: { permissions: ['issue:view'] } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
+      const rows = await app.db
+        .select({ id: issueLabels.id, name: issueLabels.name, color: issueLabels.color })
+        .from(issueLabels)
+        .orderBy(issueLabels.name);
+      return { items: rows };
+    },
+  );
 
   fast.post(
     '/api/v1/issues',
     {
       schema: { body: createBody },
-      config: { audit: { action: 'issue.create', resource: 'issue' } },
+      config: {
+        permissions: ['issue:view'],
+        audit: { action: 'issue.create', resource: 'issue' },
+      },
     },
     async (req, reply) => {
       const user = currentUser(req, reply);
@@ -111,82 +118,90 @@ const issueTicketRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/issues', { schema: { querystring: listQuery } }, async (req, reply) => {
-    const user = currentUser(req, reply);
-    if (!user) return;
+  fast.get(
+    '/api/v1/issues',
+    { schema: { querystring: listQuery }, config: { permissions: ['issue:view'] } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
 
-    const { state, label, assignee, q, page, per_page } = req.query;
-    const clauses: SQL[] = [];
-    if (state) clauses.push(eq(issues.state, state));
-    if (assignee) clauses.push(eq(issues.assigneePlayerId, assignee));
-    if (label) {
-      clauses.push(
-        sql`EXISTS (
+      const { state, label, assignee, q, page, per_page } = req.query;
+      const clauses: SQL[] = [];
+      if (state) clauses.push(eq(issues.state, state));
+      if (assignee) clauses.push(eq(issues.assigneePlayerId, assignee));
+      if (label) {
+        clauses.push(
+          sql`EXISTS (
           SELECT 1 FROM issue_label_links ill
           JOIN issue_labels il ON il.id = ill.label_id
           WHERE ill.issue_id = ${issues.id} AND il.name = ${label}
         )`,
+        );
+      }
+      if (q) {
+        clauses.push(sql`${issues.searchVector} @@ websearch_to_tsquery('simple', ${q})`);
+      }
+      const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
+
+      const countRows = await app.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(issues)
+        .where(whereClause);
+      const total = countRows[0]?.total ?? 0;
+
+      const rows = await app.db
+        .select()
+        .from(issues)
+        .where(whereClause)
+        .orderBy(desc(issues.number))
+        .limit(per_page)
+        .offset((page - 1) * per_page);
+
+      const labelMap = await labelsForIssues(rows.map((row) => row.id));
+      const names = await resolvePlayerNames(
+        rows.flatMap((row) => [row.authorPlayerId, row.assigneePlayerId]),
       );
-    }
-    if (q) {
-      clauses.push(sql`${issues.searchVector} @@ websearch_to_tsquery('simple', ${q})`);
-    }
-    const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
+      return {
+        items: rows.map((row) => serializeIssue(row, labelMap.get(row.id) ?? [], names)),
+        total,
+        page,
+        per_page,
+      };
+    },
+  );
 
-    const countRows = await app.db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(issues)
-      .where(whereClause);
-    const total = countRows[0]?.total ?? 0;
+  fast.get(
+    '/api/v1/issues/:id',
+    { schema: { params: idParam }, config: { permissions: ['issue:view'] } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
 
-    const rows = await app.db
-      .select()
-      .from(issues)
-      .where(whereClause)
-      .orderBy(desc(issues.number))
-      .limit(per_page)
-      .offset((page - 1) * per_page);
+      const issue = await getIssueRow(req.params.id);
+      if (!issue) {
+        reply.code(404);
+        return { error: 'issue_not_found' };
+      }
+      const labels = (await labelsForIssues([issue.id])).get(issue.id) ?? [];
+      const comments = await app.db
+        .select()
+        .from(issueComments)
+        .where(eq(issueComments.issueId, issue.id))
+        .orderBy(issueComments.createdAt);
 
-    const labelMap = await labelsForIssues(rows.map((row) => row.id));
-    const names = await resolvePlayerNames(
-      rows.flatMap((row) => [row.authorPlayerId, row.assigneePlayerId]),
-    );
-    return {
-      items: rows.map((row) => serializeIssue(row, labelMap.get(row.id) ?? [], names)),
-      total,
-      page,
-      per_page,
-    };
-  });
+      const names = await resolvePlayerNames([
+        issue.authorPlayerId,
+        issue.assigneePlayerId,
+        ...comments.map((comment) => comment.authorPlayerId),
+      ]);
 
-  fast.get('/api/v1/issues/:id', { schema: { params: idParam } }, async (req, reply) => {
-    const user = currentUser(req, reply);
-    if (!user) return;
-
-    const issue = await getIssueRow(req.params.id);
-    if (!issue) {
-      reply.code(404);
-      return { error: 'issue_not_found' };
-    }
-    const labels = (await labelsForIssues([issue.id])).get(issue.id) ?? [];
-    const comments = await app.db
-      .select()
-      .from(issueComments)
-      .where(eq(issueComments.issueId, issue.id))
-      .orderBy(issueComments.createdAt);
-
-    const names = await resolvePlayerNames([
-      issue.authorPlayerId,
-      issue.assigneePlayerId,
-      ...comments.map((comment) => comment.authorPlayerId),
-    ]);
-
-    return {
-      ...serializeIssue(issue, labels, names),
-      comments: comments.map((comment) => serializeComment(comment, issue.id, names)),
-      links: await linksForIssue(issue.id),
-    };
-  });
+      return {
+        ...serializeIssue(issue, labels, names),
+        comments: comments.map((comment) => serializeComment(comment, issue.id, names)),
+        links: await linksForIssue(issue.id),
+      };
+    },
+  );
 };
 
 export default issueTicketRoutes;

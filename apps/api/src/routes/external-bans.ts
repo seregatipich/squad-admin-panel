@@ -101,7 +101,10 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/external-bans',
-    { schema: { params: playerIdParams }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams },
+      config: { permissions: ['ban_source:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -350,7 +353,10 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/external-bans',
-    { schema: { querystring: registryQuery }, config: { audit: false } },
+    {
+      schema: { querystring: registryQuery },
+      config: { permissions: ['ban_source:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

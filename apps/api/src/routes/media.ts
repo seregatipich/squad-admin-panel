@@ -104,7 +104,12 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/media',
-    { config: { audit: { action: 'media.upload', resource: 'media_file' } } },
+    {
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'media.upload', resource: 'media_file' },
+      },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -198,7 +203,10 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/media/link',
     {
       schema: { body: mediaLinkInput },
-      config: { audit: { action: 'media.link.create', resource: 'media_file' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'media.link.create', resource: 'media_file' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
@@ -239,7 +247,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/media/:id',
-    { schema: { params: idParams }, config: { audit: false } },
+    { schema: { params: idParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -254,7 +262,7 @@ const mediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/media/:id/stream',
-    { schema: { params: idParams }, config: { audit: false } },
+    { schema: { params: idParams }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

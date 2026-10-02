@@ -209,7 +209,7 @@ const notesFeedRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/notes',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -251,36 +251,43 @@ const notesFeedRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/notes/authors', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
+  fast.get(
+    '/api/v1/notes/authors',
+    { config: { permissions: ['player:view'], audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
 
-    const rows = await app.db
-      .selectDistinct({
-        id: authorPlayer.id,
-        name: authorPlayer.canonicalName,
-        roleColor: roles.color,
-        roleName: roles.name,
-      })
-      .from(playerNotes)
-      .innerJoin(authorPlayer, eq(authorPlayer.id, playerNotes.authorId))
-      .leftJoin(roles, eq(roles.id, authorPlayer.roleId))
-      .where(isNotNull(authorPlayer.roleId))
-      .orderBy(authorPlayer.canonicalName);
+      const rows = await app.db
+        .selectDistinct({
+          id: authorPlayer.id,
+          name: authorPlayer.canonicalName,
+          roleColor: roles.color,
+          roleName: roles.name,
+        })
+        .from(playerNotes)
+        .innerJoin(authorPlayer, eq(authorPlayer.id, playerNotes.authorId))
+        .leftJoin(roles, eq(roles.id, authorPlayer.roleId))
+        .where(isNotNull(authorPlayer.roleId))
+        .orderBy(authorPlayer.canonicalName);
 
-    return {
-      items: rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        role_color: r.roleColor,
-        role_name: r.roleName,
-      })),
-    };
-  });
+      return {
+        items: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          role_color: r.roleColor,
+          role_name: r.roleName,
+        })),
+      };
+    },
+  );
 
   fast.get(
     '/api/v1/notes/export',
-    { schema: { querystring: exportQuery }, config: { audit: false } },
+    {
+      schema: { querystring: exportQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) {

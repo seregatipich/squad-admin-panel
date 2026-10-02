@@ -44,7 +44,10 @@ const layersRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/layers',
-    { schema: { querystring: layerListQuery }, config: { audit: false } },
+    {
+      schema: { querystring: layerListQuery },
+      config: { permissions: ['server:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = readGuard(req, reply);
       if (denied) return denied;

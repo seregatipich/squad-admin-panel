@@ -51,7 +51,7 @@ const serverRotationRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/servers/:id/rotation',
-    { config: { audit: false }, schema: { params: idParams } },
+    { config: { permissions: ['server:view'], audit: false }, schema: { params: idParams } },
     async (req, reply) => {
       if (!req.user) {
         reply.code(401);

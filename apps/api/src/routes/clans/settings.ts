@@ -80,7 +80,7 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans',
     {
       schema: { body: createBody },
-      config: { audit: { action: 'clan.create', resource: 'clan' } },
+      config: { permissions: ['player:view'], audit: { action: 'clan.create', resource: 'clan' } },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -133,7 +133,7 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     {
       schema: { params: clanIdParams, body: updateBody },
-      config: { audit: { action: 'clan.update', resource: 'clan' } },
+      config: { permissions: ['player:view'], audit: { action: 'clan.update', resource: 'clan' } },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -209,7 +209,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/settings',
     {
       schema: { params: clanIdParams, body: settingsBody },
-      config: { audit: { action: 'clan.settings.update', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.settings.update', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -253,7 +256,10 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id/expire',
     {
       schema: { params: clanIdParams, body: expireBody },
-      config: { audit: { action: 'clan.expire.update', resource: 'clan' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'clan.expire.update', resource: 'clan' },
+      },
     },
     async (req, reply) => {
       const user = requestUser(req);
@@ -308,7 +314,7 @@ const clanSettingsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/clans/:id',
     {
       schema: { params: clanIdParams },
-      config: { audit: { action: 'clan.disband', resource: 'clan' } },
+      config: { permissions: ['player:view'], audit: { action: 'clan.disband', resource: 'clan' } },
     },
     async (req, reply) => {
       const user = requestUser(req);

@@ -410,7 +410,10 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/players/:playerId/moderation-actions',
-    { schema: { params: playerIdParams, querystring: listQuery }, config: { audit: false } },
+    {
+      schema: { params: playerIdParams, querystring: listQuery },
+      config: { permissions: ['player:view'], audit: false },
+    },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;

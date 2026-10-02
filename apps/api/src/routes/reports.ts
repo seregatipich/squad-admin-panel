@@ -252,7 +252,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/reports',
-    { schema: { querystring: listQuery }, config: { audit: false } },
+    { schema: { querystring: listQuery }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -286,7 +286,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/reports/:id',
-    { schema: { params: idParam }, config: { audit: false } },
+    { schema: { params: idParam }, config: { permissions: ['player:view'], audit: false } },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
@@ -305,7 +305,10 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/reports',
     {
       schema: { body: createBody },
-      config: { audit: { action: 'report.create', resource: 'report' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'report.create', resource: 'report' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);

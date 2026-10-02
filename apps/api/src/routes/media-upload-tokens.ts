@@ -25,7 +25,10 @@ const mediaUploadTokensRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/media/upload-tokens',
     {
       schema: { body: mintUploadTokenInput },
-      config: { audit: { action: 'media.upload_token.mint', resource: 'media_upload_token' } },
+      config: {
+        permissions: ['player:view'],
+        audit: { action: 'media.upload_token.mint', resource: 'media_upload_token' },
+      },
     },
     async (req, reply) => {
       const denied = panelGuard(req, reply);
