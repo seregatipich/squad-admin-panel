@@ -114,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5]
     services:
       # Dynamic host ports (Docker assigns a free one); the resolved ports are
       # read back below via the job.services context. tmpfs keeps an interrupted
@@ -192,13 +192,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run the API test shard with coverage
-        run: bash scripts/ci-test-shard.sh api ${{ matrix.shard }} 6
+        run: bash scripts/ci-test-shard.sh api ${{ matrix.shard }} 5
       # The gate job merges all four blobs and enforces the coverage thresholds.
       - name: Upload the shard's blob report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vitest-blob-api-${{ matrix.shard }}
-          path: apps/api/.vitest-reports/blob-${{ matrix.shard }}-6.json
+          path: apps/api/.vitest-reports/blob-${{ matrix.shard }}-5.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -211,7 +211,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
@@ -229,13 +229,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run the web test shard with coverage
-        run: bash scripts/ci-test-shard.sh web ${{ matrix.shard }} 3
+        run: bash scripts/ci-test-shard.sh web ${{ matrix.shard }} 2
       # The gate job merges both blobs and enforces the coverage thresholds.
       - name: Upload the shard's blob report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vitest-blob-web-${{ matrix.shard }}
-          path: apps/web/.vitest-reports/blob-${{ matrix.shard }}-3.json
+          path: apps/web/.vitest-reports/blob-${{ matrix.shard }}-2.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -405,12 +405,15 @@ jobs:
 
   # Stryker takes minutes and only mutates packages/shared-config, so it runs
   # when that package changed in the pushed range — and always for a manual
-  # dispatch, a new branch, or a range the checkout cannot resolve.
-  changes:
+  # dispatch, a new branch, or a range the checkout cannot resolve. The decision
+  # is made inside this job rather than in a job of its own: ci shares the
+  # 20 concurrent jobs a GitHub plan runs with the deploy that starts beside it
+  # (four build jobs), so every job that exists only for a few seconds takes a
+  # slot from a test shard. With no change every later step is skipped and the
+  # job succeeds.
+  mutation:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      mutation: ${{ steps.shared-config.outputs.run }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -427,38 +430,36 @@ jobs:
           else
             echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
-
-  mutation:
-    needs: changes
-    if: needs.changes.outputs.mutation == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
       # bootstraps through Node rather than a platform-specific standalone exe.
       # The second setup-node call stays because `cache: pnpm` needs pnpm already
       # available to resolve its cache key (#269).
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.shared-config.outputs.run == 'true'
         with:
           node-version: 22
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        if: steps.shared-config.outputs.run == 'true'
         with: { version: 9.15.0 }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.shared-config.outputs.run == 'true'
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.shared-config.outputs.run == 'true'
       # Stryker's incremental report maps every mutant to the hashes of the source and the tests it
       # ran against, so a restored report only skips mutants whose code and tests are unchanged;
       # a changed file is mutated in full. A cache miss runs the whole suite as before.
       - name: Restore the Stryker incremental report
+        if: steps.shared-config.outputs.run == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/shared-config/reports/stryker-incremental.json
           key: stryker-incremental-${{ github.sha }}
           restore-keys: stryker-incremental-
       - name: Run shared-config mutation tests (Stryker)
+        if: steps.shared-config.outputs.run == 'true'
         # The config keeps 2 workers so a run on a shared development machine stays bounded (pinned
         # by apps/api/test/vitest-config.regression.test.ts); a hosted runner has 4 vCPUs.
         run: pnpm turbo run test:mutation --filter=@squad/shared-config -- --concurrency 4
@@ -637,7 +638,7 @@ jobs:
   # when shared-config did not change.
   gate:
     runs-on: ubuntu-24.04
-    needs: [branch-guard, lint, test-api, test-web, test-packages, scripts, changes, mutation, go, images, backup, coverage]
+    needs: [branch-guard, lint, test-api, test-web, test-packages, scripts, mutation, go, images, backup, coverage]
     if: always()
     timeout-minutes: 5
     steps:
