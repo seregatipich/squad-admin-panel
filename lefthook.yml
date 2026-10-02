@@ -44,7 +44,7 @@ pre-push:
       priority: 1
       run: bash scripts/git-guard.sh check-push origin origin
     checklist:
-      # The light local pre-check a dev push gets before it deploys the stand
+      # The light local pre-check a dev push gets before it deploys the
       # stand: biome, gitleaks, typecheck and tests of what changed since
       # origin/dev (auto-provisioning a test DB when possible; DB-backed suites
       # are skipped with a warning without one). `ci` on master is the

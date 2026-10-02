@@ -6,9 +6,11 @@
 # therefore narrow — about a minute with a warm turbo cache. Any failed item
 # blocks the push; bypass in a genuine emergency with `git push --no-verify`.
 #
-# Wired in via lefthook (`pre-push` → command `checklist`), which runs it on
-# every push, the dev→master promotion included. With nothing changed since
-# origin/dev it only fetches, lints and scans.
+# Wired in via lefthook (`pre-push` → command `checklist`), which starts it on
+# every push; the script itself returns at once for a push that does not update
+# `dev` (see "Only a push that updates `dev` is gated" below), so the dev→master
+# promotion is not gated. With nothing changed since origin/dev it only fetches,
+# lints and scans.
 #
 # Default run, in order:
 #   1. git fetch origin dev; offline, the local origin/dev ref is used as is.
