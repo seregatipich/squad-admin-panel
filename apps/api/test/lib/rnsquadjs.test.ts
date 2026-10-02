@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FsOps, RnsquadjsContext, SidecarLaunchContext } from '../../src/lib/rnsquadjs.js';
 import {
   buildSidecarEnv,
+  RNSQUADJS_CONFIG_KEY,
   relaunchSidecar,
   renderRnsquadjsConfig,
   sidecarConfigPath,
@@ -113,9 +114,8 @@ describe('renderRnsquadjsConfig', () => {
     const app = makeApp({ creds: { serverId: SERVER_ID, rconPort: 21114 } });
     const config = await renderRnsquadjsConfig(app, SERVER_ID);
 
-    const entry = config[SERVER_ID];
+    const entry = config[RNSQUADJS_CONFIG_KEY];
     expect(entry).toBeDefined();
-    expect(entry?.id).toBe(SERVER_ID);
     expect(entry?.host).toBe('127.0.0.1');
     expect(entry?.port).toBe(21114);
     expect(entry?.password).toBe('s3cret');
@@ -126,10 +126,17 @@ describe('renderRnsquadjsConfig', () => {
     expect(entry?.plugins).toEqual([{ name: 'panelBridge', enabled: true, options: {} }]);
   });
 
+  it('keys the only server numerically because upstream rejects other keys', async () => {
+    const app = makeApp({ creds: { serverId: SERVER_ID, rconPort: 21114 } });
+    const config = await renderRnsquadjsConfig(app, SERVER_ID);
+    expect(Object.keys(config)).toEqual(['1']);
+    expect(Number.isNaN(Number.parseInt(Object.keys(config)[0] ?? '', 10))).toBe(false);
+  });
+
   it('plugins is an array (absent-from-array = disabled upstream contract)', async () => {
     const app = makeApp({ creds: { serverId: SERVER_ID, rconPort: 21114 } });
     const config = await renderRnsquadjsConfig(app, SERVER_ID);
-    expect(Array.isArray(config[SERVER_ID]?.plugins)).toBe(true);
+    expect(Array.isArray(config[RNSQUADJS_CONFIG_KEY]?.plugins)).toBe(true);
   });
 
   it('throws when the credentials row is missing', async () => {
@@ -144,7 +151,7 @@ describe('renderRnsquadjsConfig', () => {
       rconCfgContent: multiLine,
     });
     const config = await renderRnsquadjsConfig(app, SERVER_ID);
-    expect(config[SERVER_ID]?.password).toBe('my-p4ss');
+    expect(config[RNSQUADJS_CONFIG_KEY]?.password).toBe('my-p4ss');
   });
 });
 
@@ -217,7 +224,7 @@ describe('writeSidecarConfig', () => {
     await writeSidecarConfig(app, SERVER_ID, ops);
 
     const parsed = JSON.parse(writtenJson) as Record<string, unknown>;
-    const entry = parsed[SERVER_ID] as Record<string, unknown> | undefined;
+    const entry = parsed[RNSQUADJS_CONFIG_KEY] as Record<string, unknown> | undefined;
     expect(entry).toBeDefined();
     expect(entry?.port).toBe(21114);
     expect(entry?.password).toBe('s3cret');

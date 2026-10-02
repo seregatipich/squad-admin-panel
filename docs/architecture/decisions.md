@@ -454,6 +454,6 @@ SquadJS2's base image lived in a private GHCR package of the `breaking-squad` or
 
 ### Consequences
 
-- Upgrading RNSquadJS past the pinned commit is separate work: upstream `master` registers plugins through `src/plugins/registry.ts` and requires numeric config keys, so `docker/rnsquadjs/upstream.patch` and the UUID-keyed config rendered by `apps/api/src/lib/rnsquadjs.ts` must change together with a shadow soak.
+- Upgrading RNSquadJS moves three things together: the pinned SHA, `docker/rnsquadjs/upstream.patch` (the plugin is registered in upstream's `legacyManifest` in `src/plugins/registry.ts`) and the config rendered by `apps/api/src/lib/rnsquadjs.ts`. Upstream parses the keys of `config.json` with `parseInt` and rejects a non-numeric one, so the sidecar's single server is keyed `"1"` and the panel's server id (a UUID) reaches the plugin only through `SERVER_ID`. Since 2026-10-02 the pin is `aa380647` (Squad 10.6 RCON roster/map parsing). Sidecars already running keep the old image and config until they are recreated; recreate them, then watch the shadow diff before the next cutover.
 - GHCR is not used anywhere; images are built from this repository.
 

@@ -1,18 +1,20 @@
---- a/src/plugins/index.ts
-+++ b/src/plugins/index.ts
-@@ -22,6 +22,7 @@
- import { voteMap } from './votemap';
- import { voteMapMods } from './votemapmods';
- import { warnPlayers } from './warn-players';
+diff --git a/src/plugins/registry.ts b/src/plugins/registry.ts
+index 227cd25..a6e34ff 100644
+--- a/src/plugins/registry.ts
++++ b/src/plugins/registry.ts
+@@ -14,6 +14,7 @@ import fobExplosionDamage from './fobexplosiondamage';
+ import knifeBroadcast from './knife-broadcast';
+ import levelSync from './koth-lvl-sync';
+ import { officialKothDb } from './officialKothDb';
 +import { panelBridge } from './panelBridge/panelBridge';
- const plugins = [
-   skipmap,
-   voteMap,
-@@ -46,6 +47,7 @@
-   levelSync,
-   officialKothDb,
-   adminsReloadConfig,
-+  panelBridge,
+ import randomizerMaps from './randomizer-maps';
+ import rnsStats from './rns-stats';
+ import { rnsLogs } from './rnsLogs';
+@@ -35,6 +36,7 @@ export const legacyManifest: LegacyManifestEntry[] = [
+   { name: 'rnsTelemetry', plugin: rnsTelemetry },
+   { name: 'rnsLogs', plugin: rnsLogs },
+   { name: 'officialKothDb', plugin: officialKothDb },
++  { name: 'panelBridge', plugin: panelBridge },
  ];
  
- export const initPlugins = async (id: number) => {
+ export const nativeManifest: SquadPlugin[] = [
