@@ -459,7 +459,9 @@ jobs:
           key: stryker-incremental-${{ github.sha }}
           restore-keys: stryker-incremental-
       - name: Run shared-config mutation tests (Stryker)
-        run: pnpm turbo run test:mutation --filter=@squad/shared-config
+        # The config keeps 2 workers so a run on a shared development machine stays bounded (pinned
+        # by apps/api/test/vitest-config.regression.test.ts); a hosted runner has 4 vCPUs.
+        run: pnpm turbo run test:mutation --filter=@squad/shared-config -- --concurrency 4
 
   go:
     runs-on: ubuntu-24.04

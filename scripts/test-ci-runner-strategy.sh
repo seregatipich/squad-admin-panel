@@ -316,8 +316,10 @@ stryker_config="$repo_root/packages/shared-config/stryker.config.json"
   fail 'Stryker incremental mode is off, so the mutation cache would never be used'
 [ "$(jq -r '.incrementalFile' "$stryker_config")" = reports/stryker-incremental.json ] ||
   fail 'Stryker writes its incremental report somewhere the mutation job does not cache'
-[ "$(jq -r '.concurrency' "$stryker_config")" -ge 4 ] ||
-  fail 'Stryker runs with fewer workers than a hosted runner has vCPUs'
+has_text "$mutation" 'test:mutation --filter=@squad/shared-config -- --concurrency 4' ||
+  fail 'the mutation job does not run Stryker with all four vCPUs of a hosted runner'
+[ "$(jq -r '.concurrency' "$stryker_config")" = 2 ] ||
+  fail 'the Stryker config no longer bounds workers on a shared development machine'
 
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
