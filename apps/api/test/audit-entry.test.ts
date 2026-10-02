@@ -1,12 +1,30 @@
 import type { DatabaseClient } from '@squad/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { writeAuditEntry } from '../src/lib/audit.js';
 import {
+  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
 } from './integration/harness.js';
+
+// Postpones the onResponse audit write on demand, so the happy path exercises
+// the late-write ordering deterministically instead of only under host load.
+const auditWrite = vi.hoisted(() => ({ delayMs: 0 }));
+
+vi.mock('../src/lib/audit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/audit.js')>();
+  return {
+    ...actual,
+    writeAuditEntry: async (...args: Parameters<typeof actual.writeAuditEntry>) => {
+      if (auditWrite.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, auditWrite.delayMs));
+      }
+      return actual.writeAuditEntry(...args);
+    },
+  };
+});
 
 interface CapturedInsert {
   table: unknown;
@@ -142,14 +160,19 @@ describe('GET /api/v1/audit — HTTP integration', () => {
     await h?.cleanup();
   });
 
+  afterEach(() => {
+    auditWrite.delayMs = 0;
+  });
+
   it('returns 401 without authentication', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/audit' });
     expect(res.statusCode).toBe(401);
   });
 
   it('happy path: returns paginated audit items', async () => {
+    auditWrite.delayMs = 400;
     const cookie = await loginAsOwner(h);
-    await h.app.inject({
+    const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/servers',
       headers: { cookie },
@@ -165,6 +188,10 @@ describe('GET /api/v1/audit — HTTP integration', () => {
         multihome: '0.0.0.0',
       },
     });
+    expect(created.statusCode, created.body).toBe(201);
+    // The audit row is written by the onResponse hook, after inject() has
+    // resolved: wait for it instead of racing the read below (#25).
+    await assertAuditRow(h, { action: 'server.create' });
     const res = await h.app.inject({
       method: 'GET',
       url: '/api/v1/audit',

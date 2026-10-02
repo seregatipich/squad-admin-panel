@@ -304,19 +304,55 @@ export function testFileUsesWorkerDatabase(testPath: string | undefined): boolea
   }
 }
 
+const REDIS_DATABASE_FIRST = 8;
+const REDIS_DATABASE_COUNT = 8;
+
+/**
+ * Reads the base Redis logical DB of a run from the DB number in a Redis URL
+ * (`redis://…/<n>`). Only 8..15 belong to the API suite (0 is the local stack,
+ * 1..7 the worker suites), so a missing, malformed or out-of-range number
+ * falls back to 8 instead of pointing the harness at somebody else's DB.
+ *
+ * @param redisUrl - The `TEST_REDIS_URL` the run was started with.
+ * @returns The base logical DB, 8..15.
+ */
+export function redisBaseDatabase(redisUrl: string): number {
+  let pathname: string;
+  try {
+    pathname = new URL(redisUrl).pathname;
+  } catch {
+    return REDIS_DATABASE_FIRST;
+  }
+  const match = /^\/(\d+)$/.exec(pathname);
+  const database = match ? Number(match[1]) : Number.NaN;
+  const last = REDIS_DATABASE_FIRST + REDIS_DATABASE_COUNT - 1;
+  return database >= REDIS_DATABASE_FIRST && database <= last ? database : REDIS_DATABASE_FIRST;
+}
+
 /**
  * Maps a Vitest pool slot (`VITEST_POOL_ID`, 1..maxForks) to the Redis logical
- * DB a file flushes and uses. Pool ids are unique among files running at the
- * same time; `VITEST_WORKER_ID` is not — it grows with every file, so keying
- * on it let a file started eight files after a still-running one flush the
- * same logical DB underneath it. Distinct for up to eight forks, the bound the
- * vitest config regression test pins.
+ * DB a file flushes and uses: `baseDatabase` plus the slot, wrapped inside
+ * 8..15. Pool ids are unique among files running at the same time;
+ * `VITEST_WORKER_ID` is not — it grows with every file, so keying on it let a
+ * file started eight files after a still-running one flush the same logical DB
+ * underneath it. Distinct for up to eight forks, the bound the vitest config
+ * regression test pins.
+ *
+ * The base is the DB number of `TEST_REDIS_URL`: a checkout uses the
+ * `maxForks` databases starting there, so two checkouts whose bases are at
+ * least `maxForks` apart (modulo 8) can run the suite against one Redis
+ * without flushing each other.
  *
  * @param poolId - The `VITEST_POOL_ID` of the fork running the file.
+ * @param baseDatabase - The run's base logical DB (see {@link redisBaseDatabase}); 8 by default.
  * @returns A Redis logical DB index in 8..15.
  */
-export function workerRedisDatabase(poolId: number): number {
-  return 8 + (poolId % 8);
+export function workerRedisDatabase(
+  poolId: number,
+  baseDatabase: number = REDIS_DATABASE_FIRST,
+): number {
+  const offset = baseDatabase - REDIS_DATABASE_FIRST;
+  return REDIS_DATABASE_FIRST + ((offset + poolId) % REDIS_DATABASE_COUNT);
 }
 
 interface WorkerDatabase {
@@ -399,8 +435,12 @@ export async function releaseWorkerResources(): Promise<void> {
 
 async function doProvisionWorkerResources(): Promise<void> {
   const poolId = Number(process.env.VITEST_POOL_ID ?? '1');
-  const redisUrl = new URL(hostRedisUrl());
-  redisUrl.pathname = `/${workerRedisDatabase(poolId)}`;
+  // A forked worker is reused across files and each file overwrites
+  // TEST_REDIS_URL below, so the run's own URL is remembered the first time.
+  process.env.TEST_REDIS_BASE_URL ??= hostRedisUrl();
+  const baseUrl = process.env.TEST_REDIS_BASE_URL;
+  const redisUrl = new URL(baseUrl);
+  redisUrl.pathname = `/${workerRedisDatabase(poolId, redisBaseDatabase(baseUrl))}`;
   const redisTarget = redisUrl.toString();
   const flushClient = new Redis(redisTarget);
   try {

@@ -109,6 +109,21 @@ describe('install/delete routes reset the progress buffer (#72)', () => {
     return resp.json<{ id: string }>().id;
   }
 
+  /**
+   * Waits until the background install of a server has published its final
+   * `done` or `error` line; both are published after the install's last
+   * database write.
+   */
+  async function awaitInstallFinished(id: string): Promise<void> {
+    await vi.waitFor(
+      () => {
+        const steps = h.app.installProgress.snapshot(id).map((l) => l.step);
+        expect(steps.some((step) => step === 'done' || step === 'error')).toBe(true);
+      },
+      { timeout: 15_000, interval: 25 },
+    );
+  }
+
   it('a new install does not replay the previous attempt’s lines', async () => {
     const cookie = await loginAsOwner(h);
     const id = await createServer(cookie, 7900);
@@ -123,6 +138,11 @@ describe('install/delete routes reset the progress buffer (#72)', () => {
 
     const messages = h.app.installProgress.snapshot(id).map((l) => l.message);
     expect(messages).not.toContain('stale failure from the last attempt');
+
+    // The route answers 200 while the install keeps running in the background
+    // and writes to the database. Let it reach its final line before the test
+    // ends, or it is still querying when afterAll closes the client (#114).
+    await awaitInstallFinished(id);
   });
 
   it('deleting a server frees its buffered install lines', async () => {
