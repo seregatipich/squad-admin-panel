@@ -49,7 +49,7 @@ Workers publish a heartbeat to Redis at `worker:heartbeat:{name}` with a 30-seco
 
 **API**: `GET /api/v1/health/workers` — returns `{items: HeartbeatPayload[], total}`. No permission required (public health endpoint).
 
-Current workers: `log-ingest`, `rcon`, `audit-archiver`, `event-partition`, `metrics-sampler`.
+Workers that publish a heartbeat in the default compose stack (19, one `worker-<name>` service each): `log-ingest`, `config-sync`, `rcon`, `audit-archiver`, `event-partition`, `presence-daily`, `role-expirer`, `seed-reward`, `steam-refresh`, `media-publisher`, `leaderboard-aggregator`, `diag-flush`, `metrics-sampler`, `clan-guard`, `automation`, `scheduler`, `ban-sync`, `clan-priority-expirer`, `discord`. `apps/workers/` holds 21 worker directories; `backup` (an idle placeholder, backups run in the restic `backup` compose profile) and `stats` have no compose service. See [workers](../components/workers/README.md).
 
 ### Checking worker health
 
@@ -145,7 +145,7 @@ in the release after that.
 
 ## No external monitoring (design choice)
 
-The project deliberately excludes Prometheus, Grafana, Alertmanager, and external metric exporters. The two Redis streams and the heartbeat keys cover the operational needs of a self-hosted single-panel deployment. Alerting via the Discord worker is planned as a P2 feature.
+The project deliberately excludes Prometheus, Grafana, Alertmanager, and external metric exporters. The two Redis streams and the heartbeat keys cover the operational needs of a self-hosted single-panel deployment. Operator alerting is built into the panel instead: AUTO-3 alert rules (`/api/v1/alert-rules`) are evaluated by `worker-log-ingest` against log-derived events, each firing is stored in `alert_events`, pushed to the UI as an `alert.triggered` live-bus frame and delivered over the e-mail and web-push channels (`apps/workers/log-ingest/src/alerts/`). `worker-discord` relays Squad server events to Discord webhooks; it is not an alert channel.
 
 ## See also
 

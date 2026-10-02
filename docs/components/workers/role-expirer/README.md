@@ -7,7 +7,8 @@ passes. Each tick:
 2. Clears `role_id`, `role_expires_at`, and `role_comment`.
 3. Writes `player.role.expire` audit rows as system actor `role-expirer`.
 4. Revokes panel sessions for affected players.
-5. Enqueues Admins.cfg sync for every active server.
+5. Inserts one `admins_cfg_sync_outbox` row per non-deleted container server
+   (relayed by `worker-config-sync`).
 
 A second, daily reminder job (VIPSUB-4, #170) warns about upcoming expiries
 before the main tick removes them. Each reminder tick:

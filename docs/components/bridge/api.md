@@ -25,7 +25,7 @@ Every frame (request, response, stream chunk) is:
 { "id": "req-uuid-v7", "ok": false, "code": "forbidden", "message": "image not in allowlist" }
 ```
 
-Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. `docker_prune` runs `docker system prune -a -f --filter label!=panel.preserve=true`; every panel-built image (`docker/*.Dockerfile`) carries `LABEL panel.preserve=true`, so unused panel images — the stopped rnsquadjs/restic sidecars' images and the previous release's images that `scripts/rollback-tk104.sh` restarts — survive it. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
+Streaming methods (`BRIDGE_STREAMING_METHODS`): `container_logs_follow`, `depot_update`, `docker_prune`, `backup_run`, `backup_restore`, `file_read_stream`. `docker_prune` runs `docker system prune -a -f --filter label!=panel.preserve=true`; every panel-built image (`docker/*.Dockerfile`) carries `LABEL panel.preserve=true`, so unused panel images — the stopped rnsquadjs/restic sidecars' images and the previous release's images that `scripts/rollback-stand.sh` restarts — survive it. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
 
 ## Authentication
 

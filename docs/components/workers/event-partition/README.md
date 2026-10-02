@@ -15,7 +15,8 @@ It also applies the retention of the unpartitioned journal tables (`pruneJournal
 |---|---|
 | `alert_events` | 90 days when delivered, 365 days otherwise; rows an `expiry_notifications` row references are kept |
 | `admins_cfg_sync_outbox` | 30 days after `relayed_at` (pending rows are never removed) |
-| `scheduled_task_runs`, `chat_command_invocations`, `automation_runs` | 90 days |
+| `scheduled_task_runs` | 90 days, and at most the newest 1 000 rows per task (`pruneScheduledTaskRuns`) |
+| `chat_command_invocations`, `automation_runs` | 90 days |
 | `media_upload_tokens` | 7 days after expiry or use; tokens a `media_files` row references are kept |
 | `ban_appeals.submitter_ip` | set to NULL 30 days after the decision, 90 days after submission at the latest |
 
@@ -47,6 +48,8 @@ apps/workers/event-partition/
 - `@squad/shared-config` — `startHeartbeat`
 - `postgres` — raw SQL client (`postgres` package, not Drizzle)
 - `ioredis` — Redis client (for heartbeat)
+
+The full retention-window table lives in [configuration.md](./configuration.md#journal-table-retention-windows).
 
 ## Related docs
 

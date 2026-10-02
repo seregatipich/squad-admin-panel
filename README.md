@@ -102,7 +102,7 @@ sudo ./scripts/rebuild.sh
 - **License management**: license key storage with encryption
 - **Game updates**: coordinated depot update with server stop/restart
 - **Audit trail**: append-only audit log with SHA-256 chain integrity
-- **RBAC**: Owner, SeniorAdmin, Admin, Moderator, Viewer roles
+- **RBAC**: Owner, Admin, Moderator, QueuePriority, Cameraman, Intern seeded roles plus custom roles; permissions derived from role access flags
 
 ## Repository layout
 

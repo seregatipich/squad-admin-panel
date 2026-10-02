@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Will execute cron-style scheduled tasks against Squad servers: periodic restarts, layer rotations, broadcast messages on a timed schedule.
+Executes time-driven work for Squad servers: seed schedules, layer rotations, cron-style scheduled tasks (restarts, layer changes, broadcasts), map auto-selection and season finalisation.
 
 ## Current status
 

@@ -38,7 +38,7 @@ docker compose up -d --build
 
 ## First-time setup
 
-After `docker compose up -d`, the API, web, DB, Redis, workers, and bridge should be healthy before the first login. The 5 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`, `Moderator`) are seeded by DB migrations.
+After `docker compose up -d`, the API, web, DB, Redis, workers, and bridge should be healthy before the first login. The 6 seeded roles (`Owner`, `Admin`, `Moderator`, `QueuePriority`, `Cameraman`, `Intern`) are created by DB migrations.
 
 **First login becomes Owner.** Open `https://${APP_DOMAIN}/login` and click **"Войти через Steam"** (Sign in with Steam). The first Steam OpenID callback that completes on a fresh panel automatically assigns the Owner role to that Steam account (`claimFirstOwner` in `apps/api/src/lib/first-owner.ts`). All subsequent logins skip the claim.
 

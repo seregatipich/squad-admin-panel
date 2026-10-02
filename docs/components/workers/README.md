@@ -55,30 +55,36 @@ heartbeat, sends `SIGTERM` twice and requires a clean exit with code `0`.
 
 ## Implemented workers
 
+Every directory under `apps/workers/` (except `_test-shared`) has a row here, 21 in total. Nineteen of them have a `worker-<name>` service in `docker/compose.yml`; `stats` is implemented but has no compose service, and `backup` is a placeholder (see below).
+
 | Worker | Purpose | Directory |
 |---|---|---|
-| [rcon](./rcon/README.md) | Valve-RCON supervisor — ListPlayers polling, ShowServerInfo keepalive, publishes `rcon:status:{id}` | [`apps/workers/rcon/`](../../../apps/workers/rcon/) |
+| [rcon](./rcon/README.md) | Valve-RCON supervisor — roster and server-info polling, ShowServerInfo keepalive, publishes `rcon:status:{id}` | [`apps/workers/rcon/`](../../../apps/workers/rcon/) |
 | [log-ingest](./log-ingest/README.md) | Tails `docker logs -f squad-{uuid}` via bridge, parses Squad log lines, emits events to Redis Streams | [`apps/workers/log-ingest/`](../../../apps/workers/log-ingest/) |
 | [config-sync](./config-sync/README.md) | Consumes Admins.cfg sync events and writes managed role/group segments through the bridge | [`apps/workers/config-sync/`](../../../apps/workers/config-sync/) |
-| [audit-archiver](./audit-archiver/README.md) | Cold-archives `audit_log` rows older than 90 days (P1 stub, heartbeat only in P0) | [`apps/workers/audit-archiver/`](../../../apps/workers/audit-archiver/) |
-| [event-partition](./event-partition/README.md) | Monthly Postgres partition rotation for the `events` table | [`apps/workers/event-partition/`](../../../apps/workers/event-partition/) |
-| [role-expirer](./role-expirer/README.md) | Clears expired player roles, revokes sessions, audits the change, and enqueues Admins.cfg sync | [`apps/workers/role-expirer/`](../../../apps/workers/role-expirer/) |
+| [event-partition](./event-partition/README.md) | Hourly partition rotation for the partitioned tables (`events`, `diagnostic_events`, `player_sessions`, `chat_messages`, `bonus_transactions`, `combat_events`) and retention of the journal tables (see [retention windows](./event-partition/configuration.md#journal-table-retention-windows)) | [`apps/workers/event-partition/`](../../../apps/workers/event-partition/) |
+| [role-expirer](./role-expirer/README.md) | Clears expired player roles, revokes sessions, audits the change, and enqueues Admins.cfg sync through the outbox; also VIP expiry reminders and subscription renewals | [`apps/workers/role-expirer/`](../../../apps/workers/role-expirer/) |
 | [seed-reward](./seed-reward/README.md) | Reconciles rolling 30-day seed totals with the configured reward role | [`apps/workers/seed-reward/`](../../../apps/workers/seed-reward/) |
 | [steam-refresh](./steam-refresh/README.md) | Refreshes seven-day-stale Steam profile, ban, ownership, and Squad playtime snapshots in bounded batches | [`apps/workers/steam-refresh/`](../../../apps/workers/steam-refresh/) |
-| leaderboard-aggregator | Recomputes `player_stat_periods` leaderboard aggregates every 15 min; also rebuilds the rolling 30-day bonus accrual window `player_bonus_accruals` (ECON-5) and materialises the running named season over its explicit window (LEAD-7) | [`apps/workers/leaderboard-aggregator/`](../../../apps/workers/leaderboard-aggregator/) |
+| [leaderboard-aggregator](./leaderboard-aggregator/README.md) | Recomputes `player_stat_periods` leaderboard aggregates every 15 min (all-time rows at most hourly); also rebuilds the rolling 30-day bonus accrual window `player_bonus_accruals` (ECON-5) and materialises the running named season over its explicit window (LEAD-7) | [`apps/workers/leaderboard-aggregator/`](../../../apps/workers/leaderboard-aggregator/) |
+| [presence-daily](./presence-daily/README.md) | Hourly rebuild of `player_daily_presence`, `server_daily_stats` and `player_coplay` for yesterday and today, plus daily economy bonus accrual; optional one-shot full co-play rebuild | [`apps/workers/presence-daily/`](../../../apps/workers/presence-daily/) |
+| [ban-sync](./ban-sync/README.md) | Downloads enabled third-party ban lists, parses them and merges them into `external_bans` (never deleting rows); also serves manual sync requests from the `bansync:manual` stream | [`apps/workers/ban-sync/`](../../../apps/workers/ban-sync/) |
+| [clan-guard](./clan-guard/README.md) | Warns and then kicks online players whose name carries a protected clan tag they do not own, via RCON commands queued for worker-rcon | [`apps/workers/clan-guard/`](../../../apps/workers/clan-guard/) |
+| [clan-priority-expirer](./clan-priority-expirer/README.md) | Records expired clan reserved-slot priority windows once and enqueues an Admins.cfg sync per active server | [`apps/workers/clan-priority-expirer/`](../../../apps/workers/clan-priority-expirer/) |
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
 | [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
 | [media-publisher](./media-publisher/README.md) | Publishes stored media to YouTube/Telegram from the `media_publications` queue, with backoff and YouTube daily-quota deferral | [`apps/workers/media-publisher/`](../../../apps/workers/media-publisher/) |
 | [discord](./discord/README.md) | Three loops: relays Squad server events to Discord webhooks (DISCORD-2), syncs panel roles to a Discord guild (DISCORD-5), and renames a live status channel plus registers read-only slash commands (DISCORD-6) | [`apps/workers/discord/`](../../../apps/workers/discord/) |
-| [stats](./stats/README.md) | Nightly dossier-aggregate reconcile guard (DOSSIER-2): recomputes per-weapon/per-vehicle stats from recent `combat_events` and alerts on drift, report-only | [`apps/workers/stats/`](../../../apps/workers/stats/) |
+| [automation](./automation/README.md) | Event-hook plugin host (INT-4) and the AUTO-1 trigger-rule engine: evaluates `automation_rules` against events and executes the matching action | [`apps/workers/automation/`](../../../apps/workers/automation/) |
+| [scheduler](./scheduler/README.md) | Seed schedules (SEED-3), rotation calendar (ROT-4), scheduled tasks (AUTO-2), map auto-selection (GAME-1) and season finalisation (LEAD-7), ticking every 30 s by default | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
+| [stats](./stats/README.md) | Nightly dossier-aggregate reconcile guard (DOSSIER-2): recomputes per-weapon/per-vehicle stats from recent `combat_events` and alerts on drift, report-only; no compose service | [`apps/workers/stats/`](../../../apps/workers/stats/) |
 
-## Stub workers (P2, not implemented)
+## Stubs and placeholders
 
-| Worker | Eventual purpose | Directory |
+| Worker | Status | Directory |
 |---|---|---|
-| [automation](./automation/README.md) | User-defined rules ("on event X, do Y") | [`apps/workers/automation/`](../../../apps/workers/automation/) |
-| [backup](./backup/README.md) | restic-based DB + config snapshots (heartbeat lifecycle is active; the restic/domain logic itself is still deferred) | [`apps/workers/backup/`](../../../apps/workers/backup/) |
-| [scheduler](./scheduler/README.md) | Cron-style server restarts, layer rotations, season finalisation (LEAD-7) | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
+| [audit-archiver](./audit-archiver/README.md) | Deployed, but a stub: it publishes a heartbeat whose status says archiving is not implemented (cold-archiving `audit_log` rows older than 90 days is planned) | [`apps/workers/audit-archiver/`](../../../apps/workers/audit-archiver/) |
+| [backup](./backup/README.md) | Placeholder, not deployed (no compose service): scheduled backups run in the restic `backup` compose profile, not in this worker | [`apps/workers/backup/`](../../../apps/workers/backup/) |
 
 ## Adding a worker
 
@@ -87,4 +93,4 @@ heartbeat, sends `SIGTERM` twice and requires a clean exit with code `0`.
 3. Add `@squad/worker-kit` to the worker's `package.json` dependencies.
 4. Cover heartbeat and repeated `SIGTERM` through the shared worker contract test.
 5. Add it to `compose.yml`. If the worker needs the bridge socket, set `user: "0:${PANEL_GID:-987}"` (primary GID `panel`) — the bridge's `SO_PEERCRED` check looks at the peer's primary GID; supplementary groups added via `group_add` are not visible to the bridge across the user-namespace boundary.
-6. Create a `docs/components/workers/<name>/` directory with the standard 8-file set and add a row to the table above.
+6. Create a `docs/components/workers/<name>/` directory with the standard 7-file set (`README.md`, `api.md`, `configuration.md`, `data-model.md`, `flows.md`, `testing.md`, `troubleshooting.md`), add a row to the table above and link it from [`docs/README.md`](../../README.md).

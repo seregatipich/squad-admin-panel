@@ -74,23 +74,23 @@ Steam callback ──validates OpenID──► UPSERT players
 
 Both branches issue a session — VIPSUB-5 (#171) needs a player without `panel_access` authenticated so they can manage their own VIP subscription on `/me`. The `self_service` scope is what keeps the panel closed to them: `apps/api/src/plugins/auth.ts` downgrades such a request to anonymous on every route that does not declare `config.selfService`, so a panel-gated route answers exactly the same 401 it did when no cookie was set at all. The downgrade stops applying as soon as the player actually holds `panel_access` — no re-login needed.
 
-Once inside the panel, `auth.ts` calls `loadUserPermissions(steam_id64)` on every request:
+Once inside the panel, `auth.ts` calls `loadUserPermissions(playerId)` on every request:
 
 ```
-loadUserPermissions(steam_id64)
+loadUserPermissions(playerId)
       │
-      ├── Redis GET rbac:perms:{steam_id64}
+      ├── in-process cache lookup (keyed by players.id, TTL 30 s)
       │     │
-      │     └── cache hit ──► return cached set
+      │     └── hit ──► return cached context
       │
       └── cache miss
              │
-             ├── SELECT role_id FROM players WHERE steam_id64 = $1
-             ├── role_id IS NULL ──► return empty set, SET cache EX 30
-             └── SELECT permission_key FROM role_permissions WHERE role_id = $1
+             ├── load the player's role and flags in one query
+             ├── no role ──► cache an empty context for 30 s
+             └── derive the effective keys from the role flags (+ role_permissions)
                     │
-                    └── SET rbac:perms:{steam_id64} <serialized keys> EX 30
-                        return permission set
+                    └── cache the context in the process-local Map (TTL 30 s)
+                        return the permission context
 ```
 
 ---
@@ -104,9 +104,9 @@ PUT /api/v1/players/:steamId/role  { role_id }
       │
       ├── UPDATE players SET role_id = $role_id WHERE steam_id64 = $steamId
       │
-      └── invalidatePermissionCache(steamId64)
+      └── invalidatePermissionCache(playerId)
              │
-             └── Redis DEL rbac:perms:{steamId64}
+             └── delete the player's entry from the in-process cache
 ```
 
 The player's next request will miss the cache and reload from DB with the new role.
@@ -120,9 +120,9 @@ PUT /api/v1/roles/:id  { permissions: [...] }
       │
       └── invalidatePermissionCacheForRole(db, roleId)
              │
-             ├── SELECT steam_id64 FROM players WHERE role_id = $roleId
+             ├── SELECT id FROM players WHERE role_id = $roleId
              │
-             └── Redis DEL rbac:perms:{steam_id64}  (for each carrier)
+             └── delete each carrier's entry from the in-process cache
 ```
 
 For DELETE the same invalidation runs before the role row is removed, so no carrier retains a stale cache that still resolves to the now-deleted role.

@@ -10,10 +10,10 @@
        │    config.permissions: PermissionKey[]
        │    e.g. { permissions: ['server:start', 'server:restart'] }
        │
-       └─ apps/api/src/plugins/rbac.ts
-            preHandler hook:
-              1. extract session user_id
-              2. SELECT role permissions from DB
+       └─ apps/api/src/plugins/auth.ts
+            global onRequest hook:
+              1. resolve the session (or API token) user
+              2. load the permission context (apps/api/src/lib/rbac.ts, 30 s in-process cache)
               3. for each key in config.permissions:
                    if not in user permission set → 403
 ```

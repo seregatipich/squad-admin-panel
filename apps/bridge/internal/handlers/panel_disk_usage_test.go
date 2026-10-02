@@ -59,14 +59,23 @@ func TestPanelDiskUsage_CachedReadDoesNotBlockBehindRecompute(t *testing.T) {
 		}
 		return 0, nil
 	})
-	defer close(release)
+	forced := make(chan struct{})
+	// The forced goroutine writes the package-level cache when it finishes.
+	// Release it and wait for it so it cannot leak into the next test.
+	defer func() {
+		close(release)
+		<-forced
+	}()
 	if resp := d.Handle(context.Background(), diskUsageReq(false), func(rpc.StreamFrame) {}); !resp.OK {
 		t.Fatalf("prime cache: %+v", resp.Error)
 	}
 	ageDiskUsageCache(panelDiskForceMinInterval + time.Second)
 
 	block.Store(true)
-	go d.Handle(context.Background(), diskUsageReq(true), func(rpc.StreamFrame) {})
+	go func() {
+		defer close(forced)
+		d.Handle(context.Background(), diskUsageReq(true), func(rpc.StreamFrame) {})
+	}()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -91,9 +100,11 @@ func TestPanelDiskUsage_CachedReadDoesNotBlockBehindRecompute(t *testing.T) {
 func TestPanelDiskUsage_ForceIsCoalescedAndRateLimited(t *testing.T) {
 	var walks atomic.Int32
 	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
 	d := stubDiskDispatcher(t, func(ctx context.Context, path string) (int64, error) {
 		if filepath.Base(path) == "configs" {
 			walks.Add(1)
+			entered <- struct{}{}
 			<-gate
 		}
 		return 0, nil
@@ -109,7 +120,14 @@ func TestPanelDiskUsage_ForceIsCoalescedAndRateLimited(t *testing.T) {
 			}
 		}()
 	}
-	time.Sleep(200 * time.Millisecond)
+	// Hold the walk open until the leader is inside it; callers that arrive
+	// later either join the in-flight walk or are answered from the fresh
+	// cache, so exactly one walk runs whatever the scheduling.
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no forced refresh reached the walk")
+	}
 	close(gate)
 	wg.Wait()
 	if got := walks.Load(); got != 1 {

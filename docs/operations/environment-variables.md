@@ -1,6 +1,6 @@
 # Environment variables
 
-`.env` is bind-mounted read-only into the compose stack. Source: [`.env.example`](../../.env.example).
+`.env` is bind-mounted read-only into the compose stack. Source: [`.env.example`](../../.env.example); every variable in that file has a row below. Tunables that a worker reads but `.env.example` does not list (for example `BAN_SYNC_INTERVAL_MS` or `CLAN_GUARD_INTERVAL_MS`) are documented in that worker's `configuration.md` under [`components/workers`](../components/workers/README.md).
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
@@ -32,11 +32,33 @@
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | api | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |
 | `GLITCHTIP_DSN` | optional | — | none | Reserved for Sentry-compatible error reporting; no service reads it yet. | yes |
 | `GLITCHTIP_SECRET_KEY` | optional | — | none | Reserved for GlitchTip server-side ingest; no service reads it yet. | yes |
-| `RESTIC_REPOSITORY` | optional | — | all | Where the (post-P0) backup worker writes snapshots. | no |
+| `RESTIC_REPOSITORY` | optional | — | backup | Where the `backup` compose profile (restic image) writes snapshots, for example `s3:s3.amazonaws.com/my-admin-backups` or `/srv/backups`. | no |
 | `RESTIC_PASSWORD` | yes (`docker/compose.yml`) | — | backup | Restic encryption passphrase. `docker/compose.yml` refuses to start while it is empty (there is no `changeme` fallback any more); the stand's backup service leaves it empty-able and restic then refuses to run. Generate with `openssl rand -hex 32`; `scripts/bootstrap.sh` does. | yes |
 | `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | recommended | — | migrator → api / workers | Least-privilege Postgres login (#47). When both are set, the migrator creates or updates the role on every run (no SUPERUSER, owns nothing, only SELECT/INSERT on `audit_log` and `config_versions`) and every service except `migrator` and `worker-event-partition` connects as it. Blank = everything connects as `admin`. Password: 16+ chars of `[A-Za-z0-9_-]` (`openssl rand -hex 32`). Run the migrator once after setting them. | yes |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | optional | — | api | Discord OAuth2 application for the account link (DISCORD-4). Blank = `/api/v1/auth/discord/login` answers 503. | yes (secret) |
 | `DISCORD_PUBLIC_KEY` | optional | — | api | Ed25519 public key of the Discord application; verifies signed interactions. Blank = `/api/v1/integrations/discord/interactions` answers 503. | no |
+| `COMPOSE_FILE` | no | `docker/compose.yml` | compose | Lets a plain `docker compose ...` in the repository root find the stack. | no |
+| `COMPOSE_PROJECT_NAME` | no | `squad-admin-panel` | compose | Compose project name (containers, network, volumes). Set a distinct one in each checkout (worktree) that runs its own stack; `docker/compose.stand.yml` does not read it. | no |
+| `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` | no | `80` / `443` | compose | Published Caddy host ports; override per checkout when several stacks run on one machine. | no |
+| `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` | no | `5432` / `6379` | compose / `pnpm dev:app` | Published Postgres and Redis host ports; override per checkout. `pnpm dev:app` builds its `DATABASE_URL` and `REDIS_URL` from them. | no |
+| `API_PORT` / `WEB_PORT` | no | `3001` / `3000` | `pnpm dev:app` | Host ports of the api and the web dev server (`.env.local` only); `API_URL` and `PANEL_PUBLIC_URL` are derived from them. | no |
+| `DATABASE_POOL_MAX` | no | `16` | api / workers | Per-process postgres.js pool size (`createDatabaseClient`). Every service that opens a connection sums into the postgres `max_connections` (200 in `docker/compose*.yml`); a worker may set 2-4 to keep the budget small. | no |
+| `HOST_ORPHAN_SWEEP_INTERVAL_MS` | no | `300000` | api | Interval of the sweep that removes per-server directories whose server row is gone. Minimum 60000; a value that is not a whole number >= 60000 stops the API at startup. The compose files do not forward it. | no |
+| `HOST_DOCKER_PRUNE_INTERVAL_MS` | no | `86400000` | api | Interval of the `docker system prune -af` run through the bridge. Same validation and forwarding as the orphan sweep. | no |
+| `GEOIP_DB_DIR` | no | — | worker-log-ingest | Host directory holding `GeoLite2-City.mmdb`, mounted read-only; resolves player connect IPs to country and city. | no |
+| `MEDIA_STORAGE_DIR` | no | `./media` | api / worker-media-publisher | Base directory for uploaded media (`<dir>/<yyyy>/<mm>/<uuid>.<ext>`). Both compose files pin the api and the publisher to the shared `media_data` volume at `/var/lib/squad-panel/media`; it is not covered by the DB backup. | no |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | no | — | worker-media-publisher | YouTube Data API v3 OAuth credentials; all three are required, otherwise the YouTube destination stays disabled and publications are deferred. Uploads are `unlisted`. | yes |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | — | worker-media-publisher | Telegram bot credentials (the bot must be an admin of the chat); both are required, otherwise the destination stays disabled. Uploads are capped at 50 MiB. | yes |
+| `MEDIA_PUBLISHER_INTERVAL_MS` / `MEDIA_PUBLISHER_BATCH_SIZE` | no | `60000` / `3` | worker-media-publisher | Poll interval and per-tick batch size. | no |
+| `SEED_REWARD_INTERVAL_MS` | no | `86400000` | worker-seed-reward | Reward-role reconciliation interval. | no |
+| `ROLE_EXPIRER_INTERVAL_MS` | no | `60000` | worker-role-expirer | Tick that clears expired role grants. | no |
+| `ROLE_EXPIRY_REMINDER_INTERVAL_MS` | no | `86400000` | worker-role-expirer | Daily VIP expiry reminder pass. | no |
+| `VIP_RENEWAL_INTERVAL_MS` | no | `3600000` | worker-role-expirer | Subscription renewal pass; charges every subscription whose `next_renewal_at` is due. | no |
+| `CONFIG_DRIFT_INTERVAL_MS` | no | `300000` | worker-config-sync | Config-drift sweep: compares each non-managed config file's on-disk sha256 against its `config_versions` tip. | no |
+| `ADMINS_CFG_RELAY_INTERVAL_MS` / `ADMINS_CFG_RELAY_XADD_TIMEOUT_MS` | no | `1000` / `5000` | worker-config-sync | Cadence of the Admins.cfg post-commit outbox relay and the upper bound of one `XADD`; a timed-out row stays pending for the next pass. | no |
+| `LEADERBOARD_AGGREGATOR_INTERVAL_MS` | no | `900000` | worker-leaderboard-aggregator | Leaderboard recompute tick. | no |
+| `LEADERBOARD_BACKFILL_MONTHS` | no | `0` | worker-leaderboard-aggregator | Calendar months of `player_stat_periods` month rows to recompute once at startup (`0` disables). | no |
+| `COPLAY_FULL_REBUILD` | no | blank | worker-presence-daily | Set to `1` for a one-shot full co-play rebuild at startup. Administrative: run it with `docker compose run --rm -e COPLAY_FULL_REBUILD=1 worker-presence-daily`, not on the long-running service. | no |
 | `LOG_LEVEL` | no | `info` | api / workers | `pino` log level. | no |
 | `NODE_ENV` | no | `production` | api / web / workers | `production` disables pretty logs. Swagger UI is registered at `/api/docs` for API smoke checks. | no |
 

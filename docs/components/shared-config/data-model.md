@@ -16,7 +16,7 @@ backup_restore  panel_disk_usage  squad_log_retention_sweep
 squad_log_list  file_read_stream  host_agent_restart
 ```
 
-Streaming methods (deliver `BridgeStreamFrame` before the final response): `container_logs_follow`, `depot_update`, `docker_prune`.
+Streaming methods (deliver `BridgeStreamFrame` before the final response): `container_logs_follow`, `depot_update`, `docker_prune`, `backup_run`, `backup_restore`, `file_read_stream`.
 
 ## Permissions registry
 

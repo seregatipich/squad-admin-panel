@@ -9,7 +9,10 @@
 3. Fetches Squad ownership and playtime per account, with at most four requests
    in flight.
 4. Saves a player only when profile, ban, and ownership responses are all
-   present. An incomplete player remains stale and is retried later.
+   present. For an incomplete player only `steam_checked_at` is advanced and no
+   profile column changes, so one unresolvable SteamID cannot occupy the front
+   of every batch; the player is picked up again after the next seven-day
+   cutoff.
 
 The process publishes `worker:heartbeat:steam-refresh` and
 `steam_refresh.*` diagnostic events. With no `STEAM_API_KEY`, it remains
