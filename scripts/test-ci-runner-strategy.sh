@@ -307,6 +307,17 @@ has_line "$mutation" "    if: needs.changes.outputs.mutation == 'true'" ||
   fail 'Stryker is not gated on a shared-config change'
 has_text "$mutation" 'pnpm turbo run test:mutation --filter=@squad/shared-config' ||
   fail 'mutation job does not run Stryker on shared-config'
+printf '%s\n' "$mutation" | grep -Eq 'uses:[[:space:]]+actions/cache@[0-9a-f]{40}' ||
+  fail 'mutation does not restore the Stryker incremental report through a SHA-pinned actions/cache'
+has_line "$mutation" '          path: packages/shared-config/reports/stryker-incremental.json' ||
+  fail 'mutation caches something other than the Stryker incremental report'
+stryker_config="$repo_root/packages/shared-config/stryker.config.json"
+[ "$(jq -r '.incremental' "$stryker_config")" = true ] ||
+  fail 'Stryker incremental mode is off, so the mutation cache would never be used'
+[ "$(jq -r '.incrementalFile' "$stryker_config")" = reports/stryker-incremental.json ] ||
+  fail 'Stryker writes its incremental report somewhere the mutation job does not cache'
+[ "$(jq -r '.concurrency' "$stryker_config")" -ge 4 ] ||
+  fail 'Stryker runs with fewer workers than a hosted runner has vCPUs'
 
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||

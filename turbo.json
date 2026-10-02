@@ -77,7 +77,7 @@
     },
     "test:mutation": {
       "dependsOn": ["build", "^build"],
-      "outputs": ["reports/mutation/**"]
+      "outputs": ["reports/mutation/**", "reports/stryker-incremental.json"]
     },
     "clean": {
       "cache": false

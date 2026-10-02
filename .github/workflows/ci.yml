@@ -449,6 +449,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Stryker's incremental report maps every mutant to the hashes of the source and the tests it
+      # ran against, so a restored report only skips mutants whose code and tests are unchanged;
+      # a changed file is mutated in full. A cache miss runs the whole suite as before.
+      - name: Restore the Stryker incremental report
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/shared-config/reports/stryker-incremental.json
+          key: stryker-incremental-${{ github.sha }}
+          restore-keys: stryker-incremental-
       - name: Run shared-config mutation tests (Stryker)
         run: pnpm turbo run test:mutation --filter=@squad/shared-config
 
