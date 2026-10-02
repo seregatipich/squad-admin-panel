@@ -233,10 +233,14 @@ describeIfDbAndRedis('chat received over RCON reaches the chat handlers (#2)', (
 
     const [warn] = await requests(SERVER_ID);
     expect(warn).toMatchObject({ command: 'AdminWarn', args: [EOS, RULES_TEXT] });
-    const rows = await db
-      .select()
-      .from(chatCommandInvocations)
-      .where(eq(chatCommandInvocations.serverId, SERVER_ID));
+    // The warning is sent before the invocation row is committed, so wait for the row.
+    const invocations = async () =>
+      db
+        .select()
+        .from(chatCommandInvocations)
+        .where(eq(chatCommandInvocations.serverId, SERVER_ID));
+    await waitFor(async () => (await invocations()).length === 1);
+    const rows = await invocations();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       command: 'rules',
