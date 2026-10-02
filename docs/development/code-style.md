@@ -45,6 +45,8 @@ All `recommended` rules are enabled, plus:
 | `style/noNonNullAssertion` | warn (off in test files) | `!` postfix operator. Prefer a null check; where the guarantee comes from elsewhere, add a `biome-ignore` with the reason. Warnings fail every Biome run (`--error-on-warnings`: the hook, the pre-push checklist and `ci`), so none may remain. |
 | `correctness/useExhaustiveDependencies` | warn | React hook dependency arrays must be exhaustive. |
 
+The `next` and `react` Biome domains are enabled explicitly in `biome.json` (`useHookAtTopLevel` is off). Biome only auto-detects domains from `package.json` files it scans, and `experimentalScannerIgnores` skips `.claude/`, so a checkout under `.claude/worktrees/` would silently skip rules such as `noImgElement` and `useUniqueElementIds` that `ci` enforces, and report the `biome-ignore` comments for them as unused. Keep the explicit domains so a worktree and `ci` agree.
+
 ## TypeScript
 
 The strict compiler config is defined in `packages/tsconfig.base.json`. Key rules beyond `strict: true`:

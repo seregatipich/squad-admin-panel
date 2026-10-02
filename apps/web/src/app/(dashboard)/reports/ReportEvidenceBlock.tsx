@@ -10,6 +10,7 @@ export function ReportEvidenceBlock({ evidence }: { evidence: ReportEvidenceItem
         {evidence.map((item) => (
           <div key={item.id} className="max-w-[220px] space-y-1">
             {isImageEvidence(item) ? (
+              // biome-ignore lint/performance/noImgElement: the image optimizer is disabled (next.config images.unoptimized), so next/image would add nothing for this panel-streamed image
               <img
                 src={`/api/v1/media/${item.id}/stream`}
                 alt={evidenceLabel(item)}

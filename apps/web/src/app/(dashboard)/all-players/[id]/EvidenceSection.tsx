@@ -252,6 +252,7 @@ export function EvidenceSection({
                     />
                   )
                 ) : media.kind === 'image' ? (
+                  // biome-ignore lint/performance/noImgElement: the image optimizer is disabled (next.config images.unoptimized), so next/image would add nothing for this panel-streamed image
                   <img
                     src={`/api/v1/media/${media.id}/stream`}
                     alt={evidenceLabel(media)}
