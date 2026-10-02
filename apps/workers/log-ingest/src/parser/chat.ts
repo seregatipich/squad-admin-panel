@@ -11,9 +11,11 @@
  * NOTE: current Squad builds do **not** write chat to SquadGame.log at all —
  * chat is delivered only as an RCON broadcast packet, which
  * `@squad/worker-rcon` parses (see `apps/workers/rcon/src/chat.ts`). This
- * parser stays for log formats that do carry chat and because `!report`,
- * votes and `!`-commands are wired to it; on a live server it never matches.
- * Consolidating both producers onto the RCON feed is tracked separately.
+ * parser stays for log formats that do carry chat; on a live server it never
+ * matches. The chat reactions (`!`-commands, `chat_keyword` automations,
+ * `!report`) are therefore also fed from worker-rcon's `rcon:chat:<serverId>`
+ * stream (`../chat/rcon-chat.ts`), and a line that arrives through both
+ * producers is handled once (`../chat/dedupe.ts`).
  *
  * `parseChatFromLogLine` is a pure function so it can be unit-tested without a
  * live server. It returns one structured message per chat line regardless of
