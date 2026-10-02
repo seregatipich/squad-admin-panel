@@ -40,3 +40,19 @@ describe('log-ingest alert wiring (#19)', () => {
     expect(identityCall).toBeGreaterThan(alertCall);
   });
 });
+
+describe('log-ingest stream readers (#27, #2)', () => {
+  it('starts the alert reader of the event streams and the RCON chat reader', () => {
+    expect(indexSource).toMatch(/runAlertStreamConsumer\(/);
+    expect(indexSource).toMatch(/runRconChatConsumer\(/);
+  });
+
+  it('gives each reader a connection of its own, so the blocking reads never queue the worker', () => {
+    expect(indexSource).toMatch(/\[redis\.duplicate\(\), redis\.duplicate\(\)\]/);
+  });
+
+  it('claims each chat line and report before reacting, so both producers cannot react twice', () => {
+    expect(indexSource).toMatch(/claimChatLine\(redis, serverId, chat\)/);
+    expect(indexSource).toMatch(/claimReport\(redis, serverId, report\)/);
+  });
+});

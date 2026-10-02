@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LogIngestor } from '../src/parser/ingest.js';
-import { type ParsedReport, parseReportLine } from '../src/parser/report.js';
+import { type ParsedReport, parseReportFromChat, parseReportLine } from '../src/parser/report.js';
 
 const SERVER_ID = '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c5';
 const REPORTER_EOS = 'abcdef0123456789abcdef0123456789';
@@ -97,5 +97,57 @@ describe('LogIngestor onReport wiring', () => {
     });
     ing.ingest(`[2026.04.23-11.30.20:485][123]LogSquad: ChatMessage: ${SENDER} : ChatAll : gg wp`);
     expect(captured).toHaveLength(0);
+  });
+});
+
+describe('parseReportFromChat (RCON chat, #2)', () => {
+  const chat = (message: string) => ({
+    ts: '2026-10-02T12:00:00.000Z',
+    channel: 'ChatTeam' as const,
+    eosId: REPORTER_EOS,
+    steamId64: REPORTER_STEAM,
+    playerName: 'Reporter One',
+    message,
+  });
+
+  it('reads the reporter, target and text from an RCON chat line', () => {
+    expect(parseReportFromChat(chat('!report BadGuy is team killing at main'))).toEqual({
+      ts: '2026-10-02T12:00:00.000Z',
+      tick: 0,
+      channel: 'ChatTeam',
+      reporterEos: REPORTER_EOS,
+      reporterSteam: REPORTER_STEAM,
+      reporterName: 'Reporter One',
+      targetRaw: 'BadGuy',
+      body: 'is team killing at main',
+    });
+  });
+
+  it('uses the target as the text when nothing follows it', () => {
+    expect(parseReportFromChat(chat('!REPORT Cheater'))).toMatchObject({
+      targetRaw: 'Cheater',
+      body: 'Cheater',
+    });
+  });
+
+  it('returns null for other chat and for a report with no target', () => {
+    expect(parseReportFromChat(chat('hello team'))).toBeNull();
+    expect(parseReportFromChat(chat('!report'))).toBeNull();
+    expect(parseReportFromChat(chat('!reporting someone'))).toBeNull();
+  });
+
+  it('produces the same report as the log line for the same words', () => {
+    const fromLog = parseReportLine(
+      `[2026.04.23-11.30.20:485][123]LogSquad: ChatMessage: ${SENDER} : ChatAll : !report BadGuy hacking`,
+    ) as ParsedReport;
+    const fromChat = parseReportFromChat({
+      ts: fromLog.ts,
+      channel: 'ChatAll',
+      eosId: REPORTER_EOS,
+      steamId64: REPORTER_STEAM,
+      playerName: 'Reporter One',
+      message: '!report BadGuy hacking',
+    }) as ParsedReport;
+    expect({ ...fromChat, tick: fromLog.tick }).toEqual(fromLog);
   });
 });

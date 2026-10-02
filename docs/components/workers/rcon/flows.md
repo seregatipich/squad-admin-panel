@@ -35,7 +35,7 @@ Each `PerServerSupervisor` runs an infinite `connectLoop`:
 
 The panel's live views are fed by two light, RCON-only refreshes that never touch the database:
 
-- **Roster** — `ListPlayers` + `ListSquads` → `rcon:roster:{id}`, `rcon:squads:{id}`, the `rcon.roster` live-bus event, and `player_count`/`squad_count` in `rcon:status:{id}`.
+- **Roster** — `ListPlayers` + `ListSquads` → `rcon:roster:{id}`, `rcon:squads:{id}`, the `rcon.roster` live-bus event, and `player_count`/`squad_count` in `rcon:status:{id}`. Both parsers accept the Squad 25594911 layouts (`Party ID`, trailing `Vehicle`, `- Tickets: n` in team headers) and the older ones. `RosterParseGuard` treats a reply with rows and no parsed entry as unreadable rather than empty: the refresh keeps the last roster/squads, skips squad tracking (an empty list would read as every squad disbanding) and publishes `roster_parse_error` — see [api.md](api.md#redis-key-rconstatusserverid).
 - **Server info** — `ShowServerInfo` + `ShowNextMap` → `current_map`, `next_level`, `next_layer`, `game_mode`, `public_queue`, `tickrate_rt` in `rcon:status:{id}`.
 
 Each write merges into the fields the other paths already read, so a roster write never blanks the map. `rcon:status:changed` is published only when a rendered field or the state changes (tickrate and timestamps excluded), so frequent refreshes do not make every open panel refetch.

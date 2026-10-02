@@ -149,6 +149,88 @@ describe('RCON chat broadcasts', () => {
     }
   }, 15_000);
 
+  it('hands the line to worker-log-ingest on the per-server chat feed (#2)', async () => {
+    const { server, port, broadcast } = await fakeSquadServer();
+    const redis = makeRedis();
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 60_000,
+      rosterIntervalMs: 60_000,
+    });
+    const feedCalls = () => redis.xadd.mock.calls.filter(([key]) => key === 'rcon:chat:srv-feed');
+
+    try {
+      await supervisor.reconcile([
+        { serverId: 'srv-feed', host: '127.0.0.1', port, queryPort: 27165, password: 'pw' },
+      ]);
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && feedCalls().length === 0) {
+        broadcast(`[ChatAll] [Online IDs:EOS: ${EOS} steam: ${STEAM}] PanelAlpha : !rules`);
+        await sleep(25);
+      }
+
+      const [call] = feedCalls();
+      expect(call).toBeDefined();
+      // XADD key MAXLEN ~ n * entry <json>
+      expect(call?.slice(1, 5)).toEqual(['MAXLEN', '~', '2000', '*']);
+      expect(call?.[5]).toBe('entry');
+      expect(JSON.parse(call?.[6] as string)).toMatchObject({
+        v: 1,
+        channel: 'ChatAll',
+        eos_id: EOS,
+        steam_id64: STEAM,
+        player_name: 'PanelAlpha',
+        message: '!rules',
+      });
+    } finally {
+      await supervisor.stop();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 15_000);
+
+  it('still archives and publishes the line when the chat feed is unavailable', async () => {
+    const { server, port, broadcast } = await fakeSquadServer();
+    const redis = makeRedis();
+    redis.xadd.mockImplementation(async (key: string) => {
+      if (key.startsWith('rcon:chat:')) throw new Error('feed down');
+      return '0-0';
+    });
+    const log = makeLogger();
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log,
+      pollIntervalMs: 60_000,
+      rosterIntervalMs: 60_000,
+    });
+
+    try {
+      await supervisor.reconcile([
+        { serverId: 'srv-feed-down', host: '127.0.0.1', port, queryPort: 27165, password: 'pw' },
+      ]);
+      const deadline = Date.now() + 5_000;
+      let frame: Record<string, unknown> | undefined;
+      while (Date.now() < deadline && !frame) {
+        broadcast(CHAT_LINE);
+        await sleep(25);
+        frame = redis.publish.mock.calls
+          .filter(([channel]) => channel === 'live-bus')
+          .map(([, payload]) => JSON.parse(payload as string) as Record<string, unknown>)
+          .find((candidate) => candidate.type === 'chat.message');
+      }
+      expect(frame).toBeDefined();
+      expect((log as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: 'srv-feed-down', err: 'feed down' }),
+        'rcon chat feed publish failed',
+      );
+    } finally {
+      await supervisor.stop();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 15_000);
+
   it('ignores non-chat broadcasts on the same packet type', async () => {
     const { server, port, broadcast } = await fakeSquadServer();
     const redis = makeRedis();
@@ -176,6 +258,9 @@ describe('RCON chat broadcasts', () => {
         .map(([, payload]) => JSON.parse(payload as string) as Record<string, unknown>)
         .filter((frame) => frame.type === 'chat.message');
       expect(chatFrames).toEqual([]);
+      expect(redis.xadd.mock.calls.filter(([key]) => String(key).startsWith('rcon:chat:'))).toEqual(
+        [],
+      );
     } finally {
       await supervisor.stop();
       await new Promise<void>((r) => server.close(() => r()));

@@ -12,7 +12,7 @@
  * server; the exact live wire format is env-gated and may need a regex tweak
  * when validated against a real Squad host.
  */
-import { CHAT_CATEGORIES, CHAT_MESSAGE } from './chat.js';
+import { CHAT_CATEGORIES, CHAT_MESSAGE, type ParsedChat } from './chat.js';
 import { type LogLine, parseLine } from './patterns.js';
 
 export interface ParsedReport {
@@ -80,29 +80,59 @@ function splitTarget(rest: string): { targetRaw: string; body: string } | null {
   return { targetRaw, body: body || targetRaw };
 }
 
+/**
+ * Reads a `!report <target> <text>` from one chat message, wherever the line
+ * came from. `null` when the text is not a report command or names no target.
+ */
+function reportFromMessage(
+  text: string,
+  ts: string,
+  tick: number,
+  channel: string,
+  reporter: { reporterEos: string | null; reporterSteam: string | null; reporterName: string },
+): ParsedReport | null {
+  const command = REPORT_COMMAND.exec(text);
+  if (!command?.groups) return null;
+  const target = splitTarget(command.groups.rest ?? '');
+  if (!target) return null;
+  return {
+    ts,
+    tick,
+    channel,
+    ...reporter,
+    targetRaw: target.targetRaw,
+    body: target.body,
+  };
+}
+
 export function parseReportFromLogLine(parsed: LogLine): ParsedReport | null {
   if (!CHAT_CATEGORIES.has(parsed.category)) return null;
   const chat = CHAT_MESSAGE.exec(parsed.message);
   if (!chat?.groups) return null;
+  return reportFromMessage(
+    chat.groups.text ?? '',
+    parsed.ts.toISOString(),
+    parsed.tick,
+    chat.groups.channel as string,
+    parseSender(chat.groups.sender ?? ''),
+  );
+}
 
-  const command = REPORT_COMMAND.exec(chat.groups.text ?? '');
-  if (!command?.groups) return null;
-
-  const target = splitTarget(command.groups.rest ?? '');
-  if (!target) return null;
-
-  const { reporterEos, reporterSteam, reporterName } = parseSender(chat.groups.sender ?? '');
-
-  return {
-    ts: parsed.ts.toISOString(),
-    tick: parsed.tick,
-    channel: chat.groups.channel as string,
-    reporterEos,
-    reporterSteam,
-    reporterName,
-    targetRaw: target.targetRaw,
-    body: target.body,
-  };
+/**
+ * Reads a `!report` from a chat line that arrived over RCON (#2), where Squad
+ * delivers in-game chat and no log line exists. The sender is already split
+ * into ids and name; there is no log tick, so it is 0, and the report id is
+ * derived from the receive time and the text like any other.
+ *
+ * @param chat - the parsed chat line
+ * @returns the report, or `null` when the message is not `!report <target> ...`
+ */
+export function parseReportFromChat(chat: ParsedChat): ParsedReport | null {
+  return reportFromMessage(chat.message, chat.ts, 0, chat.channel, {
+    reporterEos: chat.eosId,
+    reporterSteam: chat.steamId64,
+    reporterName: chat.playerName,
+  });
 }
 
 export function parseReportLine(raw: string): ParsedReport | null {

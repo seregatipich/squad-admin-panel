@@ -114,3 +114,14 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 ## Test data
 
 Tests use hardcoded Squad log line samples matching actual v10.3.1 output documented in `§0A.4` and `§0A.5` of the project spec. No external fixtures are required.
+
+## Squad 25594911 roster layouts, A2S and address checks (#126, #127, #96)
+
+| File | What it pins |
+|---|---|
+| `parse-list-players.test.ts`, `parse-list-squads.test.ts` | the new `Party ID` / `Vehicle` / `Tickets` layouts, the old ones, and the unparsed-row counts |
+| `roster-parse-guard.test.ts`, `redact.test.ts` | unreadable vs empty replies, once-a-minute warnings, no ids or names in a sample |
+| `roster-format-change.integration.test.ts` | real supervisor, Redis and Postgres: the new layout is read; an unreadable one is flagged, keeps the last roster and emits no `squad.disbanded` |
+| `a2s.test.ts`, `a2s-probe.test.ts` | probe outcomes, address policy with a stub resolver, the checked address is the one queried, `visible: null` plus `last_success_at` |
+| `client.test.ts` | the RCON client refuses hostnames resolving to loopback, link-local, unspecified or non-allowlisted private addresses (stub resolver) |
+| `chat-broadcast.integration.test.ts` | each chat line is XADDed to `rcon:chat:{id}`; a feed failure does not cost the archive or the live frame |

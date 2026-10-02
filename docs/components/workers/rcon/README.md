@@ -17,6 +17,7 @@ The dial target is `resolveRconHost(server_credentials.rcon_host)`: `NULL` (pane
 - Write `rcon:squads:{serverId}` Redis key (TTL 90 s) after every successful poll.
 - Write `rcon:command-result:{requestId}` Redis key (TTL 120 s) after queued operator commands.
 - Publish `rcon.connected`, `rcon.disconnected`, `rcon.players_polled` envelopes to `events:server:{serverId}`.
+- Hand every parsed in-game chat line to worker-log-ingest on `rcon:chat:{serverId}`, where chat commands, `chat_keyword` automations and `!report` are handled.
 - Emit `rcon.connected` / `rcon.auth_failed` / `rcon.disconnected` / `rcon.reconnect_attempt` / `rcon.targets.changed` diag events to the `diag:queue` Redis Stream via `@squad/diag`.
 - Upsert `players` and `player_name_history` rows in Postgres.
 - Publish `worker:heartbeat:rcon` every 5 s (TTL 30 s).
