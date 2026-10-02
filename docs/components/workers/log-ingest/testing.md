@@ -95,6 +95,16 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 | Publishes heartbeat within 30s of start | `worker:heartbeat:log-ingest` key has TTL ≤ 30s |
 | Exits 0 on SIGTERM within 5s | Graceful shutdown path |
 
+## Stream readers and RCON chat (#27, #2)
+
+| File | What it verifies |
+|---|---|
+| `alerts-stream.test.ts` | real Postgres + Redis: a `custom` rule on `rcon.disconnected` published as a worker-rcon envelope raises one `alert_events` row, a replay raises none, log-derived kinds are left to the log tail, malformed entries do not stop the reader |
+| `rcon-chat.test.ts` | real Postgres + Redis: a chat entry on `rcon:chat:{id}` produces the `AdminWarn` answer to `!rules` / `!stats`, a `chat_keyword` automation run, one `!report` record; a line the log tail already handled is not handled again; malformed entries are dropped |
+| `stream-consumer.test.ts` | group start positions, retry of a failed entry through the reclaim sweep, per-entry dedup, recovery from a deleted stream |
+| `chat-dedupe.test.ts`, `report-parser.test.ts` | the claim keys of both producers, `parseReportFromChat` |
+| `alerts-wiring.test.ts` | `index.ts` starts both readers on connections of their own and claims every chat line and report |
+
 ## Coverage gaps
 
 - `publish.ts` dedup logic is untested in isolation.

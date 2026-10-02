@@ -14,7 +14,10 @@
  */
 
 import dgram from 'node:dgram';
-import { lookup } from 'node:dns/promises';
+import type { LookupAddress } from 'node:dns';
+import { lookup as lookupPromise } from 'node:dns/promises';
+import type { HostCidr } from '@squad/shared-types';
+import { refuseResolvedAddresses } from './address-guard.js';
 
 // A2S_INFO request type
 const A2S_INFO_REQUEST = 0x54;
@@ -160,44 +163,95 @@ export function parseA2SInfoResponse(buf: Buffer): A2SInfoResult | null {
   return { serverName, map, players, maxPlayers, visible };
 }
 
+/** Why an A2S query produced no answer; the panel shows it as "query unavailable". */
+export type A2sFailureReason =
+  | 'timeout'
+  | 'dns_error'
+  | 'refused_address'
+  | 'socket_error'
+  | 'bad_response';
+
+export type A2sQueryOutcome =
+  | { ok: true; info: A2SInfoResult }
+  | { ok: false; reason: A2sFailureReason };
+
+/** Address policy of an operator-supplied (external) host; see `refuseResolvedAddresses`. */
+export interface A2sAddressPolicy {
+  /** Private LAN ranges the operator allowed; `null` leaves every private range reachable. */
+  privateHostAllowlist?: readonly HostCidr[] | null;
+  /** Resolver, `dns.lookup` unless a test substitutes a stub. */
+  lookup?: (host: string, options: { all: true; family: 4 }) => Promise<LookupAddress[]>;
+}
+
+export interface A2sQueryOptions {
+  timeoutMs?: number;
+  /**
+   * Set for an external server: the host is resolved with `all: true` right
+   * before the query and refused when any address is loopback, link-local,
+   * unspecified or a private range outside the allowlist (#96). Left unset
+   * for a panel-hosted container, which is legitimately reached on loopback.
+   */
+  addressPolicy?: A2sAddressPolicy;
+}
+
 /**
- * Sends an A2S_INFO UDP query to the given host:port and returns parsed result.
+ * Sends an A2S_INFO UDP query to the given host:port and says what happened.
  *
  * Handles the challenge flow: if the server responds with a 0x41 challenge,
  * the request is automatically resent with the challenge bytes appended.
  *
- * Only datagrams whose source is the resolved host and port are accepted, so a
+ * The query is sent to the address that was checked, never to the hostname
+ * again, so a resolver that answers differently the second time cannot redirect
+ * it. Only datagrams whose source is that address and port are accepted, so a
  * packet from any other sender cannot pose as the server's reply.
  *
- * Returns null on timeout, error, or unparseable response.
+ * @param host - hostname or IPv4 literal of the server
+ * @param port - the server's query port (UDP)
+ * @param options - timeout and, for external hosts, the address policy
+ * @returns the parsed info, or why there is none
  */
-export async function queryA2S(
+export async function probeA2S(
   host: string,
   port: number,
-  timeoutMs = 2000,
-): Promise<A2SInfoResult | null> {
+  options: A2sQueryOptions = {},
+): Promise<A2sQueryOutcome> {
+  const timeoutMs = options.timeoutMs ?? 2000;
+  const policy = options.addressPolicy;
   let serverAddress: string;
   try {
-    serverAddress = (await lookup(host, { family: 4 })).address;
+    const resolve = policy?.lookup ?? ((name, opts) => lookupPromise(name, opts));
+    const addresses = await resolve(host, { all: true, family: 4 });
+    const first = addresses[0];
+    if (!first) return { ok: false, reason: 'dns_error' };
+    if (
+      policy &&
+      refuseResolvedAddresses(
+        addresses.map((entry) => entry.address),
+        policy.privateHostAllowlist ?? null,
+      ) !== null
+    ) {
+      return { ok: false, reason: 'refused_address' };
+    }
+    serverAddress = first.address;
   } catch {
-    return null;
+    return { ok: false, reason: 'dns_error' };
   }
 
-  return new Promise<A2SInfoResult | null>((resolve) => {
+  return new Promise<A2sQueryOutcome>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const socket = dgram.createSocket('udp4');
 
-    const finish = (result: A2SInfoResult | null) => {
+    const finish = (outcome: A2sQueryOutcome) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       socket.close();
-      resolve(result);
+      resolve(outcome);
     };
 
-    socket.on('error', () => finish(null));
+    socket.on('error', () => finish({ ok: false, reason: 'socket_error' }));
 
     socket.on('message', (msg: Buffer, rinfo: dgram.RemoteInfo) => {
       if (rinfo.address !== serverAddress || rinfo.port !== port) return;
@@ -213,24 +267,46 @@ export async function queryA2S(
         // Extract the 4-byte challenge and resend
         const challenge = msg.subarray(5, 9);
         const challengeRequest = buildA2SChallengeRequest(challenge);
-        socket.send(challengeRequest, 0, challengeRequest.byteLength, port, host, (err) => {
-          if (err) finish(null);
-        });
+        socket.send(
+          challengeRequest,
+          0,
+          challengeRequest.byteLength,
+          port,
+          serverAddress,
+          (err) => {
+            if (err) finish({ ok: false, reason: 'socket_error' });
+          },
+        );
         return;
       }
 
       // Try to parse as a normal A2S_INFO response
-      const result = parseA2SInfoResponse(msg);
-      finish(result);
+      const info = parseA2SInfoResponse(msg);
+      finish(info ? { ok: true, info } : { ok: false, reason: 'bad_response' });
     });
 
     // Set timeout
-    timer = setTimeout(() => finish(null), timeoutMs);
+    timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
 
     // Send initial request
     const request = buildA2SInfoRequest();
-    socket.send(request, 0, request.byteLength, port, host, (err) => {
-      if (err) finish(null);
+    socket.send(request, 0, request.byteLength, port, serverAddress, (err) => {
+      if (err) finish({ ok: false, reason: 'socket_error' });
     });
   });
+}
+
+/**
+ * {@link probeA2S} reduced to the parsed info, or `null` on any failure.
+ *
+ * @returns the parsed A2S_INFO, `null` on timeout, error or an unparseable reply
+ */
+export async function queryA2S(
+  host: string,
+  port: number,
+  timeoutMs = 2000,
+  options: Omit<A2sQueryOptions, 'timeoutMs'> = {},
+): Promise<A2SInfoResult | null> {
+  const outcome = await probeA2S(host, port, { ...options, timeoutMs });
+  return outcome.ok ? outcome.info : null;
 }

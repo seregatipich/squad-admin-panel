@@ -4,7 +4,7 @@
 
 Tails `docker logs -f squad-{uuid}` for every running Squad container via the host bridge, regex-parses `SquadGame.log` lines, and publishes structured `EventEnvelope` entries to per-server Redis Streams.
 
-For an external server (`servers.runtime='external'`) with an enabled `server_log_sources` row it instead opens an SSH session to the game host with the stored key and runs `tail -n 200 -F -- '<log_path>'`, feeding the same parser — this is the panel's equivalent of a bot attached to the server's `screen` console. The session reconnects with exponential backoff (1 s → 60 s), pins the host key on first use (a later change is refused and reported), and publishes `log-source:status:<id>` to Redis (`state`, `lines`, `last_line_at`, `error`, TTL 600 s) for the settings page. Requires `APP_ENCRYPTION_KEY` in the worker environment; without it external sources are skipped with a warning. Chat is **not** in `SquadGame.log` — it only arrives over RCON.
+For an external server (`servers.runtime='external'`) with an enabled `server_log_sources` row it instead opens an SSH session to the game host with the stored key and runs `tail -n 200 -F -- '<log_path>'`, feeding the same parser — this is the panel's equivalent of a bot attached to the server's `screen` console. The session reconnects with exponential backoff (1 s → 60 s), pins the host key on first use (a later change is refused and reported), and publishes `log-source:status:<id>` to Redis (`state`, `lines`, `last_line_at`, `error`, TTL 600 s) for the settings page. Requires `APP_ENCRYPTION_KEY` in the worker environment; without it external sources are skipped with a warning. Chat is **not** in `SquadGame.log` — it only arrives over RCON, so the chat handlers are also fed from worker-rcon's chat feed.
 
 ## Responsibilities
 
@@ -13,6 +13,7 @@ For an external server (`servers.runtime='external'`) with an enabled `server_lo
 - Parse each stdout line with `LogIngestor` (category dispatch + regex matching).
 - Publish events to `events:server:{serverId}` with client-side best-effort dedup.
 - Evaluate the enabled `alert_rules` (`server_crashed`, `unusual_activity`, `admin_login_new_ip`, `custom`) against every parsed event and record each firing in `alert_events` (AUTO-3, [#19](https://github.com/seregatipich/squad-admin-panel/issues/19)) — see [api.md](api.md#alert-rules-alert_events).
+- Evaluate `custom` alert rules on the events worker-rcon publishes (`rcon.disconnected`, ...) from a stream reader, and react to in-game chat received over RCON (`!stats`, `!rules`, `!report`, `chat_keyword` automations) from worker-rcon's `rcon:chat:{serverId}` feed — see [api.md](api.md#chat-reactions-from-rcon-rconchatserverid).
 - Publish `worker:heartbeat:log-ingest` every 5 s.
 - Ask the host bridge to sweep expired rotated `SquadGame*.log` files once on startup and then hourly.
 

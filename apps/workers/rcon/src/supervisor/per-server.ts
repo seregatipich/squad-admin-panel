@@ -1,4 +1,5 @@
-import { handleChat } from '@squad/chat-ingest';
+import { type ChatInput, handleChat } from '@squad/chat-ingest';
+import { RCON_CHAT_STREAM_MAXLEN, type RconChatEntry, rconChatStream } from '@squad/shared-types';
 import { parseRconChatLine } from '../chat.js';
 import { RconClient } from '../client.js';
 import { parseSquadCreatedBroadcast } from '../squad-broadcast.js';
@@ -91,6 +92,7 @@ export class PerServerSupervisor extends ServerPoller {
     const chat = parseRconChatLine(body, receivedAt);
     if (!chat) return;
     this.chatQueue = this.chatQueue
+      .then(() => this.publishChatFeed(chat))
       .then(() =>
         handleChat(
           this.opts.db,
@@ -127,6 +129,42 @@ export class PerServerSupervisor extends ServerPoller {
             'rcon chat ingest failed',
           ),
       );
+  }
+
+  /**
+   * Hands one chat line to worker-log-ingest, which owns everything that reacts
+   * to chat: `!stats` / `!rules` / `!report` answers, `chat_keyword`
+   * automations and report records (#2). Squad never writes chat to the log, so
+   * without this feed none of them can fire. Best-effort and independent of the
+   * archive insert: a failure here costs the reactions to one line, never its
+   * archive row, and the reverse.
+   */
+  private async publishChatFeed(chat: ChatInput): Promise<void> {
+    const entry: RconChatEntry = {
+      v: 1,
+      ts: chat.ts,
+      channel: chat.channel,
+      eos_id: chat.eosId,
+      steam_id64: chat.steamId64,
+      player_name: chat.playerName,
+      message: chat.message,
+    };
+    try {
+      await this.opts.redis.xadd(
+        rconChatStream(this.target.serverId),
+        'MAXLEN',
+        '~',
+        String(RCON_CHAT_STREAM_MAXLEN),
+        '*',
+        'entry',
+        JSON.stringify(entry),
+      );
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'rcon chat feed publish failed',
+      );
+    }
   }
 
   /** Sleeps `ms`, or returns once `stop()` fires; the timer never outlives the call. */

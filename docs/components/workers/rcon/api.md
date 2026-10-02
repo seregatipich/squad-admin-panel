@@ -27,10 +27,33 @@ Written by `StatusPublisher.writeStatus()` after every state transition and ever
 }
 ```
 
-Fields `player_count`, `last_poll_at`, `tickrate_rt`, `current_map`, `next_level`, `next_layer`, `game_mode`, and `squad_count` are present only when `state = "connected"`.
+Fields `player_count`, `last_poll_at`, `tickrate_rt`, `current_map`, `next_level`, `next_layer`, `game_mode`, `squad_count` and `roster_parse_error` are present only when `state = "connected"`.
+
+`roster_parse_error` is `null` normally. It is `["players"]`, `["squads"]` or both when the `ListPlayers` / `ListSquads` reply listed rows and none of them parsed ([#126](https://github.com/seregatipich/squad-admin-panel/issues/126)): the reply format changed and the parser no longer reads it. The matching `player_count` / `squad_count` are then `null` (unknown, not 0), `rcon:roster` / `rcon:squads` keep their last good value, and the poll skips everything derived from the unreadable list (player upserts, kit time, sessions, `rcon.players_polled`, seeding, squad history). The worker logs a warning with a redacted sample — field names and numbers only, never ids or names — at most once a minute per problem. A `ShowServerInfo` reply that yields no map name and a `ShowNextMap` reply in an unknown format are logged the same way (`problem: server_info` with the reply's field names, `problem: next_map`).
 Fields `backoffMs` and `reason` are present only when `state = "connecting"`.
 
 The API returns `{ state: "not_polled" }` when the key is absent. The UI renders `"— (сервер не запущен)"` ("— (server is not running)").
+
+## Redis key: `a2s:status:{serverId}`
+
+The best-effort A2S_INFO query of the server's query port, written by the full poll (every 30 s), TTL 90 s.
+
+```json
+{ "visible": true, "server_name": "...", "map": "...", "players": 42, "max_players": 100,
+  "latency_ms": 31, "queried_at": "<ISO-8601>", "last_success_at": "<ISO-8601>" }
+```
+
+after three consecutive probes without an answer:
+
+```json
+{ "visible": null, "reason": "timeout", "queried_at": "<ISO-8601>", "last_success_at": "<ISO-8601> | null" }
+```
+
+`visible` is what the server reported (`false` = it answered and says it is not listed); `null` means the query got no answer and says nothing about visibility ([#127](https://github.com/seregatipich/squad-admin-panel/issues/127)). `reason` is `timeout`, `dns_error`, `refused_address`, `socket_error` or `bad_response`. `last_success_at` survives a worker restart while the previous entry is still cached. Workers before this change wrote `visible: false, reason: "timeout"` for a timeout; `GET /api/v1/servers` and `/servers/{id}` normalise that to `visible: null`. For an external server the host is resolved with `dns.lookup({ all: true })` right before the query and refused (`refused_address`) when any answer is loopback, link-local, unspecified or a private range outside `EXTERNAL_HOST_PRIVATE_ALLOWLIST`; the query goes to the address that was checked, never to the hostname again ([#96](https://github.com/seregatipich/squad-admin-panel/issues/96)).
+
+## Redis stream: `rcon:chat:{serverId}`
+
+Every parsed in-game chat line, for `worker-log-ingest` ([#2](https://github.com/seregatipich/squad-admin-panel/issues/2)): `XADD rcon:chat:{id} MAXLEN ~ 2000 * entry <json>` with `{ v: 1, ts, channel, eos_id, steam_id64, player_name, message }`. Best-effort and independent of the `chat_messages` archive write.
 
 ## Redis key: `rcon:squads:{serverId}`
 

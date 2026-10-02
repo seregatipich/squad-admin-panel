@@ -18,6 +18,7 @@ import {
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { useApiResource } from '@/lib/use-polled-resource';
 import { nextBackoffMs } from '@/lib/ws-backoff';
+import { type A2sStatus, a2sView } from './a2s-view';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
 import { MapWidget } from './map-widget';
@@ -74,13 +75,6 @@ interface ContainerRuntime {
 interface HostInfo {
   address: string;
   hostname: string;
-}
-
-interface A2sStatus {
-  visible: boolean;
-  server_name?: string;
-  latency_ms?: number;
-  reason?: string;
 }
 
 interface ServerResponse {
@@ -412,6 +406,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     label: server.status,
   };
   const rcon = rconView(rcon_status);
+  const a2s = a2sView(data.a2s_status);
 
   return (
     <PageContainer>
@@ -476,8 +471,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             />
             <GroupedRow
               label="Порт запросов"
-              description="UDP"
-              control={<span className="font-mono">{settings.query_port}</span>}
+              description={a2s?.detail ? `UDP · ${a2s.detail}` : 'UDP'}
+              control={
+                <>
+                  <span className="font-mono">{settings.query_port}</span>
+                  {a2s && <StatusDot state={a2s.state} label={a2s.label} size="sm" />}
+                </>
+              }
             />
             {external ? null : (
               <GroupedRow

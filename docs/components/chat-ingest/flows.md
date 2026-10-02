@@ -22,6 +22,8 @@ handleChat(db, redis, { serverId, chat, source, playerIds, on*Error }, detector)
 
 Both consumers call `handleChat` without awaiting on the hot path and attach a `.catch` that logs. In `worker-rcon` the calls are chained on a per-server `chatQueue` promise so lines for one server are handled in order; in `worker-log-ingest` each `onChat` invocation starts its own `handleChat` call.
 
+`worker-rcon` additionally hands every parsed RCON chat line to `worker-log-ingest` on the `rcon:chat:{serverId}` stream, where the command, `chat_keyword` automation and `!report` handlers run (they are not part of `handleChat`); see [worker-log-ingest](../workers/log-ingest/api.md#chat-reactions-from-rcon-rconchatserverid).
+
 The API process subscribes to `live-bus` and forwards `chat.message` frames to browsers over the live WebSocket; see [`live-bus`](../live-bus/README.md).
 
 ## Player resolution

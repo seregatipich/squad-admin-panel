@@ -5,6 +5,7 @@ import {
   buildA2SChallengeRequest,
   buildA2SInfoRequest,
   parseA2SInfoResponse,
+  probeA2S,
   queryA2S,
 } from '../src/a2s.js';
 
@@ -264,6 +265,172 @@ describe('queryA2S', () => {
     } finally {
       server.close();
       spoofer.close();
+    }
+  });
+});
+
+describe('probeA2S outcomes', () => {
+  async function silentServer(): Promise<{ socket: dgram.Socket; port: number }> {
+    const socket = dgram.createSocket('udp4');
+    await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve));
+    return { socket, port: socket.address().port };
+  }
+
+  it('returns the parsed info on a reply', async () => {
+    const { socket, port } = await silentServer();
+    socket.on('message', (_msg, rinfo) => {
+      socket.send(
+        buildValidA2SResponse('OK', 'Map', 'squad', 'Squad', 3, 80, 0, 0),
+        rinfo.port,
+        rinfo.address,
+      );
+    });
+    try {
+      const outcome = await probeA2S('127.0.0.1', port, { timeoutMs: 1000 });
+      expect(outcome).toMatchObject({
+        ok: true,
+        info: { serverName: 'OK', players: 3, visible: true },
+      });
+    } finally {
+      socket.close();
+    }
+  });
+
+  it('reports a server that never answers as a timeout, not as hidden', async () => {
+    const { socket, port } = await silentServer();
+    try {
+      expect(await probeA2S('127.0.0.1', port, { timeoutMs: 80 })).toEqual({
+        ok: false,
+        reason: 'timeout',
+      });
+    } finally {
+      socket.close();
+    }
+  });
+
+  it('reports an unparseable reply as bad_response', async () => {
+    const { socket, port } = await silentServer();
+    socket.on('message', (_msg, rinfo) => {
+      socket.send(Buffer.from([0xff, 0xff, 0xff, 0xff, 0x6d, 0x00]), rinfo.port, rinfo.address);
+    });
+    try {
+      expect(await probeA2S('127.0.0.1', port, { timeoutMs: 1000 })).toEqual({
+        ok: false,
+        reason: 'bad_response',
+      });
+    } finally {
+      socket.close();
+    }
+  });
+
+  it('reports a host that does not resolve as dns_error', async () => {
+    const lookup = async () => {
+      throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+    };
+    expect(
+      await probeA2S('nope.example', 27165, { timeoutMs: 80, addressPolicy: { lookup } }),
+    ).toEqual({ ok: false, reason: 'dns_error' });
+  });
+});
+
+describe('probeA2S address policy (#96)', () => {
+  /** A UDP server on loopback that counts the queries it receives. */
+  async function countingServer(): Promise<{
+    socket: dgram.Socket;
+    port: number;
+    received: () => number;
+  }> {
+    const socket = dgram.createSocket('udp4');
+    await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve));
+    let received = 0;
+    socket.on('message', (_msg, rinfo) => {
+      received += 1;
+      socket.send(
+        buildValidA2SResponse('LOOP', 'Map', 'squad', 'Squad', 1, 2, 0, 0),
+        rinfo.port,
+        rinfo.address,
+      );
+    });
+    return { socket, port: socket.address().port, received: () => received };
+  }
+
+  const answer =
+    (...addresses: string[]) =>
+    async () =>
+      addresses.map((address) => ({ address, family: 4 }));
+
+  it.each([
+    ['loopback', ['127.0.0.1']],
+    ['link-local', ['169.254.169.254']],
+    ['unspecified', ['0.0.0.0']],
+    ['a public answer with a loopback one behind it', ['93.184.216.34', '127.0.0.1']],
+    ['an IPv4-mapped loopback', ['::ffff:127.0.0.1']],
+  ])(
+    'refuses a hostname that resolves to %s without sending a packet',
+    async (_label, addresses) => {
+      const { socket, port, received } = await countingServer();
+      try {
+        const outcome = await probeA2S('rebind.example', port, {
+          timeoutMs: 200,
+          addressPolicy: { lookup: answer(...addresses) },
+        });
+        expect(outcome).toEqual({ ok: false, reason: 'refused_address' });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(received()).toBe(0);
+      } finally {
+        socket.close();
+      }
+    },
+  );
+
+  it('refuses a private address outside the allowlist and allows one inside it', async () => {
+    const lookup = answer('10.1.2.3');
+    expect(
+      await probeA2S('lan.example', 27165, {
+        timeoutMs: 80,
+        addressPolicy: { lookup, privateHostAllowlist: [] },
+      }),
+    ).toEqual({ ok: false, reason: 'refused_address' });
+    // Inside the allowlist the query goes out (nothing listens on 10.1.2.3, so it times out).
+    const allowed = await probeA2S('lan.example', 27165, {
+      timeoutMs: 80,
+      addressPolicy: {
+        lookup,
+        privateHostAllowlist: [{ address: (0xffffn << 32n) | 0x0a000000n, prefix: 104 }],
+      },
+    });
+    expect(allowed).toEqual({ ok: false, reason: 'timeout' });
+  });
+
+  it('queries the address it checked, never the hostname again', async () => {
+    const { socket, port, received } = await countingServer();
+    let lookups = 0;
+    // First answer is what the check sees; a second resolution would be
+    // loopback, which is where the test server listens.
+    const lookup = async () => {
+      lookups += 1;
+      return [{ address: lookups === 1 ? '93.184.216.34' : '127.0.0.1', family: 4 }];
+    };
+    try {
+      const outcome = await probeA2S('flip.example', port, {
+        timeoutMs: 150,
+        addressPolicy: { lookup },
+      });
+      expect(outcome).toEqual({ ok: false, reason: 'timeout' });
+      expect(lookups).toBe(1);
+      expect(received()).toBe(0);
+    } finally {
+      socket.close();
+    }
+  });
+
+  it('does not apply the policy to a panel-hosted server on loopback', async () => {
+    const { socket, port } = await countingServer();
+    try {
+      const outcome = await probeA2S('127.0.0.1', port, { timeoutMs: 1000 });
+      expect(outcome).toMatchObject({ ok: true, info: { serverName: 'LOOP' } });
+    } finally {
+      socket.close();
     }
   });
 });

@@ -19,12 +19,15 @@ import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { sinkDepsFromEnv } from './alerts/sink.js';
 import { AlertRuleCache, handleAlertEvent } from './alerts/store.js';
+import { runAlertStreamConsumer } from './alerts/stream.js';
 import { handleAltBanConnect } from './alt-ban/store.js';
 import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
 import { BoundedChain } from './bounded-chain.js';
 import { handleChatCommand } from './chat/commands.js';
+import { claimChatLine, claimReport } from './chat/dedupe.js';
+import { runRconChatConsumer } from './chat/rcon-chat.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { decrypt, deserialize, loadEncryptionKey } from './crypto.js';
 import { dropCutoverServers } from './cutover.js';
@@ -203,9 +206,14 @@ async function main() {
           .catch(() => undefined);
       },
       onReport: (report) => {
+        // The same report can also arrive over worker-rcon's chat feed
+        // (chat/rcon-chat.ts); the claim keeps it to one record.
         reportChain = reportChain
-          .then(() => handleReport(db, redis, { serverId, report }))
-          .then(() => undefined)
+          .then(async () => {
+            if (await claimReport(redis, serverId, report)) {
+              await handleReport(db, redis, { serverId, report });
+            }
+          })
           .catch((err) => log.error({ err: (err as Error).message }, 'report handling failed'));
       },
       onMatch: (command) => {
@@ -238,15 +246,22 @@ async function main() {
         // AUTO-4 (#75): answer in-game `!stats`/`!rules`/`!report` over RCON.
         // Independent of the chat-message record above; `!report` delegates the
         // report record itself to REPORT-1 via the ingestor's onReport path.
-        handleChatCommand(db, redis, { serverId, chat, playerIds }).catch((err) =>
-          log.error({ err: (err as Error).message }, 'chat command handling failed'),
-        );
         // AUTO-1 (#72): fire automation rules whose chat_keyword condition
         // matches this line (chat is not on the event stream the automation
         // worker reads, so it is evaluated here).
-        handleAutomationChat(db, redis, { serverId, chat }).catch((err) =>
-          log.error({ err: (err as Error).message }, 'automation chat handling failed'),
-        );
+        // Squad builds that log chat also deliver it over RCON (see
+        // chat/rcon-chat.ts); the claim keeps each line to one reaction.
+        claimChatLine(redis, serverId, chat)
+          .then((first) => {
+            if (!first) return;
+            handleChatCommand(db, redis, { serverId, chat, playerIds }).catch((err) =>
+              log.error({ err: (err as Error).message }, 'chat command handling failed'),
+            );
+            handleAutomationChat(db, redis, { serverId, chat }).catch((err) =>
+              log.error({ err: (err as Error).message }, 'automation chat handling failed'),
+            );
+          })
+          .catch((err) => log.error({ err: (err as Error).message }, 'chat reaction claim failed'));
       },
       onVote: (command) => {
         voteChain = voteChain
@@ -533,15 +548,39 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
+  // Stream readers that work outside the log tail: the alert rules of events
+  // worker-rcon publishes (#27) and the chat worker-rcon receives over RCON
+  // (#2). Each blocks on its own connection; the handlers use `redis`.
+  let stopping = false;
+  const consumerConnections = [redis.duplicate(), redis.duplicate()] as const;
+  for (const connection of consumerConnections) {
+    connection.on('error', (err: Error) =>
+      log.warn({ err: err.message }, 'stream consumer redis error (will retry)'),
+    );
+  }
+  const consumerLoops = [
+    runAlertStreamConsumer(
+      { db, redis, rules: alertRuleCache, sink: alertSink, log },
+      consumerConnections[0],
+      () => stopping,
+    ),
+    runRconChatConsumer({ db, redis, playerIds, log }, consumerConnections[1], () => stopping),
+  ].map((loop) =>
+    loop.catch((err: Error) => log.error({ err: err.message }, 'stream consumer stopped')),
+  );
+
   let interval: NodeJS.Timeout | null = null;
   const shutdown = createGracefulShutdownController({
     cleanup: async (sig) => {
       log.info({ sig }, 'shutdown');
+      stopping = true;
       stopHeartbeat();
       stopLogRetentionSweep();
       clearInterval(geoIpRefreshTimer);
       if (interval) clearInterval(interval);
       manager.stopAll();
+      await Promise.all(consumerLoops);
+      for (const connection of consumerConnections) await connection.quit().catch(() => undefined);
       await redis.quit().catch(() => undefined);
       await bridge.close();
     },

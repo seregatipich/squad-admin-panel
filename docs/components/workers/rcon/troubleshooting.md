@@ -63,3 +63,19 @@ docker compose logs worker-rcon -f --since 2m
 # Recent events from a server
 redis-cli XREVRANGE events:server:<uuid> + - COUNT 10
 ```
+
+## The roster shows no players but the server is full
+
+**Symptom:** `rcon:status:{id}` has `roster_parse_error` set, `player_count` / `squad_count` are `null`, and worker-rcon logs `ListPlayers reply has rows but none parsed` (or `ListSquads ...`).
+
+**Cause:** a Squad update changed the `ListPlayers` / `ListSquads` layout and the strict parsers in `parse-list-players.ts` / `parse-list-squads.ts` no longer match ([#126](https://github.com/seregatipich/squad-admin-panel/issues/126)). The warning's `sample` shows the new layout with every value masked, so the new field names are visible without any player data.
+
+**Fix:** extend the regex in the parser to accept the new fields (keep the old layout accepted) and add the sample as a fixture. Until then the panel keeps the last good roster and does not close sessions or emit squad events.
+
+## `a2s:status` says the query is unavailable
+
+**Symptom:** `a2s:status:{id}` is `{ "visible": null, "reason": "timeout", ... }` while `rcon:status:{id}.state` is `connected`.
+
+**Cause:** nothing answered on the UDP query port. RCON works on a different socket, so the server is up; the game process may not be servicing its query socket (#127), or a firewall drops UDP. `reason: refused_address` means the host resolved to a loopback, link-local, unspecified or non-allowlisted private address. The panel shows this as a warning on the query-port row with the time of the last answer, not as an offline server.
+
+**Diagnostic:** `ss -ulnp | grep <query port>` on the game host: a `Recv-Q` that is full and never drains means the process does not read the socket.
