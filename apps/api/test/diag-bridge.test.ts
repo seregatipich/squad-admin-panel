@@ -21,7 +21,13 @@ let server: Server;
 let socketPath: string;
 
 beforeEach(() => {
-  socketPath = join(tmpdir(), `diag-bridge-test-${Date.now()}-${Math.random()}.sock`);
+  // A Unix socket path is capped near 104 bytes on macOS and its tmpdir already
+  // takes about 50, so a full-precision Math.random() in the name overflowed it
+  // on some draws (listen EINVAL).
+  socketPath = join(
+    tmpdir(),
+    `diag-bridge-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.sock`,
+  );
   try {
     unlinkSync(socketPath);
   } catch {}

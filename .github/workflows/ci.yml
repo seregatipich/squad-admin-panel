@@ -449,6 +449,15 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Stryker's incremental report maps every mutant to the hashes of the source and the tests it
+      # ran against, so a restored report only skips mutants whose code and tests are unchanged;
+      # a changed file is mutated in full. A cache miss runs the whole suite as before.
+      - name: Restore the Stryker incremental report
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/shared-config/reports/stryker-incremental.json
+          key: stryker-incremental-${{ github.sha }}
+          restore-keys: stryker-incremental-
       - name: Run shared-config mutation tests (Stryker)
         run: pnpm turbo run test:mutation --filter=@squad/shared-config
 
@@ -552,28 +561,15 @@ jobs:
           CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
         run: bash scripts/test-backup-restore.sh
 
-  # The single required status check. It fails unless every job succeeded —
-  # including when one was cancelled or skipped; only the mutation job may skip,
-  # when shared-config did not change. It then merges the API and web shards'
-  # blob reports so their coverage thresholds apply to the whole suite, which
-  # no single shard can meet on its own.
-  gate:
+  # Merges the API and web shards' blob reports so their coverage thresholds apply to the whole
+  # suite, which no single shard can meet on its own. It waits only for those two suites, so the
+  # merge overlaps the slower jobs (the package shards, the image build) instead of starting after
+  # all of them.
+  coverage:
     runs-on: ubuntu-24.04
-    needs: [branch-guard, lint, test-api, test-web, test-packages, scripts, changes, mutation, go, images, backup]
-    if: always()
+    needs: [test-api, test-web]
     timeout-minutes: 15
     steps:
-      - name: Require every check
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          failed=$(jq -r 'to_entries[]
-            | select(.value.result != "success" and (.key != "mutation" or .value.result != "skipped"))
-            | "\(.key)=\(.value.result)"' <<<"${NEEDS}")
-          if [[ -n "${failed}" ]]; then
-            echo "::error::not every check passed: $(tr '\n' ' ' <<<"${failed}")"
-            exit 1
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Put the requested Node version on PATH before pnpm/action-setup so pnpm
       # bootstraps through Node rather than a platform-specific standalone exe.
@@ -607,3 +603,24 @@ jobs:
       - name: Enforce web coverage on the merged shards
         working-directory: apps/web
         run: pnpm exec vitest run --merge-reports --coverage
+
+  # The single required status check. It fails unless every job succeeded —
+  # including when one was cancelled or skipped; only the mutation job may skip,
+  # when shared-config did not change.
+  gate:
+    runs-on: ubuntu-24.04
+    needs: [branch-guard, lint, test-api, test-web, test-packages, scripts, changes, mutation, go, images, backup, coverage]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Require every check
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(jq -r 'to_entries[]
+            | select(.value.result != "success" and (.key != "mutation" or .value.result != "skipped"))
+            | "\(.key)=\(.value.result)"' <<<"${NEEDS}")
+          if [[ -n "${failed}" ]]; then
+            echo "::error::not every check passed: $(tr '\n' ' ' <<<"${failed}")"
+            exit 1
+          fi

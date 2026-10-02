@@ -128,7 +128,7 @@ for gone in 'Require a green dev CI run' 'check-runner-health' 'lcov.info' 'dock
 done
 
 ci_jobs=$(job_names "$ci_workflow")
-expected_jobs='branch-guard lint test-api test-web test-packages scripts changes mutation go images backup gate'
+expected_jobs='branch-guard lint test-api test-web test-packages scripts changes mutation go images backup coverage gate'
 [ "$(printf '%s\n' "$ci_jobs" | tr '\n' ' ' | sed 's/ $//')" = "$expected_jobs" ] ||
   fail "ci jobs are '$(printf '%s\n' "$ci_jobs" | tr '\n' ' ')', expected '$expected_jobs'"
 
@@ -307,6 +307,17 @@ has_line "$mutation" "    if: needs.changes.outputs.mutation == 'true'" ||
   fail 'Stryker is not gated on a shared-config change'
 has_text "$mutation" 'pnpm turbo run test:mutation --filter=@squad/shared-config' ||
   fail 'mutation job does not run Stryker on shared-config'
+printf '%s\n' "$mutation" | grep -Eq 'uses:[[:space:]]+actions/cache@[0-9a-f]{40}' ||
+  fail 'mutation does not restore the Stryker incremental report through a SHA-pinned actions/cache'
+has_line "$mutation" '          path: packages/shared-config/reports/stryker-incremental.json' ||
+  fail 'mutation caches something other than the Stryker incremental report'
+stryker_config="$repo_root/packages/shared-config/stryker.config.json"
+[ "$(jq -r '.incremental' "$stryker_config")" = true ] ||
+  fail 'Stryker incremental mode is off, so the mutation cache would never be used'
+[ "$(jq -r '.incrementalFile' "$stryker_config")" = reports/stryker-incremental.json ] ||
+  fail 'Stryker writes its incremental report somewhere the mutation job does not cache'
+[ "$(jq -r '.concurrency' "$stryker_config")" -ge 4 ] ||
+  fail 'Stryker runs with fewer workers than a hosted runner has vCPUs'
 
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
@@ -392,16 +403,24 @@ for verdict in 'mutation=failure' 'mutation=cancelled' 'test-api=skipped' 'test-
   fi
 done
 
+# The coverage merge lives in its own job that waits only for the two sharded suites, so it overlaps
+# the slower jobs; the gate itself stays a thin aggregate that needs no toolchain.
+coverage=$(job_block "$ci_workflow" coverage)
+has_line "$coverage" '    needs: [test-api, test-web]' ||
+  fail 'the coverage merge does not wait for exactly the two sharded suites'
 for package in api web; do
-  has_line "$gate" "          pattern: vitest-blob-${package}-*" ||
-    fail "the gate does not download every ${package} shard's blob report"
-  has_line "$gate" "          path: apps/${package}/.vitest-reports" ||
-    fail "the gate does not place the ${package} blobs where --merge-reports reads them"
-  has_line "$gate" "        working-directory: apps/${package}" ||
-    fail "the gate does not merge in apps/${package}, whose vitest.config.ts holds the thresholds"
+  has_line "$coverage" "          pattern: vitest-blob-${package}-*" ||
+    fail "the coverage job does not download every ${package} shard's blob report"
+  has_line "$coverage" "          path: apps/${package}/.vitest-reports" ||
+    fail "the coverage job does not place the ${package} blobs where --merge-reports reads them"
+  has_line "$coverage" "        working-directory: apps/${package}" ||
+    fail "the coverage job does not merge in apps/${package}, whose vitest.config.ts holds the thresholds"
 done
-[ "$(printf '%s\n' "$gate" | grep -Fxc '        run: pnpm exec vitest run --merge-reports --coverage')" -eq 2 ] ||
-  fail 'the gate does not enforce merged coverage for both sharded suites'
+[ "$(printf '%s\n' "$coverage" | grep -Fxc '        run: pnpm exec vitest run --merge-reports --coverage')" -eq 2 ] ||
+  fail 'the coverage job does not enforce merged coverage for both sharded suites'
+if has_text "$gate" 'pnpm install' || has_text "$gate" 'vitest'; then
+  fail 'the gate installs the toolchain or runs tests again instead of only aggregating results'
+fi
 
 # --- deploy.yml: dev pushes build on hosted VMs and deploy over SSH. ---
 deploy_on=$(sed -n '/^on:$/,/^[a-z]/p' "$deploy_workflow")

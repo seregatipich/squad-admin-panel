@@ -58,7 +58,7 @@ describe('sendRconCommandViaWorker', () => {
       serverId: 'srv-1',
       command: 'AdminReloadServerConfig',
       requestId: 'req-1',
-      timeoutMs: 5,
+      timeoutMs: 5_000, // the result is already stored, so this returns on the first poll; a tiny budget flakes under load
       pollIntervalMs: 0,
     });
 
@@ -117,7 +117,7 @@ describe('sendRconCommandViaWorker', () => {
       serverId: 'srv-1',
       command: 'AdminEndMatch',
       requestId: 'req-1',
-      timeoutMs: 5,
+      timeoutMs: 5_000, // the result is already stored, so this returns on the first poll; a tiny budget flakes under load
       pollIntervalMs: 0,
     });
 
