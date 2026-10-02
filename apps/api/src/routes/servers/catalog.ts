@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { canViewIps, redactPayloadIp } from '../../lib/ip-visibility.js';
 import { isExternalRuntime } from '../../lib/server-runtime.js';
 import { containerName, serverIdParams } from '../../lib/servers/common.js';
-import { readSeedingSummary, safeJsonParse } from '../../lib/servers/status-cache.js';
+import {
+  normalizeA2sStatus,
+  readSeedingSummary,
+  safeJsonParse,
+} from '../../lib/servers/status-cache.js';
 
 const HOST_INFO_TTL_MS = 60_000;
 
@@ -83,7 +87,9 @@ const serverCatalogRoutes: FastifyPluginAsync = async (app) => {
             player_count: playerCount,
             last_poll_at: lastPollAt,
             a2s_status: a2sRaw
-              ? safeJsonParse(a2sRaw, app.log, { serverId: r.id, key: 'a2s:status' })
+              ? normalizeA2sStatus(
+                  safeJsonParse(a2sRaw, app.log, { serverId: r.id, key: 'a2s:status' }),
+                )
               : null,
             crash_loop: r.status === 'failed',
             seeding,
@@ -137,7 +143,9 @@ const serverCatalogRoutes: FastifyPluginAsync = async (app) => {
         }
       }
       const a2s_status: unknown = a2sRaw
-        ? safeJsonParse(a2sRaw, app.log, { serverId: row.id, key: 'a2s:status' })
+        ? normalizeA2sStatus(
+            safeJsonParse(a2sRaw, app.log, { serverId: row.id, key: 'a2s:status' }),
+          )
         : null;
 
       const external = isExternalRuntime(row.runtime);

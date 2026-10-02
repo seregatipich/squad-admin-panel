@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serverPatch, serverSettingsUpdate } from '../src/server-settings.js';
+import { a2sStatus, serverPatch, serverSettingsUpdate } from '../src/server-settings.js';
 
 describe('serverSettingsUpdate port uniqueness', () => {
   it('accepts distinct optional ports', () => {
@@ -112,5 +112,32 @@ describe('serverPatch license pairing (SRV-6 #45)', () => {
       expect(parsed.data.license_key).toBe('k');
     }
     expect(serverPatch.safeParse({ license_id: '   ', license_key: 'k' }).success).toBe(false);
+  });
+});
+
+describe('a2sStatus (#127)', () => {
+  const at = '2026-10-02T11:00:00.000Z';
+
+  it('accepts an answered query with the time of the last success', () => {
+    expect(
+      a2sStatus.safeParse({ visible: true, players: 3, queried_at: at, last_success_at: at })
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts an unanswered query: visible null, a reason and the last success', () => {
+    const parsed = a2sStatus.safeParse({
+      visible: null,
+      reason: 'timeout',
+      queried_at: at,
+      last_success_at: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('still reads an entry of the previous worker, which has no last_success_at', () => {
+    expect(a2sStatus.safeParse({ visible: false, reason: 'timeout', queried_at: at }).success).toBe(
+      true,
+    );
   });
 });

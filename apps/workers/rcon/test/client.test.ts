@@ -363,6 +363,86 @@ describe('RconClient restricted-address guard (#30, finding #333)', () => {
   });
 });
 
+describe('RconClient resolved-address guard with a stub resolver (#96)', () => {
+  /**
+   * A stand-in for `dns.lookup` that answers with `addresses` in whichever
+   * callback shape the caller asked for (`all: true` gets the list).
+   */
+  function stubLookup(addresses: string[]) {
+    const calls: string[] = [];
+    const lookup = ((
+      hostname: string,
+      options: { all?: boolean },
+      callback: (err: null, address: unknown, family?: number) => void,
+    ) => {
+      calls.push(hostname);
+      const entries = addresses.map((address) => ({
+        address,
+        family: address.includes(':') ? 6 : 4,
+      }));
+      if (options?.all) callback(null, entries);
+      else callback(null, entries[0]?.address, entries[0]?.family);
+    }) as never;
+    return { lookup, calls };
+  }
+
+  async function connectError(addresses: string[], extra = {}): Promise<Error> {
+    const { lookup, calls } = stubLookup(addresses);
+    const client = new RconClient(
+      makeOpts({
+        host: 'rcon.example.com',
+        refuseRestrictedAddresses: true,
+        dnsLookup: lookup,
+        ...extra,
+      }),
+    );
+    const error = await client.connect().then(
+      () => new Error('connected'),
+      (err: Error) => err,
+    );
+    expect(calls).toContain('rcon.example.com');
+    await client.close();
+    return error;
+  }
+
+  it.each([
+    ['loopback', ['127.0.0.1']],
+    ['IPv6 loopback', ['::1']],
+    ['link-local (cloud metadata)', ['169.254.169.254']],
+    ['unspecified', ['0.0.0.0']],
+    ['IPv6 unspecified', ['::']],
+    ['IPv4-mapped loopback', ['::ffff:127.0.0.1']],
+    ['one loopback among public addresses', ['93.184.216.34', '127.0.0.1']],
+  ])('refuses a public hostname resolving to %s', async (_label, addresses) => {
+    const error = await connectError(addresses);
+    expect(error.message).toMatch(/restricted address/);
+    expect((error as NodeJS.ErrnoException).code).toBe('ERESTRICTED');
+  });
+
+  it('refuses a private address outside the allowlist', async () => {
+    const error = await connectError(['10.9.8.7'], { privateHostAllowlist: [] });
+    expect(error.message).toMatch(/private address outside the allowlist/);
+  });
+
+  it('lets a public answer through to the dial', async () => {
+    // 192.0.2.1 is TEST-NET-1: not restricted, and nothing answers there.
+    const error = await connectError(['192.0.2.1']);
+    expect((error as NodeJS.ErrnoException).code).not.toBe('ERESTRICTED');
+  });
+
+  it('does not consult the resolver for a panel-hosted server', async () => {
+    const { lookup, calls } = stubLookup(['127.0.0.1']);
+    // `localhost` is a name, so a refusing client would resolve it through the
+    // stub; without the flag the stub must stay unused (nothing listens on port 9).
+    const client = new RconClient(
+      makeOpts({ host: 'localhost', port: 9, dnsLookup: lookup, connectTimeoutMs: 500 }),
+    );
+    await client.connect().catch(() => undefined);
+    await client.close();
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('RconClient private-network allowlist (#30, finding #333)', () => {
   it('refuses a private literal outside the allowlist', async () => {
     const client = new RconClient(

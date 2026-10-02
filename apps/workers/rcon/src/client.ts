@@ -2,6 +2,7 @@ import { type LookupAddress, lookup } from 'node:dns';
 import { createConnection, isIP, type LookupFunction, type Socket } from 'node:net';
 import { type HostCidr, isPrivateHostAllowed, isRestrictedNetworkHost } from '@squad/shared-types';
 import type { Logger } from 'pino';
+import { refuseResolvedAddresses } from './address-guard.js';
 import {
   encodePacket,
   type RconPacket,
@@ -37,6 +38,8 @@ export interface RconClientOptions {
    * resolved address. `undefined`/`null` leaves every private range reachable.
    */
   privateHostAllowlist?: readonly HostCidr[] | null;
+  /** Resolver for the restricted-address guard; defaults to `dns.lookup`. Tests pass a stub. */
+  dnsLookup?: DnsLookup;
   /**
    * Called with the raw body of every unsolicited broadcast packet Squad
    * pushes (chat, admin camera, squad creation, kicks). Interleaved with
@@ -46,17 +49,24 @@ export interface RconClientOptions {
   onBroadcast?: (body: string) => void;
 }
 
+/** The resolver `net.connect` consults; `dns.lookup` unless a test substitutes a stub. */
+export type DnsLookup = typeof lookup;
+
 /**
  * `dns.lookup` that fails with an error instead of returning an address the
  * panel must not dial: a restricted one, or a private one outside
  * `privateHostAllowlist`. Handles both the single-address and the `all: true`
- * (happy-eyeballs) callback shapes `net.connect` may ask for.
+ * (happy-eyeballs) callback shapes `net.connect` may ask for, and refuses the
+ * whole answer when any of its addresses is refused. `net.connect` dials the
+ * address this callback returns, so there is no second resolution a rebinding
+ * resolver could answer differently.
  */
 function makeRestrictedAddressLookup(
   privateHostAllowlist: readonly HostCidr[] | null,
+  resolve: DnsLookup,
 ): LookupFunction {
   return (hostname, options, callback) => {
-    lookup(hostname, options, (err, address, family) => {
+    resolve(hostname, options, (err, address, family) => {
       if (err) {
         callback(err, address, family);
         return;
@@ -64,22 +74,14 @@ function makeRestrictedAddressLookup(
       const addresses = Array.isArray(address)
         ? (address as LookupAddress[]).map((entry) => entry.address)
         : [address];
-      if (addresses.some((candidate) => isRestrictedNetworkHost(candidate))) {
+      const refusal = refuseResolvedAddresses(addresses, privateHostAllowlist);
+      if (refusal !== null) {
+        const reason =
+          refusal === 'restricted'
+            ? 'resolves to a restricted address'
+            : 'resolves to a private address outside the allowlist';
         callback(
-          Object.assign(new Error(`rcon host ${hostname} resolves to a restricted address`), {
-            code: 'ERESTRICTED',
-          }),
-          address,
-          family,
-        );
-        return;
-      }
-      if (addresses.some((candidate) => !isPrivateHostAllowed(candidate, privateHostAllowlist))) {
-        callback(
-          Object.assign(
-            new Error(`rcon host ${hostname} resolves to a private address outside the allowlist`),
-            { code: 'ERESTRICTED' },
-          ),
+          Object.assign(new Error(`rcon host ${hostname} ${reason}`), { code: 'ERESTRICTED' }),
           address,
           family,
         );
@@ -137,7 +139,14 @@ export class RconClient {
       const sock = createConnection({
         host: this.opts.host,
         port: this.opts.port,
-        ...(refuse ? { lookup: makeRestrictedAddressLookup(privateHostAllowlist) } : {}),
+        ...(refuse
+          ? {
+              lookup: makeRestrictedAddressLookup(
+                privateHostAllowlist,
+                this.opts.dnsLookup ?? lookup,
+              ),
+            }
+          : {}),
       });
       const timeout = setTimeout(() => {
         sock.destroy();

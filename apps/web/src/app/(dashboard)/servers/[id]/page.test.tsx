@@ -158,6 +158,39 @@ describe('ServerDetailPage', () => {
     }
   });
 
+  it('shows an unanswered A2S query as a warning beside a connected RCON, not as an offline server', async () => {
+    stubServerFetch('running', {
+      settings: {
+        game_port: 7787,
+        query_port: 27165,
+        beacon_port: 15000,
+        rcon_port: 21114,
+      },
+      rcon_status: { state: 'connected', player_count: 103 },
+      a2s_status: {
+        visible: null,
+        reason: 'timeout',
+        queried_at: '2026-10-02T11:00:00.000Z',
+        last_success_at: '2026-10-02T10:05:00.000Z',
+      },
+    });
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    await screen.findByRole('region', { name: 'Игроки онлайн' });
+    expect(screen.getByText('подключён')).toBeInTheDocument();
+    expect(screen.getByText('запрос не отвечает')).toBeInTheDocument();
+    expect(screen.getByText(/последний ответ:/)).toBeInTheDocument();
+    expect(screen.queryByText('нет связи')).not.toBeInTheDocument();
+    expect(screen.queryByText('скрыт в списке серверов')).not.toBeInTheDocument();
+  });
+
   it('не показывает ряд плиток со сводкой (игроки, тикрейт, CPU/RAM)', async () => {
     // Те же числа читаются в ростере — дублирующий ряд убран.
     stubServerFetch('running');

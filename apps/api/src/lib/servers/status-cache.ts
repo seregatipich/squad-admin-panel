@@ -64,3 +64,22 @@ export function safeJsonParse(
     return null;
   }
 }
+
+/**
+ * Reads the `a2s:status:<id>` entry for the server routes. Worker-rcon
+ * (#127) writes `visible: null` when the query port gave no answer; releases
+ * before it wrote `visible: false` with `reason: 'timeout'` for the same
+ * thing. A timeout says nothing about visibility, so the old shape is
+ * normalised to the new one and the panel never shows it as a hidden server.
+ *
+ * @param value - the parsed cache entry, or `null` when absent or unparseable
+ * @returns the entry with `visible: null` and `last_success_at: null` for a legacy timeout, otherwise unchanged
+ */
+export function normalizeA2sStatus(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value ?? null;
+  const entry = value as Record<string, unknown>;
+  if (entry.visible === false && entry.reason === 'timeout') {
+    return { ...entry, visible: null, last_success_at: entry.last_success_at ?? null };
+  }
+  return value;
+}

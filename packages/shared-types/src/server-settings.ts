@@ -100,9 +100,17 @@ export const serverPatch = z
   });
 export type ServerPatch = z.infer<typeof serverPatch>;
 
+/**
+ * The `a2s:status:<id>` cache entry of worker-rcon (#127). A query that got an
+ * answer carries `visible` as the server reported it. A query that did not
+ * (a game process that does not service its query port, a refused address)
+ * carries `visible: null` and the `reason`: no answer says nothing about the
+ * server's visibility, so it must not be shown as hidden or offline.
+ * `last_success_at` is the time of the last answer, `null` when there never was one.
+ */
 export const a2sStatus = z
   .object({
-    visible: z.boolean(),
+    visible: z.boolean().nullable(),
     server_name: z.string().optional(),
     map: z.string().optional(),
     players: z.number().int().optional(),
@@ -110,6 +118,7 @@ export const a2sStatus = z
     latency_ms: z.number().optional(),
     reason: z.string().optional(),
     queried_at: z.string().datetime(),
+    last_success_at: z.string().datetime().nullable().optional(),
   })
   .strict();
 export type A2SStatus = z.infer<typeof a2sStatus>;
