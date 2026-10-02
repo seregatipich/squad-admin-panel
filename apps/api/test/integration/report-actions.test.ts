@@ -16,6 +16,7 @@ import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
 import type { LiveEvent } from '../../src/plugins/live-bus.js';
+import { waitForBlockedBackendOn } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -743,7 +744,7 @@ describeIfDb('POST /api/v1/reports/bulk-resolve concurrency (#248)', () => {
           resolution_note: 'Bulk note',
         }),
       });
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await waitForBlockedBackendOn(h.url);
       release();
       await holder;
       const res = await bulk;

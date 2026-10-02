@@ -67,7 +67,8 @@ async function asRole(opts: { squadBan: boolean; panelAccess?: boolean }): Promi
       await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: 'ban' });
     }
   });
-  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, h.seed.ownerSteamId64!));
+  const steamId = h.seed.ownerSteamId64!;
+  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, steamId));
   invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }

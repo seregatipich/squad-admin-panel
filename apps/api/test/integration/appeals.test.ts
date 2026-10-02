@@ -51,6 +51,8 @@ const STEAM_DAILY_MAX = 3;
 
 /** Self-contained key for the discord-notify leg: it encrypts and decrypts with the same one. */
 const DISCORD_TEST_KEY = Buffer.alloc(32, 0x42);
+/** Shape of the ISO-8601 timestamps the API serialises. */
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const silentLog = pino({ enabled: false });
 
 let h: IntegrationHarness;
@@ -728,7 +730,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     for (const ban of bans) expect(ban.revertedAt).toBeNull();
 
     const [row] = await h.db.select().from(banAppeals).where(eq(banAppeals.id, appealId)).limit(1);
-    expect(row?.decidedAt).not.toBeNull();
+    expect(row?.decidedAt).toBeInstanceOf(Date);
     expect(row?.decisionNote).toBe('бан подтверждён');
 
     await assertAuditRow(h, {
@@ -792,7 +794,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
       revert: { reverted_action_ids: string[]; unban_action_ids: string[]; removed_lines: number };
     };
     expect(body.appeal.status).toBe('approved');
-    expect(body.appeal.decided_at).not.toBeNull();
+    expect(body.appeal.decided_at).toMatch(ISO_TIMESTAMP);
     expect(body.revert.reverted_action_ids).toHaveLength(2);
     expect(body.revert.unban_action_ids).toHaveLength(1);
     expect(body.revert.removed_lines).toBe(1);
@@ -808,7 +810,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
       );
     expect(bans).toHaveLength(2);
     for (const ban of bans) {
-      expect(ban.revertedAt).not.toBeNull();
+      expect(ban.revertedAt).toBeInstanceOf(Date);
       expect(ban.revertedBy).toBe(unbannerId);
     }
 
@@ -886,8 +888,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     const mine = rows.find(
       (row) => (row.payload as { steam_id64?: string }).steam_id64 === String(steamId64),
     );
-    expect(mine).toBeTruthy();
-    expect((mine?.payload as { action_type: string }).action_type).toBe('unban');
+    expect(mine?.payload).toMatchObject({ steam_id64: String(steamId64), action_type: 'unban' });
     expect(mine?.serverId).toBe(serverId);
 
     expect(await h.redis.xlen(STREAM_NAME.eventsServer(serverId))).toBeGreaterThan(before);
@@ -896,7 +897,9 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
   it('approving writes both an appeal.status_change and an appeal.unban audit row', async () => {
     const appealId = await openAppeal(testSteamId(987190), 'AppealTarget190');
 
-    expect((await patch(appealId, { status: 'approved' })).statusCode).toBe(200);
+    const approved = await patch(appealId, { status: 'approved' });
+    expect(approved.statusCode).toBe(200);
+    const { revert } = approved.json() as { revert: { reverted_action_ids: string[] } };
 
     await assertAuditRow(h, {
       action: 'appeal.status_change',
@@ -908,9 +911,10 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
       resource: 'ban_appeal',
       targetId: appealId,
     });
-    expect(
-      (unbanAudit.context as { reverted_action_ids?: string[] }).reverted_action_ids,
-    ).toBeTruthy();
+    expect(revert.reverted_action_ids).not.toHaveLength(0);
+    expect((unbanAudit.context as { reverted_action_ids?: string[] }).reverted_action_ids).toEqual(
+      revert.reverted_action_ids,
+    );
   });
 
   it('reports and audits a partial revert when a later server conflicts (#93)', async () => {
@@ -997,7 +1001,7 @@ describeIfDb('PATCH /api/v1/appeals/:id (status transitions)', () => {
     const status = await h.app.inject({ method: 'GET', url: `/api/v1/public/appeals/${token}` });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({ status: 'approved', decision_note: 'бан снят' });
-    expect((status.json() as { decided_at: string | null }).decided_at).not.toBeNull();
+    expect((status.json() as { decided_at: string | null }).decided_at).toMatch(ISO_TIMESTAMP);
   });
 });
 
@@ -1080,7 +1084,7 @@ describeIfDb('concurrent decisions on one appeal (#37)', () => {
       .where(and(eq(moderationActions.playerId, playerId), eq(moderationActions.actionType, 'ban')))
       .limit(1);
     if (appeal?.status === 'approved') {
-      expect(ban?.revertedAt).not.toBeNull();
+      expect(ban?.revertedAt).toBeInstanceOf(Date);
     } else {
       expect(appeal?.status).toBe('rejected');
       expect(ban?.revertedAt).toBeNull();
@@ -1185,7 +1189,7 @@ describeIfDb('approve reverts bans whose server was deleted (#37)', () => {
       .from(moderationActions)
       .where(eq(moderationActions.id, actionId))
       .limit(1);
-    expect(ban?.revertedAt).not.toBeNull();
+    expect(ban?.revertedAt).toBeInstanceOf(Date);
     expect(ban?.revertedBy).toBe(unbannerId);
     const [unban] = await h.db
       .select({ serverId: moderationActions.serverId })
@@ -1248,7 +1252,7 @@ describeIfDb('approve notifies Discord through the existing unban template', () 
       (envelope) =>
         moderationActionPayload.parse(envelope.payload).steam_id64 === String(steamId64),
     );
-    expect(mine).toBeTruthy();
+    expect(mine?.type).toBe('moderation.unban');
 
     await consumeAvailableEvent(stream, fetchMock as unknown as typeof fetch);
 
@@ -1263,7 +1267,10 @@ describeIfDb('approve notifies Discord through the existing unban template', () 
       }))
       .find((call) => call.payload.embeds[0]?.description?.includes('AppealTarget210'));
 
-    expect(delivered, 'no unban embed was delivered for the appellant').toBeTruthy();
+    expect(
+      delivered?.payload.embeds[0]?.description,
+      'no unban embed was delivered for the appellant',
+    ).toContain('AppealTarget210');
     expect(delivered?.url).toBe(webhookUrl);
   });
 });

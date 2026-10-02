@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { raceAgainstOpenTransaction } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -617,15 +618,16 @@ describeIfDb('POST /api/v1/clans/:id/transfer-leadership', () => {
       });
     // Hold the roster rows so both requests read the same current leader and
     // then queue on the row update; releasing the lock lets them race to commit.
-    let pending: Promise<Array<{ statusCode: number }>> = Promise.resolve([]);
-    await h.db.transaction(async (tx) => {
-      await tx.execute(
-        sql`SELECT player_id FROM clan_members WHERE clan_id = ${clan.clanId} FOR UPDATE`,
-      );
-      pending = Promise.all([transfer(clan.deputyId), transfer(clan.memberId)]);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    });
-    const responses = await pending;
+    const responses = await raceAgainstOpenTransaction(
+      h.url,
+      async (tx) => {
+        await tx.execute(
+          sql`SELECT player_id FROM clan_members WHERE clan_id = ${clan.clanId} FOR UPDATE`,
+        );
+      },
+      () => Promise.all([transfer(clan.deputyId), transfer(clan.memberId)]),
+      2,
+    );
     for (const res of responses) expect([200, 409]).toContain(res.statusCode);
 
     const rows = await h.db

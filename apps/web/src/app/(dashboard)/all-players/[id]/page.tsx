@@ -160,7 +160,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
               // INT-1 (#76): the manual route or periodic worker replaces the
               // initials placeholder once a Steam avatar has been stored.
               // Аватар декоративен — имя игрока стоит рядом в том же заголовке.
-              // biome-ignore lint/performance/noImgElement: the image optimizer is disabled (next.config images.unoptimized), so next/image would add nothing for this panel-streamed image
+              // biome-ignore lint/performance/noImgElement: avatar_url is a stored external Steam URL, not optimizable by next/image
               <img
                 data-testid="player-avatar"
                 src={player.avatar_url}

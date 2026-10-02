@@ -35,11 +35,7 @@ function waitForSetImmediate(): Promise<void> {
 
 async function drainAsync(): Promise<void> {
   await waitForSetImmediate();
-  for (let i = 0; i < 10; i++) {
-    await Promise.resolve();
-  }
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
     await Promise.resolve();
   }
 }

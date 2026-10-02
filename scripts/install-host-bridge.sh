@@ -79,6 +79,11 @@ if [[ "$NEEDS_BUILD" -eq 1 ]]; then
     die "Go toolchain not found. Install golang >= 1.22 or pre-build the binary."
   fi
   (cd "${REPO_DIR}/apps/bridge" && make build)
+  # Under sudo the build output is root-owned; the stand deploy's `rsync
+  # --delete` runs as the repo owner and fails on a file it cannot unlink.
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${REPO_DIR}/apps/bridge/bin"
+  fi
 fi
 [[ -x "$BIN_SRC" ]] || die "bridge binary missing at $BIN_SRC after build"
 
@@ -91,6 +96,14 @@ log "installing binary → $BIN_DST"
 install -m 0755 "$BIN_SRC" "$BIN_DST"
 
 # -------- 4. install systemd units -----------------------------------------
+
+# Hash of the installed unit files; files that do not exist yet (first
+# install) contribute nothing, so the fingerprint changes once they appear.
+unit_fingerprint() {
+  { cat "$UNIT_DIR"/panel-host-bridge.service "$UNIT_DIR"/panel-host-bridge.socket \
+    "$UNIT_DIR"/panel-host-bridge.service.d/*.conf 2>/dev/null || true; } | sha256sum
+}
+UNITS_BEFORE=$(unit_fingerprint)
 
 log "installing systemd units"
 install -m 0644 "${REPO_DIR}/apps/bridge/deploy/panel-host-bridge.service" "$UNIT_DIR/"
@@ -261,6 +274,11 @@ fi
 
 systemctl daemon-reload
 
+UNITS_CHANGED=0
+if [[ "$(unit_fingerprint)" != "$UNITS_BEFORE" ]]; then
+  UNITS_CHANGED=1
+fi
+
 # -------- 5. enable + start the socket unit --------------------------------
 
 if ! systemctl is-enabled --quiet panel-host-bridge.socket; then
@@ -274,11 +292,15 @@ log "panel-host-bridge.socket active on /run/panel-host-bridge/bridge.sock"
 # loaded into memory even after the file on disk changed underneath it.
 # try-restart is a no-op when the service isn't running (socket-activation
 # will start it fresh with the new binary on first connection).
-if [[ "$BIN_CHANGED" -eq 1 ]]; then
-  log "binary changed — restarting panel-host-bridge.service"
+# A changed unit or drop-in needs the same restart: systemd applies
+# CapabilityBoundingSet, ReadWritePaths and the rest only when the process
+# starts, so a daemon-reload alone leaves the old sandbox running (a unit
+# without CAP_CHOWN made every sidecar launch fail with EPERM).
+if [[ "$BIN_CHANGED" -eq 1 || "$UNITS_CHANGED" -eq 1 ]]; then
+  log "binary or systemd unit changed — restarting panel-host-bridge.service"
   systemctl try-restart panel-host-bridge.service
 else
-  log "binary unchanged — leaving panel-host-bridge.service as-is"
+  log "binary and units unchanged — leaving panel-host-bridge.service as-is"
 fi
 
 # -------- 6. add invoking user (SUDO_USER) to the 'panel' group ------------

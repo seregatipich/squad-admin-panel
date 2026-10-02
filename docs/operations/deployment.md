@@ -237,7 +237,7 @@ longer used; unregister the runner and delete the environment with its secrets.
 
 Contracts: `scripts/deploy-stand.test.ts`, `scripts/deploy-entry.test.ts`, `scripts/rebuild.test.ts`,
 `scripts/restore.test.ts` and `scripts/uninstall.test.ts` (part of `pnpm test:scripts`) and
-`apps/api/test/compose-stand-*.test.ts`.
+`scripts/infra-contracts/compose-stand-*.test.ts`.
 
 ## Sign-in with Steam
 
@@ -323,13 +323,13 @@ workflow selects a runner group or a self-hosted runner.
 | `worker-media-publisher` | `docker/worker.Dockerfile` | Publishes queued media to YouTube/Telegram. Shares the `media_data` volume with `api`; inert until `YOUTUBE_*`/`TELEGRAM_*` are set. |
 | `backup` (optional) | `docker/restic.Dockerfile` (`mazzolino/restic:1.8.2@sha256:…`) | Profile `backup`. Daily restic snapshot of logical postgres + redis dumps. Defined in both compose files. |
 
-Every third-party image — in the compose files and in every Dockerfile `FROM` — is pinned by digest, and the stand's Caddy DuckDNS module by version (#47). Dependabot's `docker` and `docker-compose` ecosystems propose the bumps; `apps/api/test/compose-hardening.test.ts` fails on an unpinned image.
+Every third-party image — in the compose files and in every Dockerfile `FROM` — is pinned by digest, and the stand's Caddy DuckDNS module by version (#47). Dependabot's `docker` and `docker-compose` ecosystems propose the bumps; `scripts/infra-contracts/compose-hardening.test.ts` fails on an unpinned image.
 
 ### Container hardening
 
 Every panel container (`caddy`, `migrator`, `api`, `web`, all workers) runs with `cap_drop: [ALL]` and `no-new-privileges` (the `x-hardening` fragment of both compose files); `postgres`, `redis` and `backup` get `no-new-privileges` only, since their entrypoints start as root and drop to their own user. Capabilities come back only where a service needs one: `caddy` gets `NET_BIND_SERVICE`, `api` gets `CHOWN` (it hands the RNSquadJS sidecar config to uid 1001). The `web`, `api` and `worker` images declare `USER node`, so `web`, the migrator and every worker without a reason otherwise run unprivileged. The bridge-consuming workers run as `1000:${PANEL_GID}` — the bridge checks only the primary GID. Uid 0 (still without capabilities) is left to the `api`, which writes the root-owned `/run/squad-panel/rnsquadjs` tree and the media volume, `worker-media-publisher`, which deletes the media files the api wrote, and `worker-diag-flush`, which reads the host journal.
 
-Every panel container also runs with `read_only: true` and an in-memory `tmpfs` at `/tmp` (the same `x-hardening` fragment); `web` adds a tmpfs at `/app/apps/web/.next/cache` owned by uid 1000 for the Next.js cache. The services only write to their volumes and bind mounts (checked with `docker diff` on the stand), so nothing else needs to be writable. `postgres`, `redis` and `backup` keep a writable root filesystem (`apps/api/test/compose-hardening.test.ts` pins this list).
+Every panel container also runs with `read_only: true` and an in-memory `tmpfs` at `/tmp` (the same `x-hardening` fragment); `web` adds a tmpfs at `/app/apps/web/.next/cache` owned by uid 1000 for the Next.js cache. The services only write to their volumes and bind mounts (checked with `docker diff` on the stand), so nothing else needs to be writable. `postgres`, `redis` and `backup` keep a writable root filesystem (`scripts/infra-contracts/compose-hardening.test.ts` pins this list).
 
 Resource limits are sized from the usage measured on the stand after two days of uptime (api 88 MiB, web 120 MiB, caddy 45 MiB, redis 126 MiB, postgres 1.0 GiB, workers 20-50 MiB and `worker-diag-flush` 116 MiB, CPU 0-6 %), with generous headroom: workers `mem_limit: 512m` / `cpus: 1.0` (the `x-worker-limits` fragment), `api` and `web` `1g` / `2.0`, `caddy` `256m`, `postgres` `4g` (no CPU limit), `redis` `1g`. Redis also starts with `--maxmemory 768mb --maxmemory-policy noeviction`: a full Redis rejects writes instead of silently evicting stream entries, and requirepass, the `rnsquadjs` ACL user and the AOF are unchanged. To change a limit, edit the value in both `docker/compose.yml` and `docker/compose.stand.yml` (the contract test asserts them), then redeploy; a service that is killed with exit code 137 and `OOMKilled: true` in `docker inspect` needs a higher `mem_limit`.
 

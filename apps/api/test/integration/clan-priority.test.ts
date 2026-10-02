@@ -13,6 +13,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import { waitForBlockedBackendOn } from '../helpers/row-lock.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -350,7 +351,7 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
         headers: jsonHeaders(managerCookie),
         payload: JSON.stringify({ enabled: true }),
       });
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await waitForBlockedBackendOn(h.url);
       await tx.update(clans).set({ maxPrioritySlots: 1 }).where(eq(clans.id, clan.clanId));
     });
     const res = await pending;
@@ -442,7 +443,7 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
         url: `/api/v1/clans/${clan.clanId}/members/${clan.memberId}`,
         headers: { cookie: managerCookie },
       });
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await waitForBlockedBackendOn(h.url);
       await tx
         .update(clanMembers)
         .set({ hasPriority: true })

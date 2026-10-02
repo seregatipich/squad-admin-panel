@@ -2,11 +2,11 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-
 import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import websocketPlugin from '../src/plugins/websocket.js';
 import liveRoutes, { MAX_CLIENT_FRAMES_PER_INTERVAL } from '../src/routes/live.js';
+import { wsRoundTrip } from './helpers/ws-round-trip.js';
 
 let app: ReturnType<typeof Fastify>;
 let port: number;
@@ -71,7 +71,8 @@ describe('/api/v1/ws/live', () => {
     await new Promise<void>((resolve) => ws.on('open', () => resolve()));
 
     ws.send(JSON.stringify({ type: 'pong' }));
-    await new Promise((r) => setTimeout(r, 100));
+    // Its pong to this ping proves the client pong above was processed without closing the socket.
+    await wsRoundTrip(ws);
     expect(closeCode).toBeUndefined();
 
     ws.close();

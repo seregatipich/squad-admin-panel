@@ -169,15 +169,24 @@ describe('Phase A2 Task 14 — WS lifecycle diag emits', () => {
     captured.length = 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/INVALID/logs/ws`);
     await new Promise<void>((resolve) => ws.on('close', () => resolve()));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(captured.some((e) => e.kind === 'ws.connected')).toBe(false);
-    expect(captured.some((e) => e.kind === 'ws.disconnected')).toBe(false);
-
-    captured.length = 0;
     const wsInstall = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/INVALID/install/ws`);
     await new Promise<void>((resolve) => wsInstall.on('close', () => resolve()));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(captured.some((e) => e.kind === 'ws.connected')).toBe(false);
-    expect(captured.some((e) => e.kind === 'ws.disconnected')).toBe(false);
+
+    // A valid socket's full connect/disconnect cycle comes after the invalid
+    // ones, so once its events are captured any event the invalid sockets
+    // would have emitted is already there too.
+    const sentinel = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws/live`);
+    await new Promise<void>((resolve) => sentinel.on('open', () => resolve()));
+    sentinel.close();
+    await new Promise<void>((resolve) => sentinel.on('close', () => resolve()));
+    await waitFor(() => captured.some((e) => e.kind === 'ws.disconnected'));
+
+    const wsEvents = captured.filter(
+      (e) => e.kind === 'ws.connected' || e.kind === 'ws.disconnected',
+    );
+    expect(wsEvents.length).toBeGreaterThan(0);
+    for (const event of wsEvents) {
+      expect((event.payload as { url?: string }).url).toContain('/api/v1/ws/live');
+    }
   });
 });

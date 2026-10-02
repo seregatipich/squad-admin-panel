@@ -19,15 +19,15 @@ afterAll(async () => {
 });
 
 describe('scheduler audit writers (#1012)', () => {
-  it('keeps a single audit_log insert in deps so a schema change is made once', () => {
-    const depsDirectory = new URL('../src/deps/', import.meta.url);
-    const sources = [
-      new URL('../src/deps.ts', import.meta.url),
-      ...readdirSync(depsDirectory).map((name) => new URL(name, depsDirectory)),
-    ]
-      .map((url) => readFileSync(url, 'utf8'))
-      .join('\n');
-    expect(sources.match(/insert\(auditLog\)/g)).toHaveLength(1);
+  it('keeps a single audit_log insert in the scheduler sources so a schema change is made once', () => {
+    const srcDir = new URL('../src/', import.meta.url);
+    const sources = readdirSync(srcDir, { recursive: true, encoding: 'utf8' })
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => ({ file, text: readFileSync(new URL(file, srcDir), 'utf8') }));
+    const inserts = sources.flatMap(({ file, text }) =>
+      (text.match(/insert\(auditLog\)/g) ?? []).map(() => file),
+    );
+    expect(inserts).toEqual(['deps/shared.ts']);
   });
 });
 

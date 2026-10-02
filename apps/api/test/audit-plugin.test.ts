@@ -1,7 +1,7 @@
 import { auditLog } from '@squad/db/schema';
 import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -24,21 +24,24 @@ afterAll(async () => {
   await h?.cleanup();
 });
 
-/**
- * Audit rows the hook wrote for one request, found by the unique marker that
- * starts its User-Agent. The hook writes after the response is sent, so this
- * polls until a row appears or 1.5 s pass.
- */
-async function auditRowsFor(marker: string) {
-  const deadline = Date.now() + 1_500;
-  for (;;) {
-    const rows = await h.db
-      .select()
-      .from(auditLog)
-      .where(sql`${auditLog.context}->>'userAgent' LIKE ${`${marker}%`}`);
-    if (rows.length > 0 || Date.now() > deadline) return rows;
-    await new Promise((r) => setTimeout(r, 100));
-  }
+/** Audit rows the hook wrote for one request, found by the unique marker that starts its User-Agent. */
+async function selectAuditRows(marker: string) {
+  return h.db
+    .select()
+    .from(auditLog)
+    .where(sql`${auditLog.context}->>'userAgent' LIKE ${`${marker}%`}`);
+}
+
+/** The hook writes after the response is sent, so this polls until a row for the marker appears. */
+async function waitForAuditRows(marker: string) {
+  return vi.waitFor(
+    async () => {
+      const rows = await selectAuditRows(marker);
+      if (rows.length === 0) throw new Error(`no audit row for ${marker}`);
+      return rows;
+    },
+    { timeout: 5_000, interval: 25 },
+  );
 }
 
 describe('audit plugin', () => {
@@ -52,8 +55,19 @@ describe('audit plugin', () => {
     });
     expect(res.statusCode).toBe(401);
 
-    const rows = await auditRowsFor(marker);
-    expect(rows).toHaveLength(0);
+    // Audit writes are serialised on the hash chain, so once a later audited
+    // request has its row, the anonymous request's hook has already finished.
+    const cookie = await loginAsOwner(h);
+    const sentinel = `sentinel-${uuidv7()}`;
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie, 'user-agent': sentinel },
+      payload: {},
+    });
+    await waitForAuditRows(sentinel);
+
+    expect(await selectAuditRows(marker)).toHaveLength(0);
   });
 
   it('stores the path without its query and caps the User-Agent length', async () => {
@@ -69,7 +83,7 @@ describe('audit plugin', () => {
     });
     expect(res.statusCode).toBe(400);
 
-    const [row] = await auditRowsFor(marker);
+    const [row] = await waitForAuditRows(marker);
     expect(row).toBeDefined();
     const context = row?.context as { url: string; userAgent: string };
     expect(context.url).toBe('/api/v1/roles');

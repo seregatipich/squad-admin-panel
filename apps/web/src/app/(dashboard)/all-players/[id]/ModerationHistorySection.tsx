@@ -47,7 +47,7 @@ function EvidenceBody({ item }: { item: ModerationEvidence }) {
   }
   if (item.kind === 'image') {
     return (
-      // biome-ignore lint/performance/noImgElement: the image optimizer is disabled (next.config images.unoptimized), so next/image would add nothing for this panel-streamed image
+      // biome-ignore lint/performance/noImgElement: authenticated /api/v1/media stream, not optimizable by next/image
       <img
         src={mediaStreamUrl(item.id)}
         alt={evidenceLabel(item)}

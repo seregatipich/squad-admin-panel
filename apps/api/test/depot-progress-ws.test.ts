@@ -9,6 +9,7 @@
  * blocking xread live-tail, and telling a stale backfilled 'done' sentinel
  * apart from a live one.
  */
+
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
@@ -16,6 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import WebSocket from 'ws';
 import { publishDepotProgressDone, publishDepotProgressLine } from '../src/lib/depot-progress.js';
 import depotRoutes, { DEPOT_STREAMS_PER_CALLER } from '../src/routes/depot.js';
+import { wsRoundTrip } from './helpers/ws-round-trip.js';
 import { hostRedisUrl } from './integration/isolated-db.js';
 
 let app: ReturnType<typeof Fastify>;
@@ -208,7 +210,7 @@ describe('GET /api/v1/depot/progress/ws', () => {
     await waitFor(() =>
       frames.some((f) => (f as { backfill_complete?: boolean }).backfill_complete === true),
     );
-    await new Promise((r) => setTimeout(r, 100));
+    await wsRoundTrip(ws);
     expect(ws.readyState).toBe(WebSocket.OPEN);
     expect(frames.some((f) => (f as { done?: boolean }).done)).toBe(false);
     ws.close();

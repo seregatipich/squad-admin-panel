@@ -19,7 +19,8 @@
       "!**/drizzle",
       "!packages/db/src/drizzle-client.ts",
       "!apps/web/public/monaco",
-      "!apps/web/src/styles"
+      "!apps/web/src/styles",
+      "!docker/rnsquadjs/plugins/panelBridge/test/fixtures/SquadGame.log.parsed.json"
     ]
   },
   "formatter": {

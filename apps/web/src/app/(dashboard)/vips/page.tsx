@@ -121,7 +121,7 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
         <label htmlFor="vips-role" className="text-xs text-ink-3">
           Роль
         </label>
-        {/* biome-ignore lint/correctness/useUniqueElementIds: серверный компонент, useId() здесь недоступен, а форма на странице одна */}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: id pairs with the label above; the filter form renders once per page */}
         <Select id="vips-role" name="role_id" defaultValue={params.role_id ?? ''}>
           <option value="">Все роли</option>
           {roleOptions.map((r) => (
