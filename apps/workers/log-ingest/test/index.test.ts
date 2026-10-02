@@ -1,12 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-vi.mock('ioredis', () => ({
-  default: vi.fn(() => ({
+vi.mock('ioredis', () => {
+  const connection = () => ({
     on: vi.fn(),
     quit: vi.fn().mockResolvedValue('OK'),
     xadd: vi.fn().mockResolvedValue('id'),
-  })),
-}));
+    xgroup: vi.fn().mockResolvedValue('OK'),
+    xreadgroup: vi.fn(() => new Promise((resolve) => setTimeout(() => resolve(null), 50))),
+    scan: vi.fn().mockResolvedValue(['0', []]),
+  });
+  return {
+    default: vi.fn(() => ({ ...connection(), duplicate: vi.fn(connection) })),
+  };
+});
 vi.mock('@squad/db', () => ({
   createMmdbLookup: vi.fn().mockResolvedValue(null),
   createDatabaseClient: vi.fn(() => ({
