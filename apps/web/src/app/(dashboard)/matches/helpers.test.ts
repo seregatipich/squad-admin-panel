@@ -297,20 +297,24 @@ describe('match combat-log links', () => {
    * UTC date `2026-09-25` — that range would exclude the match's own events
    * entirely (they all occurred after 2026-09-26T00:00 local).
    *
-   * The CI/sandbox Node build's ICU is fixed to UTC, so `process.env.TZ`
-   * cannot actually shift `Date`'s local getters here. A UTC+3 viewer is
-   * simulated instead by making `new Date(<iso string>)` return a Date
-   * shifted three hours forward: its *local* getters (which read the epoch
-   * through the environment's fixed-UTC ICU) then report exactly what a
-   * genuine UTC+3 viewer's local getters would report for the original
-   * instant — the same effect a real non-UTC `process.env.TZ` would have,
-   * without depending on the sandbox's ICU timezone database.
+   * A UTC+3 viewer is simulated independently of the machine's timezone: the
+   * `Date` constructor is replaced by a subclass whose local calendar getters
+   * report the UTC calendar fields of the instant shifted three hours forward,
+   * which is exactly what a genuine UTC+3 viewer's local getters return. The
+   * epoch itself is untouched, so the result does not depend on `process.env.TZ`.
    */
   it('uses the viewer local date, not the UTC date, for a match crossing local midnight', () => {
     const RealDate = Date;
+    const shifted = (date: Date) => new RealDate(date.getTime() + 3 * 60 * 60 * 1000);
     class Utc3Date extends RealDate {
-      constructor(iso: string) {
-        super(new RealDate(iso).getTime() + 3 * 60 * 60 * 1000);
+      getFullYear() {
+        return shifted(this).getUTCFullYear();
+      }
+      getMonth() {
+        return shifted(this).getUTCMonth();
+      }
+      getDate() {
+        return shifted(this).getUTCDate();
       }
     }
     vi.stubGlobal('Date', Utc3Date);
