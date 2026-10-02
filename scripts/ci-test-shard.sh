@@ -52,35 +52,36 @@ cd "$repo_root"
 # suites in parallel per slice). Only the relative sizes matter; a stale entry
 # merely unbalances the slices, never drops a package.
 WEIGHTS=(
-  @squad/db=83
-  @squad/worker-log-ingest=64
-  @squad/worker-rcon=50
+  @squad/db=72
+  @squad/worker-log-ingest=63
+  @squad/worker-rcon=52
   @squad/worker-ban-sync=36
-  @squad/worker-config-sync=35
-  @squad/worker-automation=32
-  @squad/worker-discord=31
-  @squad/worker-event-partition=30
-  @squad/worker-media-publisher=28
-  @squad/worker-role-expirer=24
-  @squad/worker-clan-priority-expirer=23
+  @squad/worker-discord=32
+  @squad/worker-event-partition=32
+  @squad/worker-role-expirer=31
+  @squad/worker-config-sync=30
+  @squad/worker-automation=29
+  @squad/worker-media-publisher=27
   @squad/worker-clan-guard=23
-  @squad/worker-scheduler=20
-  @squad/worker-seed-reward=18
+  @squad/worker-clan-priority-expirer=21
+  @squad/worker-scheduler=21
+  @squad/worker-seed-reward=19
   @squad/shared-config=17
-  @squad/worker-diag-flush=14
-  @squad/shared-types=13
+  @squad/shared-types=14
+  @squad/worker-diag-flush=12
+  @squad/worker-kit=11
   @squad/worker-leaderboard-aggregator=11
-  @squad/worker-presence-daily=11
+  @squad/worker-presence-daily=10
+  @squad/worker-stats=10
   @squad/chat-ingest=9
-  @squad/bridge-client=9
-  @squad/worker-metrics-sampler=9
-  @squad/worker-steam-refresh=9
-  @squad/worker-stats=8
-  @squad/worker-backup=6
-  @squad/worker-audit-archiver=6
-  panel-bridge=6
+  @squad/bridge-client=8
+  @squad/worker-metrics-sampler=8
+  @squad/worker-steam-refresh=8
+  @squad/worker-audit-archiver=7
+  @squad/worker-backup=7
+  panel-bridge=5
   @squad/diag=4
-  @squad/steam-api=4
+  @squad/steam-api=3
 )
 
 usage() {
