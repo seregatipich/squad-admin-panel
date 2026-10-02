@@ -36,14 +36,14 @@
     "prepare": "lefthook install || true"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.111.0",
-    "@biomejs/biome": "2.2.0",
-    "@fast-check/vitest": "^0.3.0",
+    "@anthropic-ai/sdk": "^0.129.0",
+    "@biomejs/biome": "2.5.14",
+    "@fast-check/vitest": "^0.5.0",
     "@types/node": "^22.10.1",
     "@vitest/coverage-v8": "^3.2.7",
     "lefthook": "^1.8.2",
-    "tsx": "^4.19.2",
-    "turbo": "2.9.18",
+    "tsx": "^4.23.15",
+    "turbo": "2.11.5",
     "typescript": "^5.7.2",
     "vitest": "^3.2.7"
   },

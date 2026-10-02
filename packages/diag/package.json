@@ -24,7 +24,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
