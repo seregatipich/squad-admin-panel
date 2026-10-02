@@ -8,7 +8,8 @@ import {
 } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
 
 /** These tests are about ghost-round filtering; no roster snapshot is cached. */
@@ -31,9 +32,8 @@ const NO_ROSTER_SNAPSHOT: RosterSnapshotReader = { mget: async () => [null, null
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the log-ingest test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const PLAYER_A = uuidv7();
@@ -104,7 +104,7 @@ function close(startedAt: Date, endedAt: Date) {
   } as never);
 }
 
-describe('ghost matches never receive a roster', () => {
+describeIfDb('ghost matches never receive a roster', () => {
   it('writes no match_players for a millisecond-long ghost match', async () => {
     const ghostEnd = new Date(ROUND_START.getTime() + 3); // the real production shape: 3 ms
     await db.insert(matches).values({

@@ -12,18 +12,19 @@ import { rconCommandStream } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleChatCommand } from '../src/chat/commands.js';
 import { parseChatLine } from '../src/parser/chat.js';
 import { LogIngestor } from '../src/parser/ingest.js';
 import { handleReport } from '../src/report/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the AUTO-4 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/3', {
   maxRetriesPerRequest: null,
+  lazyConnect: true,
 });
 
 const SERVER_ID = uuidv7();
@@ -152,7 +153,7 @@ afterAll(async () => {
   await redis.quit();
 });
 
-describe('handleChatCommand', () => {
+describeIfDbAndRedis('handleChatCommand', () => {
   it('!stats enqueues an AdminWarn to the requester and records an invocation', async () => {
     const chat = parseChatLine(chatLine(ALPHA_SENDER, '!stats'));
     if (!chat) throw new Error('fixture !stats line failed to parse');

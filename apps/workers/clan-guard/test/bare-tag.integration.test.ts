@@ -9,14 +9,14 @@ import {
 import { and, eq, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createClanGuardDeps } from '../src/deps.js';
 import { runClanGuardTick } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the clan-guard test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = uuidv7();
 const CLAN_ID = uuidv7();
 const CLAN_TAG = 'Q17';
@@ -97,7 +97,7 @@ async function clanGuardActionsFor(playerId: string) {
     );
 }
 
-describe('clan-guard bare tag integration (#17)', () => {
+describeIfDb('clan-guard bare tag integration (#17)', () => {
   it('warns a player wearing the bare tag as a word but not one whose nick merely starts with it', async () => {
     const deps = createClanGuardDeps(db, makeRedis());
     const diag = { emit: vi.fn().mockResolvedValue(undefined) };

@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 
 const ENTRY_PATH = path.resolve(import.meta.dirname, '../dist/index.js');
 const HEARTBEAT_KEY = 'worker:heartbeat:ban-sync';
@@ -66,7 +67,7 @@ afterEach(async () => {
   redis = null;
 });
 
-describe('ban-sync shutdown', () => {
+describeIfDbAndRedis('ban-sync shutdown', () => {
   it('interrupts the blocking manual-queue read instead of waiting it out', async () => {
     const client = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
     redis = client;

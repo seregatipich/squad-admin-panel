@@ -9,15 +9,16 @@ import {
 import { and, asc, eq, sql } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match2 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/3', {
   maxRetriesPerRequest: null,
+  lazyConnect: true,
 });
 
 const SERVER_ID = uuidv7();
@@ -208,7 +209,7 @@ const closeCommand = {
   winner: 'team1' as const,
 };
 
-describe('handleMatchClose', () => {
+describeIfDbAndRedis('handleMatchClose', () => {
   it('names each squad from the Redis snapshots (regression: squad_name was always null)', async () => {
     await seedClosedMatchScenario();
     const result = await handleMatchClose(db, redis, closeCommand);

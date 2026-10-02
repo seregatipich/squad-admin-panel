@@ -13,15 +13,15 @@ import {
 } from '@squad/db';
 import { eq, inArray, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleCombat } from '../src/combat/store.js';
 import { type CombatRecordCommand, parseCombat } from '../src/parser/combat.js';
 import { parseLine } from '../src/parser/patterns.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the combat identity test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const TWIN_ONE_ID = uuidv7();
@@ -141,7 +141,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('victim resolution by name (#914)', () => {
+describeIfDb('victim resolution by name (#914)', () => {
   it('records no victim when two players currently share the name and the roster cannot tell them apart', async () => {
     const result = await handleCombat(db, makeRedis(), command(damageLine('TwinName', 1)));
 
@@ -181,7 +181,7 @@ describe('victim resolution by name (#914)', () => {
   });
 });
 
-describe('attacker identity backfill (#915)', () => {
+describeIfDb('attacker identity backfill (#915)', () => {
   it('records the event when the EOS id and SteamID belong to two different player rows', async () => {
     const line = `[2026.07.06-12.01.00:000][10]LogSquad: Player:RenamerTwoNow ActualDamage=20.000000 from SplitPerson (Online IDs: EOS: ${SPLIT_EOS} steam: ${SPLIT_STEAM} | Controller ID: BP_PlayerController_C_2147481002) caused by BP_AK74_C`;
 

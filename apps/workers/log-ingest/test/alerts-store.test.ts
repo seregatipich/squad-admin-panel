@@ -10,16 +10,18 @@ import {
 import type { EventEnvelope } from '@squad/shared-types';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { AlertRuleCache, handleAlertEvent } from '../src/alerts/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the log-ingest test database');
 const REDIS_URL = process.env.REDIS_URL;
-if (!REDIS_URL) throw new Error('REDIS_URL must point at the test Redis');
 
-const db = createDatabaseClient(DATABASE_URL);
-const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: 1, lazyConnect: false });
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
+const redis = new Redis(REDIS_URL ?? 'redis://127.0.0.1:6379', {
+  maxRetriesPerRequest: 1,
+  lazyConnect: true,
+});
 
 const SERVER_ID = '00000000-0000-7000-8000-000000001901';
 const ADMIN_ROLE_ID = '00000000-0000-7000-8000-000000001902';
@@ -141,7 +143,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('handleAlertEvent — server_crashed', () => {
+describeIfDbAndRedis('handleAlertEvent — server_crashed', () => {
   it('writes an alert_events row for an enabled rule and none for a disabled one', async () => {
     await insertRule(RULE.crash, 'server_crashed', {});
     await insertRule(RULE.crashDisabled, 'server_crashed', {}, false);
@@ -190,7 +192,7 @@ describe('handleAlertEvent — server_crashed', () => {
   });
 });
 
-describe('handleAlertEvent — unusual_activity', () => {
+describeIfDbAndRedis('handleAlertEvent — unusual_activity', () => {
   it('fires once the connect count in the window reaches the threshold, then cools down', async () => {
     await insertRule(RULE.flood, 'unusual_activity', { windowMinutes: 5, connectThreshold: 3 });
     const cache = freshCache();
@@ -230,7 +232,7 @@ describe('handleAlertEvent — unusual_activity', () => {
   });
 });
 
-describe('handleAlertEvent — admin_login_new_ip', () => {
+describeIfDbAndRedis('handleAlertEvent — admin_login_new_ip', () => {
   it('fires for a panel admin connecting from an IP missing from their history', async () => {
     await insertRule(RULE.adminIp, 'admin_login_new_ip', {});
     const cache = freshCache();
@@ -267,7 +269,7 @@ describe('handleAlertEvent — admin_login_new_ip', () => {
   });
 });
 
-describe('handleAlertEvent — custom', () => {
+describeIfDbAndRedis('handleAlertEvent — custom', () => {
   it('fires on every threshold-th matching event and resets the count', async () => {
     await insertRule(RULE.custom, 'custom', { eventKind: 'server.stopped', threshold: 2 });
     const cache = freshCache();

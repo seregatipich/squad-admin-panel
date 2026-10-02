@@ -2,13 +2,13 @@ import { ChatFlagDetector, handleChat } from '@squad/chat-ingest';
 import { chatFlagRules, chatMessages, createDatabaseClient, players, servers } from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the chatlog5 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const PLAYER_ID = uuidv7();
@@ -68,7 +68,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('ChatFlagDetector + handleChat persistence', () => {
+describeIfDb('ChatFlagDetector + handleChat persistence', () => {
   it('flags a message that matches an active rule and records the matched rule id', async () => {
     const detector = new ChatFlagDetector(db, 0);
     const message = 'that noobcannon spam again';

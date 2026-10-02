@@ -2,13 +2,13 @@ import { handleChat, recordChatMessage } from '@squad/chat-ingest';
 import { type ChatScope, chatMessages, createDatabaseClient, players, servers } from '@squad/db';
 import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the chatlog1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const IDENTIFIED_ID = uuidv7();
@@ -88,7 +88,7 @@ beforeEach(async () => {
   await db.delete(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
 });
 
-describe('chat message persistence', () => {
+describeIfDb('chat message persistence', () => {
   it('persists a parsed chat line with the resolved player_id, mapped scope and log source', async () => {
     const chat = parseChatLine(
       `[${squadLogTs(NOW)}][123]LogSquad: ChatMessage: ${IDENTIFIED_STEAM} [Online IDs: EOS: ${IDENTIFIED_EOS} steam: ${IDENTIFIED_STEAM}] Alpha Player : ChatAll : hello world`,
@@ -203,7 +203,7 @@ describe('chat message persistence', () => {
   });
 });
 
-describe('LogIngestor → chat persistence guard', () => {
+describeIfDb('LogIngestor → chat persistence guard', () => {
   it('keeps the live frame contract intact when the message is not persistable', async () => {
     const chat = parseChatLine(
       `[${squadLogTs(NOW)}][10]LogSquad: ChatMessage: ${IDENTIFIED_STEAM} [Online IDs: EOS: ${IDENTIFIED_EOS} steam: ${IDENTIFIED_STEAM}] Alpha Player : ChatAll : still emits`,

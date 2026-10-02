@@ -11,14 +11,14 @@ import { rconCommandRequestSchema } from '@squad/shared-types';
 import { and, eq, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { BannedNameRuleCache } from '../src/banname/rules-cache.js';
 import { buildBannedNameKickMessage, handleBannedNameEvent } from '../src/banname/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the banname104 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const KICK_RULE_ID = uuidv7();
@@ -178,7 +178,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('buildBannedNameKickMessage', () => {
+describeIfDb('buildBannedNameKickMessage', () => {
   it('includes the rule reason in both Russian and English', () => {
     const message = buildBannedNameKickMessage('читер в нике');
     expect(message).toContain('читер в нике');
@@ -197,7 +197,7 @@ describe('buildBannedNameKickMessage', () => {
   });
 });
 
-describe('handleBannedNameEvent', () => {
+describeIfDb('handleBannedNameEvent', () => {
   it('is a no-op for events other than player.connected or player.name_changed', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);

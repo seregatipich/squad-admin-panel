@@ -1,13 +1,13 @@
 import { createDatabaseClient, economySettings, expiryNotifications, players } from '@squad/db';
 import type { EventEnvelope } from '@squad/shared-types';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleVipExpiryWarnConnect } from '../src/vip-expiry/warn.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the vip-expiry test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = '00000000-0000-7000-8000-000000000171';
 const ROLE_ID = '00000000-0000-7000-8000-000000000172';
 const PLAYER_STEAM = '76561198100001701';
@@ -84,7 +84,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('handleVipExpiryWarnConnect', () => {
+describeIfDb('handleVipExpiryWarnConnect', () => {
   it('enqueues AdminWarn once on connect and stamps queued_at', async () => {
     const playerId = await seedPlayerWithPendingWarn(3);
     const redis = makeRedis();

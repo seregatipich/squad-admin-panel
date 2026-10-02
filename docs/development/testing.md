@@ -67,6 +67,8 @@ describeIfDb('players repository', () => {
 
 Import it by relative path; workers and the API do so already for the other helpers in that directory. `packages/db/test/describe-if.test.ts` covers the helper.
 
+Every worker or package test file that opens its own Postgres or Redis connection (`createDatabaseClient(`, `postgres(`, `new Redis(`) must import the gate: [`scripts/infra-contracts/worker-suite-gates.test.ts`](../../scripts/infra-contracts/worker-suite-gates.test.ts) fails on a file that does not (`contract.test.ts` files are exempt: their shared harness supplies service defaults and spawns the built worker). A skipped suite must not touch a service while it is collected, so a module-scope `new Redis(` uses `lazyConnect: true`, and a module-scope `createDatabaseClient(` is lazy by construction. The worker setup files default `REDIS_URL` (`load-env.ts`, `redis-per-worker.ts`), so in a worker package the Redis gate is always open and a missing Redis fails the suite instead of skipping it; the Postgres gate is real, because `DATABASE_URL` is only filled in from the repo `.env` or the environment. The shared worker test code in `apps/workers/_test-shared/` is a hashed input of every `test` task in `turbo.json`, guarded by `scripts/test-turbo-test-inputs.sh`.
+
 ### Tier 2 — integration
 
 Routes through the real Fastify instance via `inject()` or over HTTP, but with a fake bridge and (optionally) ephemeral Postgres/Redis. Proves plumbing (auth, RBAC, audit, validation, WS frame splitting) without requiring a Squad container.

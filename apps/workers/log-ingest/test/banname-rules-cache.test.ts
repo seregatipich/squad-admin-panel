@@ -2,13 +2,13 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { bannedNameRules, createDatabaseClient } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { BannedNameRuleCache } from '../src/banname/rules-cache.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the banname104 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const RULE_A = uuidv7();
 const RULE_B = uuidv7();
@@ -43,7 +43,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('BannedNameRuleCache', () => {
+describeIfDb('BannedNameRuleCache', () => {
   it('loads only is_active rules', async () => {
     const cache = new BannedNameRuleCache(db);
     expect(await cache.match('ProCheater')).toMatchObject({ ruleId: RULE_A });

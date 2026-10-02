@@ -8,14 +8,14 @@ import {
 } from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { VoteRecordCommand } from '../src/parser/vote.js';
 import { handleVote, LIVE_BUS_CHANNEL } from '../src/vote/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the vote1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const INITIATOR_ID = uuidv7();
@@ -107,7 +107,7 @@ beforeEach(async () => {
   await db.delete(gameVotes).where(eq(gameVotes.serverId, SERVER_ID));
 });
 
-describe('handleVote', () => {
+describeIfDb('handleVote', () => {
   it('writes a game_votes row with resolved initiator, maps, counts and result', async () => {
     const result = await handleVote(db, makePublisher(), makeCommand());
     expect(result.inserted).toBe(true);

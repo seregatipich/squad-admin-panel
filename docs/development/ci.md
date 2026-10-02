@@ -14,6 +14,19 @@ gh run view <run-id> --log-failed   # logs of the failing step
 
 To check a `dev` commit before promoting it, dispatch the same workflow on it: `gh workflow run ci.yml --ref dev`.
 
+**Dependabot branches (decision for #121: verify by dispatch, land through a work branch).** Dependabot opens its pull requests against `dev`, and no workflow runs on `pull_request`, so such a PR shows no checks and must not be merged from the GitHub UI: a merge into `dev` deploys the stand without running any test. Verify and land the update with the normal loop instead:
+
+```bash
+git fetch origin
+gh workflow run ci.yml --ref dependabot/<ecosystem>/<name>      # the full ci on the bot's branch
+gh run list --workflow ci.yml --branch dependabot/<ecosystem>/<name> --limit 1 --json databaseId,conclusion
+git switch -c chore/<slug> origin/dev                           # a work branch, never the bot's branch
+git merge origin/dependabot/<ecosystem>/<name>                  # or cherry-pick its commit
+# then merge the work branch into dev, push, promote and verify as CLAUDE.md describes, and close the Dependabot PR
+```
+
+Merge only when the dispatched `ci` is green for the branch tip. A major bump of the runtime or a datastore (a `node`, `postgres` or `redis` image, `zod`) needs a human decision and a migration or rollback note before it is merged, not just a green run. `.github/dependabot.yml` already groups the npm and Go minor and patch updates into one PR each, which keeps the number of dispatches down; a `pull_request` trigger is deliberately not the answer.
+
 **Everything runs on GitHub-hosted VMs (`runs-on: ubuntu-24.04`), including the deploy.** `deploy.yml` builds the images on hosted runners, pushes them to GHCR, and reaches the stand host over SSH with a forced-command key held in the `stand` environment, whose deployment branch policy admits `dev` alone. There is no self-hosted runner. The repository is public on a personal account, so hosted minutes are free and runner groups do not exist — a job that selects `runs-on: group: …` waits in the queue forever. [`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh) fails CI if a job leaves the hosted image, the deploy leaves the `stand` environment, or any workflow selects a runner group or a self-hosted runner.
 
 Workflows stay limited to trusted pushes and explicit dispatches — never `pull_request` — and superseded runs are cancelled (a deploy already in flight is never interrupted). [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) fails CI if any workflow ever reaches a self-hosted job from a pull-request trigger, by label or by group. Because a fork's pull request can bring its own workflow file, the repository setting *Require approval for all outside collaborators* must stay on. See "CI and deployment runners" in [agent-harness.md](agent-harness.md).

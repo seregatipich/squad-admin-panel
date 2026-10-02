@@ -1,15 +1,15 @@
 import { createDatabaseClient, playerNameHistory, players } from '@squad/db';
 import { eq } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import {
   createPlayerWithHistory,
   isUniqueViolation,
 } from '../src/player-identity/create-player.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const STEAM = '76561198100009301';
 
 afterAll(async () => {
@@ -17,7 +17,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('createPlayerWithHistory (#908, #919)', () => {
+describeIfDb('createPlayerWithHistory (#908, #919)', () => {
   it('creates the player with its name history, and reports a duplicate as null', async () => {
     const identity = { steamId64: STEAM, eosId: null, name: 'CreatePlayerTest' };
     const id = await createPlayerWithHistory(db, identity, 'test-label');

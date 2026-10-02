@@ -3,7 +3,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { EventEnvelope, PluginHandler } from '@squad/shared-types';
 import Redis from 'ioredis';
 import pino from 'pino';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
+import { describeIfRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { ensureConsumerGroup, runDispatchLoop } from '../src/dispatch.js';
 import { PluginRegistry } from '../src/registry.js';
 
@@ -22,7 +23,7 @@ const TEST_REDIS_URL = `${(
  * wiring end to end, not mocks: XADD onto the shared event stream, run
  * `runDispatchLoop`, and observe what test plugins actually received.
  */
-describe('automation plugin dispatch (integration)', () => {
+describeIfRedis('automation plugin dispatch (integration)', () => {
   let redis: Redis | null = null;
   let stop: (() => void) | null = null;
   let loop: Promise<void> | null = null;
