@@ -259,8 +259,8 @@ check_sharded_slice() {
     fail "${job} builds or migrates; its suite resolves @squad/* to source and builds its own template database"
   fi
 }
-check_sharded_slice test-api api apps/api 4
-check_sharded_slice test-web web apps/web 2
+check_sharded_slice test-api api apps/api 6
+check_sharded_slice test-web web apps/web 3
 
 test_api=$(job_block "$ci_workflow" test-api)
 has_line "$test_api" '      VITEST_MAX_FORKS: "4"' || fail 'test-api does not use all four hosted vCPUs'

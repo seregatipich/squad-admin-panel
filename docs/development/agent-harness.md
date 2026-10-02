@@ -148,8 +148,8 @@ the newest SHA matters and nothing deploys from it.
 |---|---|
 | `branch-guard` | the master ancestry audit (on `master` pushes), then every repository-contract suite through `scripts/test-repo-contracts.sh` (see below) |
 | `lint` | Biome, the `test:cov` completeness check, the solve-issues runner tests, `turbo typecheck` (Turbo cache restored with `actions/cache`), gitleaks |
-| `test-api` (4 shards) | a quarter of the API suite by test file, against Postgres and Redis services — no build, no migration |
-| `test-web` (2 shards) | half of the web suite each — no services, no build |
+| `test-api` (6 shards) | a sixth of the API suite by test file, against Postgres and Redis services — no build, no migration |
+| `test-web` (3 shards) | a third of the web suite each — no services, no build |
 | `test-packages` (3 shards) | every other `test:cov` package whole under its own thresholds, four at a time per shard, longest first; the packages are spread over the shards by measured weight (longest-processing-time-first onto the least-loaded shard), so each starts with one of the three longest suites and the shards finish together; builds only the workers the contract tests start. Measured over 10 `master` runs it was the slowest job in 8 (median about 225 s, the api and web shards about 100–120 s) before it was split |
 | `scripts` | migrations, then `pnpm test:scripts` |
 | `changes` → `mutation` | Stryker on `packages/shared-config`, only when it changed between `github.event.before` and the pushed SHA (always on a dispatch, a new branch, or a range the checkout cannot resolve) |
