@@ -3,16 +3,17 @@ import { rconCommandStream } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { describeIfDbAndRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleAutomationChat, invalidateAutomationChatRules } from '../src/automation/chat.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the AUTO-1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/3', {
   maxRetriesPerRequest: null,
+  lazyConnect: true,
 });
 
 const KEYWORD = `trg-${Date.now()}`;
@@ -58,7 +59,7 @@ afterAll(async () => {
   await redis.quit().catch(() => undefined);
 });
 
-describe('handleAutomationChat (AUTO-1 chat_keyword)', () => {
+describeIfDbAndRedis('handleAutomationChat (AUTO-1 chat_keyword)', () => {
   it('fires a matching chat_keyword rule: AdminWarn enqueued + run + audit', async () => {
     const chat = parseChatLine(chatLine('76561198012345678 Tester', `well ${KEYWORD} indeed`));
     expect(chat).not.toBeNull();

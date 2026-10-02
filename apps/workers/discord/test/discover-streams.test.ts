@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import Redis from 'ioredis';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { describeIfRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { discoverEventStreams } from '../src/consume.js';
 
 const TEST_REDIS_URL =
@@ -12,7 +13,7 @@ const TEST_REDIS_URL =
  * `events:server:*` SCAN pattern, so the discord worker used to consume the
  * shadow copy as a live stream and act on every event twice.
  */
-describe('discoverEventStreams (discord, real Redis)', () => {
+describeIfRedis('discoverEventStreams (discord, real Redis)', () => {
   let redis: Redis;
   let serverId: string;
 

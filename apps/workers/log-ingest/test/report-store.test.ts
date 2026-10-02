@@ -1,15 +1,15 @@
 import { createDatabaseClient, events, playerReports, players, servers } from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import type { ParsedReport } from '../src/parser/report.js';
 import { parseReportLine } from '../src/parser/report.js';
 import { handleReport, LIVE_BUS_CHANNEL } from '../src/report/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the report1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const REPORTER_ID = uuidv7();
@@ -76,7 +76,7 @@ beforeEach(async () => {
   await db.delete(playerReports).where(eq(playerReports.serverId, SERVER_ID));
 });
 
-describe('handleReport', () => {
+describeIfDb('handleReport', () => {
   it('creates a player_reports row with resolved reporter and target uuids', async () => {
     const publisher = makePublisher();
     const result = await handleReport(db, publisher, {

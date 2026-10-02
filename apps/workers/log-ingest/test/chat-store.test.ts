@@ -2,13 +2,13 @@ import { handleChat, LIVE_BUS_CHANNEL } from '@squad/chat-ingest';
 import { createDatabaseClient, playerNameHistory, players, servers } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { parseChatLine } from '../src/parser/chat.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the chat1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const PLAYER_ID = uuidv7();
@@ -52,7 +52,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('handleChat', () => {
+describeIfDb('handleChat', () => {
   it('resolves the sender player uuid by identity and emits a chat.message frame', async () => {
     const chat = parseChatLine(
       `[2026.04.23-11.30.20:485][123]LogSquad: ChatMessage: ${STEAM} [Online IDs: EOS: ${EOS} steam: ${STEAM}] Alpha Player : ChatAll : hello world`,

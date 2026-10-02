@@ -9,15 +9,15 @@ import {
 } from '@squad/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleVehicle, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
 import { parseCombatVehicle, type VehicleRecordCommand } from '../src/parser/combat.js';
 import { parseLine } from '../src/parser/patterns.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const ALICE_ID = uuidv7();
@@ -85,7 +85,7 @@ async function combatEventsOfType(eventType: string) {
     .where(and(eq(combatEvents.serverId, SERVER_ID), eq(combatEvents.eventType, eventType)));
 }
 
-describe('handleVehicle', () => {
+describeIfDb('handleVehicle', () => {
   it('writes a vehicle_destroyed event with the raw asset id and no victim player', async () => {
     const result = await handleVehicle(db, makeRedis(), command(VEHICLE_KILL, 'BP_BRDM2_Woodland'));
     expect(result.inserted).toBe(true);
@@ -140,7 +140,7 @@ describe('handleVehicle', () => {
   });
 });
 
-describe('handleVehicle match association', () => {
+describeIfDb('handleVehicle match association', () => {
   // Issue #50 (#1073): the combat_events row must reference the open match.
   it('stores the open match on the combat_events row', async () => {
     const matchId = uuidv7();
@@ -168,7 +168,7 @@ describe('handleVehicle match association', () => {
   });
 });
 
-describe('handleVehicle dossier aggregation (DOSSIER-2)', () => {
+describeIfDb('handleVehicle dossier aggregation (DOSSIER-2)', () => {
   async function vehicleKill(playerId: string, vehicle: string, weapon: string) {
     const rows = await db
       .select()

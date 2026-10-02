@@ -2,13 +2,13 @@ import { createDatabaseClient, events, processedEvents, servers } from '@squad/d
 import type { EventEnvelope } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { persistEventEnvelope } from '../src/event-store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the event-store test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const EVENT_ID = uuidv7();
@@ -60,7 +60,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('persistEventEnvelope', () => {
+describeIfDb('persistEventEnvelope', () => {
   it('writes a generic event envelope without a processed_events marker (#62)', async () => {
     const result = await persistEventEnvelope(db, makeEnvelope());
 

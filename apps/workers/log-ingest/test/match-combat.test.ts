@@ -9,13 +9,13 @@ import {
 } from '@squad/db';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleMatchClose, type RosterSnapshotReader } from '../src/match-roster/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match3 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 /** These tests are about combat folding; no roster snapshot is cached. */
 const NO_ROSTER_SNAPSHOT: RosterSnapshotReader = { mget: async () => [null, null] };
@@ -170,7 +170,7 @@ beforeEach(async () => {
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
 });
 
-describe('handleMatchClose combat aggregation (MATCH-3)', () => {
+describeIfDb('handleMatchClose combat aggregation (MATCH-3)', () => {
   it('fills per-player kills/deaths/wounds/revives from combat events in the interval', async () => {
     await seedRoster();
     await seedCombatRound();

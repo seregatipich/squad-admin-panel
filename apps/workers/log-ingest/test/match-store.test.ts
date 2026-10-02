@@ -1,15 +1,15 @@
 import { createDatabaseClient, matches, servers } from '@squad/db';
 import { asc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { closeMatch, closeServerDown, handleMatchCommand, openMatch } from '../src/match/store.js';
 import { LogIngestor } from '../src/parser/ingest.js';
 import type { MatchCommand } from '../src/parser/match.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the match1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const START = '2026-07-05T18:00:00.000Z';
@@ -51,7 +51,7 @@ beforeEach(async () => {
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
 });
 
-describe('match store', () => {
+describeIfDb('match store', () => {
   it('assembles a played round with layer, factions, tickets, winner and duration', async () => {
     const opened = await openMatch(db, {
       serverId: SERVER_ID,
@@ -206,7 +206,7 @@ describe('match store', () => {
   });
 });
 
-describe('LogIngestor → match store pipeline', () => {
+describeIfDb('LogIngestor → match store pipeline', () => {
   function drive(lines: string[]): Promise<void> {
     const commands: MatchCommand[] = [];
     const ingestor = new LogIngestor({

@@ -12,13 +12,13 @@ import {
 import type { EventEnvelope } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleExternalBanConnect } from '../src/external-ban/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the cban4 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = '00000000-0000-7000-8000-000000000101';
 const SOURCE_ID = '00000000-0000-7000-8000-000000000102';
 const BAN_ID = '00000000-0000-7000-8000-000000000103';
@@ -119,7 +119,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('handleExternalBanConnect', () => {
+describeIfDb('handleExternalBanConnect', () => {
   it('kicks trusted matches, records history, and never writes a local ban', async () => {
     const redis = makeRedis();
     const cache = makeCache('kick');

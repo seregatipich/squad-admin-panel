@@ -1,6 +1,7 @@
 import { createDatabaseClient, events, processedEvents } from '@squad/db';
 import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { buildBansyncEnvelope, persistAndPublish } from '../src/events.js';
 
 // regression (#62): the envelope insert is idempotent through the events primary
@@ -37,7 +38,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('persistAndPublish', () => {
+describeIfDb('persistAndPublish', () => {
   it('stores the envelope once across retries without a processed_events row', async () => {
     // biome-ignore lint/suspicious/noExplicitAny: fake exposes only set/xadd
     const redis = makeRedis() as any;

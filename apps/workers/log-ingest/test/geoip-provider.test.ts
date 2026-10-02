@@ -6,13 +6,13 @@ import { gzipSync } from 'node:zlib';
 import { createDatabaseClient } from '@squad/db';
 import { GEOIP_SETTINGS_SINGLETON_ID, geoipSettings } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { GeoIpProvider } from '../src/geoip/provider.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const encryptionKey = randomBytes(32);
 const settingsId = GEOIP_SETTINGS_SINGLETON_ID;
 const NOW = new Date('2026-09-30T12:00:00Z');
@@ -62,7 +62,7 @@ function okResponse(archive: Buffer) {
   };
 }
 
-describe('GeoIpProvider (#1341)', () => {
+describeIfDb('GeoIpProvider (#1341)', () => {
   const dirs: string[] = [];
   const newDir = async () => {
     const dir = await mkdtemp(join(tmpdir(), 'geoip-provider-'));

@@ -38,6 +38,7 @@ SUITES=(
   test-postgres-max-connections
   test-local-dev-isolation
   test-ci-reuse-deploy-images
+  test-turbo-test-inputs
 )
 if [ -n "${REPO_CONTRACTS_SUITES:-}" ]; then
   # shellcheck disable=SC2206

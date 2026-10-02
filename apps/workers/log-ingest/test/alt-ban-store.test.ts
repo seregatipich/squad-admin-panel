@@ -13,13 +13,13 @@ import type { EventEnvelope } from '@squad/shared-types';
 import { eq, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleAltBanConnect } from '../src/alt-ban/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the ALT-7 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = '00000000-0000-7000-8000-000000000125';
 const RULE_ID = '00000000-0000-7000-8000-000000001125';
 const SECOND_RULE_ID = '00000000-0000-7000-8000-000000002125';
@@ -144,7 +144,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe('handleAltBanConnect', () => {
+describeIfDb('handleAltBanConnect', () => {
   it('raises a domain event and gated alert when a confirmed alt of an actively banned player connects', async () => {
     await seedRule();
     await seedLink('confirmed');

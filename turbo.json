@@ -47,6 +47,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/apps/workers/_test-shared/**",
         "$TURBO_ROOT$/packages/db/drizzle/**",
         "$TURBO_ROOT$/packages/db/sql/**"
       ]
@@ -57,6 +58,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/apps/workers/_test-shared/**",
         "$TURBO_ROOT$/packages/db/drizzle/**",
         "$TURBO_ROOT$/packages/db/sql/**"
       ]
@@ -67,6 +69,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/db/test/helpers/**",
+        "$TURBO_ROOT$/apps/workers/_test-shared/**",
         "$TURBO_ROOT$/packages/db/drizzle/**",
         "$TURBO_ROOT$/packages/db/sql/**"
       ]

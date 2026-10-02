@@ -3,7 +3,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { EventEnvelope } from '@squad/shared-types';
 import Redis from 'ioredis';
 import pino from 'pino';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { describeIfRedis } from '../../../../packages/db/test/helpers/describe-if.js';
 import { ensureConsumerGroup, runNotifyLoop } from '../src/consume.js';
 import { deliverEnvelope } from '../src/sender.js';
 
@@ -51,7 +52,7 @@ async function pollUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<
  * first events of a new server's stream never reached Discord, and a deleted
  * then re-created stream stalled the multiplexed read on NOGROUP for good.
  */
-describe('runNotifyLoop stream lifecycle (integration)', () => {
+describeIfRedis('runNotifyLoop stream lifecycle (integration)', () => {
   let redis: Redis | null = null;
   let stopped = false;
   let loop: Promise<void> | null = null;

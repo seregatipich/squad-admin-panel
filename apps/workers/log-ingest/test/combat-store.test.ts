@@ -10,15 +10,15 @@ import {
 } from '@squad/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handleCombat, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
 import { type CombatRecordCommand, parseCombat } from '../src/parser/combat.js';
 import { parseLine } from '../src/parser/patterns.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the combat1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 
 const SERVER_ID = uuidv7();
 const ALICE_ID = uuidv7();
@@ -167,7 +167,7 @@ async function weaponStat(playerId: string, weapon: string) {
   return rows[0] ?? null;
 }
 
-describe('handleCombat envelope writes', () => {
+describeIfDb('handleCombat envelope writes', () => {
   it('writes a death event with resolved attacker/victim uuids, weapon and damage', async () => {
     const result = await handleCombat(db, makeRedis(), command(DEATH_LINE));
     expect(result.inserted).toBe(true);
@@ -218,7 +218,7 @@ describe('handleCombat envelope writes', () => {
   });
 });
 
-describe('handleCombat teamkill detection', () => {
+describeIfDb('handleCombat teamkill detection', () => {
   it('flags a same-team kill from the roster snapshot', async () => {
     const result = await handleCombat(db, makeRedis(ROSTER_SAME_TEAM), command(DEATH_LINE));
     expect(result.isTeamkill).toBe(true);
@@ -237,7 +237,7 @@ describe('handleCombat teamkill detection', () => {
   });
 });
 
-describe('handleCombat player resolution edge cases', () => {
+describeIfDb('handleCombat player resolution edge cases', () => {
   it('creates an EOS-only attacker that is not yet known', async () => {
     const result = await handleCombat(db, makeRedis(), command(EOS_ONLY_KILL));
     expect(result.attackerPlayerId).not.toBeNull();
@@ -280,7 +280,7 @@ describe('handleCombat player resolution edge cases', () => {
   });
 });
 
-describe('handleCombat match association and dedup', () => {
+describeIfDb('handleCombat match association and dedup', () => {
   it('binds the event to the open match', async () => {
     const matchId = uuidv7();
     await db.insert(matches).values({
@@ -318,7 +318,7 @@ describe('handleCombat match association and dedup', () => {
   });
 });
 
-describe('handleCombat dossier aggregation (DOSSIER-2)', () => {
+describeIfDb('handleCombat dossier aggregation (DOSSIER-2)', () => {
   it('writes one combat_events death row and increments the weapon kill atomically', async () => {
     await handleCombat(db, makeRedis(), command(DEATH_LINE));
 

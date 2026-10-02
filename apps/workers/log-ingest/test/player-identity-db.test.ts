@@ -8,13 +8,13 @@ import {
 import type { EventEnvelope, PlayerConnectedPayload } from '@squad/shared-types';
 import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, expect, it } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { handlePlayerConnected } from '../src/player-identity/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the PLAYER-1 test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = '00000000-0000-7000-8000-000000000122';
 
 // Test-range identities (unique per file) so cleanup stays scoped to this suite.
@@ -88,7 +88,7 @@ async function auditsFor(playerId: string, action: string) {
     .where(and(eq(auditLog.targetId, playerId), eq(auditLog.actionType, action)));
 }
 
-describe('handlePlayerConnected (real database)', () => {
+describeIfDb('handlePlayerConnected (real database)', () => {
   it('is idempotent: a repeated identical connect creates no new rows', async () => {
     const event = connectEvent({ eos_id: EOS_IDEMPOTENT, steam_id64: '76561199220000001' });
     const first = await handlePlayerConnected(db, event);

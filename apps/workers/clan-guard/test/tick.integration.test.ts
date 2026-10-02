@@ -10,14 +10,14 @@ import {
 import { and, eq, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { describeIfDb } from '../../../../packages/db/test/helpers/describe-if.js';
 import { createClanGuardDeps } from '../src/deps.js';
 import { runClanGuardTick } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the clan-guard test database');
 
-const db = createDatabaseClient(DATABASE_URL);
+const db = createDatabaseClient(DATABASE_URL ?? 'postgres://unused/unused');
 const SERVER_ID = uuidv7();
 const CLAN_ID = uuidv7();
 const PLAYER_ID = uuidv7();
@@ -77,7 +77,7 @@ afterAll(async () => {
  * the warn/kick by the rows written for this test's own player — which the assertions
  * immediately below already do, and which is the stronger claim anyway.
  */
-describe('clan-guard audit integration', () => {
+describeIfDb('clan-guard audit integration', () => {
   it('writes one audit row for the warn and another for the subsequent kick', async () => {
     const redis = makeRedis();
     const deps = createClanGuardDeps(db, redis);
