@@ -7,7 +7,7 @@
 | Unit (Go) | `apps/bridge/internal/**/*_test.go` | Validators (paths, image names, ufw args), wire framing, peer-cred checks, error mapping. |
 | Integration (TS) | [`apps/api/test/install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts), `bridge-coverage.test.ts` | API → fake bridge plumbing: which RPCs the install flow calls, in what order, with what args. |
 | E2E | [`apps/api/test/e2e/bridge-rpc.e2e.test.ts`](../../../apps/api/test/e2e/bridge-rpc.e2e.test.ts) | Real bridge over the actual socket. Every method's success path AND its forbidden path. 10–30 s. |
-| Smoke | [`scripts/verify-bridge.sh`](../../../scripts/verify-bridge.sh) | Operator smoke after install: hits all 19 methods, prints `forbidden` / `ok` table. |
+| Smoke | [`scripts/verify-bridge.sh`](../../../scripts/verify-bridge.sh) | Operator smoke after install: calls 8 methods (`ping`, `host_info`, `host_metrics`, `list_panel_dirs`, `file_read`, `file_atomic_write`, `container_inspect`, `container_run`) and checks the expected `ok` / `forbidden` outcome of each; the per-method contracts live in the Go tests. |
 
 ## How to run
 

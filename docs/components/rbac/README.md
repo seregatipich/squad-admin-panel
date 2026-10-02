@@ -5,7 +5,7 @@ Controls which Steam users can log into the panel and what they can do once insi
 ## Responsibilities
 
 - Define the permission registry (keys, categories, labels, danger/unimplemented flags).
-- Provide five seeded system roles at DB migration time (Owner, Senior Admin, Admin, Moderator, Viewer).
+- Provide the seeded roles at DB migration time: Owner (the only system role), Admin, Moderator, QueuePriority, Cameraman and Intern (migrations `0009`, `0015`, `0016`).
 - Enforce single-role assignment per player (`players.role_id uuid NULL`).
 - Load and cache a player's effective permissions on every authed request (TTL 30 s, point-invalidated on role changes).
 - Guard the Owner role against deletion and protect against last-Owner removal.
@@ -46,7 +46,7 @@ Controls which Steam users can log into the panel and what they can do once insi
 - `@squad/db` — `roles`, `role_permissions`, `players`, `panel_meta` tables.
 - `@squad/shared-config` — `PERMISSIONS`, `PERMISSION_KEYS`, `PermissionKey`, `ROLE_COLORS`.
 - `apps/api/src/plugins/auth.ts` — calls `loadUserPermissions` on every authed request.
-- Redis — permission cache keys `rbac:perms:{steam_id64}` (TTL 30 s).
+- No Redis dependency: the permission cache is a process-local `Map` in `apps/api/src/lib/rbac.ts` (TTL 30 s, at most 5,000 entries).
 
 ## Components depending on this
 
@@ -57,14 +57,14 @@ Controls which Steam users can log into the panel and what they can do once insi
 ## Basic example
 
 ```ts
-// Check if caller may start a server (from a route preHandler)
+// Check if caller may start a server (enforced by the global onRequest hook)
 app.route({
   method: 'POST',
   url: '/api/v1/servers/:id/start',
   config: { permissions: ['server:start'], audit: { action: 'server.start', resource: 'server' } },
   handler: async (req, reply) => { /* ... */ },
 });
-// auth.ts preHandler calls loadUserPermissions and returns 403 if 'server:start' is absent.
+// the onRequest hook in auth.ts calls loadUserPermissions and returns 403 if 'server:start' is absent.
 ```
 
 ## Related docs

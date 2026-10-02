@@ -22,12 +22,14 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 - [`web`](components/web/README.md) — Next.js dashboard ([design system](components/web/design-system.md))
 - [`bridge`](components/bridge/README.md) — Go host daemon (the only privileged component)
 - [`rbac`](components/rbac/README.md) — permission registry, roles, enforcement
-- [`workers`](components/workers/README.md) — the worker fleet, one directory per documented worker
+- [`workers`](components/workers/README.md) — the worker fleet, one directory per worker under `apps/workers/` (21), each with the standard 7-file doc set
 - [`db`](components/db/README.md) — Drizzle schema + Postgres migrations
 - [`diag`](components/diag/README.md) — `@squad/diag` panel-internal diagnostic event emitter (Redis Stream `diag:queue`)
 - [`shared-types`](components/shared-types/README.md) — Zod schemas + `EventEnvelope`
 - [`shared-config`](components/shared-config/README.md) — permission keys, bridge-method allowlist
 - [`bridge-client`](components/bridge-client/README.md) — TS client for the Go bridge
+- [`chat-ingest`](components/chat-ingest/README.md) — `@squad/chat-ingest` shared chat ingestion pipeline used by `worker-log-ingest` and `worker-rcon`
+- [`steam-api`](components/steam-api/README.md) — `@squad/steam-api` Steam Web API fetchers with Redis caching
 
 ### Operations
 

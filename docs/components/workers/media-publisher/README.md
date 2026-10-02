@@ -18,8 +18,8 @@ Each tick (`MEDIA_PUBLISHER_INTERVAL_MS`, default 60 s) claims up to `MEDIA_PUBL
 WITH due AS (
   SELECT p.id FROM media_publications p
   JOIN media_files m ON m.id = p.media_id
-  WHERE p.status IN ('queued', 'uploading') AND p.next_attempt_at <= now() AND m.deleted_at IS NULL
-  ORDER BY p.next_attempt_at ASC LIMIT $n
+  WHERE p.status IN ('queued', 'uploading') AND p.next_attempt_at <= $now AND m.deleted_at IS NULL
+  ORDER BY p.next_attempt_at ASC NULLS LAST, p.updated_at ASC LIMIT $n
   FOR UPDATE OF p SKIP LOCKED
 )
 UPDATE media_publications p SET status = 'uploading', next_attempt_at = now() + lease ... RETURNING ...
@@ -27,7 +27,7 @@ UPDATE media_publications p SET status = 'uploading', next_attempt_at = now() + 
 
 A claim is a lease (`MEDIA_PUBLISH_LEASE_MS`, 6 h): while a row is `uploading`, `next_attempt_at` is the lease expiry. A row still `uploading` past it belongs to a worker that died mid-upload (OOM, SIGKILL, deploy), so the next claim takes it back with `attempts + 1` and `error = 'upload_interrupted'`; once that exhausts the retry budget the row goes to `failed` without another upload (#52). The lease is far above any real upload, because reclaiming a live upload would publish the media twice.
 
-`FOR UPDATE ... SKIP LOCKED` plus the `status = 'queued'` re-check on the `UPDATE` is what makes a second replica — or a second tick overlapping a slow one — unable to take the same row.
+`FOR UPDATE ... SKIP LOCKED` plus the `status IN ('queued', 'uploading')` and `next_attempt_at <= now` re-check on the `UPDATE` is what makes a second replica — or a second tick overlapping a slow one — unable to take the same row.
 
 ## Three failure outcomes, deliberately distinct
 
@@ -46,9 +46,9 @@ The quota row is the important one. A daily allowance being spent is not the job
 
 Both publishers are built by a factory that returns `null` when its credentials are absent, mirroring `fetchSteamProfile`'s `if (!deps.apiKey) return null`. A destination with no publisher is deferred, never failed.
 
-**Telegram** — `sendVideo`/`sendPhoto` over raw `fetch`. The Bot API caps an upload at **50 MiB** against the panel's own 2 GiB media limit, and bots have no chunked path, so a larger file is a *permanent* `telegram_file_too_large` rather than an endless retry; YouTube is the fallback for those. A public message URL only exists for an `@username` channel or a `-100…` supergroup — for any other chat the publication still succeeds with `external_id` set and `external_url` **NULL**, because a fabricated link would later be used to justify deleting the local file.
+**Telegram** — `sendVideo`, `sendPhoto` or (for an image above 10 MiB) `sendDocument` over raw `fetch`. The Bot API caps an upload at **50 MiB** against the panel's own 2 GiB media limit, and bots have no chunked path, so a larger file is a *permanent* `telegram_file_too_large` rather than an endless retry; YouTube is the fallback for those. A public message URL only exists for an `@username` channel or a `-100…` supergroup — for any other chat the publication still succeeds with `external_id` set and `external_url` **NULL**, because a fabricated link would later be used to justify deleting the local file.
 
-**YouTube** — Data API v3 over raw `fetch`: OAuth refresh → resumable session → byte upload. No `googleapis` dependency, matching how this repo already talks to Discord and Steam. Videos are uploaded **`unlisted`**: this is moderation evidence, and the panel must not silently make every clip searchable on the open web.
+**YouTube** — Data API v3 over raw `fetch`: OAuth refresh → resumable session → byte upload. A resumable session URL is persisted in `media_publications.upload_session_url`, so a retry asks Google for the session status and resumes from the reported byte offset (or reports an already finalized video) instead of uploading again. Only video files are accepted (`youtube_unsupported_kind` otherwise). No `googleapis` dependency, matching how this repo already talks to Discord and Steam. Videos are uploaded **`unlisted`**: this is moderation evidence, and the panel must not silently make every clip searchable on the open web.
 
 ### Secret hygiene
 
@@ -64,7 +64,7 @@ Three guards must all hold first, each protecting against losing evidence outrig
 2. every other publication of that media has already finished — otherwise a still-queued destination loses the file it was about to upload;
 3. no second `media_files` row shares the `storage_path` — uploads are deduplicated by sha256, so one file on disk can back several rows.
 
-Guard 3 and the swap run in one transaction holding `pg_advisory_xact_lock(hashtext('media_storage_path'), hashtext(storage_path))` — the same lock the API's upload dedup and `DELETE /api/v1/media/:id` take (`apps/api/src/lib/media-files.ts`) — so an upload cannot start sharing the file between the check and the release.
+Guard 3 and the swap run in one transaction holding `pg_advisory_xact_lock(hashtext(storage_path))` (`withMediaStoragePathLock` in `@squad/db`) — the same lock the API's upload dedup and `DELETE /api/v1/media/:id` take (`apps/api/src/lib/media-files.ts`) — so an upload cannot start sharing the file between the check and the release.
 
 The swap itself is a single `UPDATE`: `media_files_exactly_one_location_check` forbids a row holding both or neither location, so it cannot be split into two statements.
 

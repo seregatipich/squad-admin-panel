@@ -61,13 +61,9 @@ psql "$DATABASE_URL" -c "
   GROUP BY p.steam_id64, r.name;
 "
 
-# Check Redis cache key
-redis-cli GET "rbac:perms:76561198000000123"
-# If this key is present and stale, delete it manually:
-redis-cli DEL "rbac:perms:76561198000000123"
 ```
 
-The cache key is a simple Redis `SET`/`GET` with a 30 s TTL, so worst case you wait 30 s for it to expire naturally. In production the point-invalidation always runs; a stale cache after that window means the DELETE failed silently — check api logs.
+The permission cache is an in-process `Map` inside the API (not Redis), so there is nothing to inspect or delete from `redis-cli`. Entries expire after 30 s, so worst case you wait 30 s. Point-invalidation runs on every role change made through the API; a change made by another process (the `role-expirer` worker) or by a direct database edit is only picked up when the entry expires. To drop every entry immediately, restart the api container.
 
 ---
 
@@ -85,11 +81,7 @@ psql "$DATABASE_URL" -c "
 "
 ```
 
-Then clear the Redis cache for that player:
-
-```bash
-redis-cli DEL "rbac:perms:<steam_id64>"
-```
+A direct database edit does not invalidate the API's in-process permission cache; the change is visible within 30 s, or at once after `docker compose restart api`.
 
 The `cannot_remove_last_owner` API guard prevents this from happening via the UI, but a direct DB edit bypasses the guard. Consider it an emergency recovery procedure only.
 
@@ -121,7 +113,7 @@ If `first_owner_claimed` is already `true` but no Owner role exists, the Owner r
 
 ## Symptom: deleted preset role (e.g. Moderator) is not recreated automatically
 
-The seeded roles (Senior Admin, Admin, Moderator, Viewer) are preset for convenience but have `is_system_role = false`. An operator can delete them via `DELETE /api/v1/roles/:id`. The migration does not re-seed on restart and the API has no auto-respawn logic.
+The seeded roles (Admin, Moderator, QueuePriority, Cameraman, Intern) are preset for convenience but have `is_system_role = false`. An operator can delete them via `DELETE /api/v1/roles/:id`. The migration does not re-seed on restart and the API has no auto-respawn logic.
 
 If a preset role is deleted and needs to be restored, re-create it manually via `POST /api/v1/roles` with the appropriate permissions, or via a direct INSERT from the migration file.
 
@@ -139,15 +131,7 @@ DELETE FROM role_permissions WHERE role_id = (
 INSERT INTO role_permissions (id, role_id, permission_key) VALUES (...);
 ```
 
-After a direct DB write, clear the permission cache for all Owner players:
-
-```bash
-psql "$DATABASE_URL" -c "
-  SELECT p.steam_id64 FROM players p
-  JOIN roles r ON r.id = p.role_id
-  WHERE r.name = 'Owner';
-" | while read sid; do redis-cli DEL "rbac:perms:$sid"; done
-```
+After a direct DB write the API's in-process permission cache refreshes within 30 s; restart the api container (`docker compose restart api`) to apply it immediately.
 
 ---
 

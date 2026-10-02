@@ -122,7 +122,7 @@ Update role name, color, description, or permissions. All fields are optional; o
 | 404 | `{error: "role_not_found"}` | |
 | 409 | `{error: "role_name_taken"}` | Rename conflicts with an existing role. |
 
-Side-effect: calls `invalidatePermissionCacheForRole(roleId)` which immediately clears the Redis cache for every player carrying this role. The in-process TTL safety-net (30 s) is a fallback only.
+Side-effect: calls `invalidatePermissionCacheForRole(roleId)` which immediately clears the in-process permission cache entry of every player carrying this role. The 30 s TTL is a fallback only, and it is the only thing that refreshes other processes (the cache is per API process).
 
 **Audit:** `role.update` / `role`.
 

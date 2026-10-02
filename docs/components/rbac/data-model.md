@@ -82,15 +82,16 @@ Migration 0009 dropped (with CASCADE):
 
 ## Seeded roles
 
-Migration 0009 INSERTs five roles and their `role_permissions` rows. The Owner role has `is_system_role = true`; the other four do not.
+Migration `0009` INSERTed five roles; `0015` replaced them and `0016` dropped the last legacy row (Viewer). A fresh install ends up with six. Only Owner has `is_system_role = true`. Except for Owner, seeded roles carry no `role_permissions` rows: panel-side permissions are derived from the role's access flags at runtime (`apps/api/src/lib/rbac.ts`), and each role gets a set of Squad in-game permissions in `role_squad_permissions`.
 
-| Role | Color | System | Default permissions |
+| Role | Color | System | `panel_access` / `can_assign_roles` / `can_edit_roles` |
 |---|---|---|---|
-| Owner | `red` | yes | All keys including `unimplemented` |
-| Senior Admin | `amber` | no | All except `server:delete`, `role:delete`, `backup:restore` |
-| Admin | `sky` | no | Server ops, config ops, player/mod ops, audit/events, api tokens |
-| Moderator | `emerald` | no | `server:view`, `player:view`, `mod:kick/warn/ban_temp/unban`, `events:view` |
-| Viewer | `neutral` | no | All `*:view` keys |
+| Owner | `#FF0000` | yes | all true; every key, including `unimplemented` ones |
+| Admin | `#CD5C5C` | no | true / false / false |
+| Moderator | `#2E8B57` | no | true / false / false |
+| QueuePriority | `#DAA520` | no | false / false / false (only the Squad `reserve` permission) |
+| Cameraman | `#8B008B` | no | false / false / false |
+| Intern | `#005EC2` | no | false / false / false |
 
 `player_api_tokens` rows are truncated in migration 0009 (pre-launch; no real tokens existed at the time of the migration).
 

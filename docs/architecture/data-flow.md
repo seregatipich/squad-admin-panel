@@ -13,8 +13,8 @@
 
 | Store | Used by | What lives there |
 |---|---|---|
-| PostgreSQL | api, workers, db migrations | players (with `role_id`), sessions, roles, role_permissions, panel_meta (singleton), servers, config_versions, audit_log, events (partitioned monthly), processed_events |
-| Redis | api, all workers | event streams `events:server:{id}` and `events:global`; connector-logs stream `panel:logs` (`MAXLEN ~ 100k`); host metrics history `host:metrics` (`XADD` capped); depot progress stream `depot:progress` (≤5k entries); status keys `rcon:status:{id}`, `worker:heartbeat:{name}` (TTL 30 s); blame cache `config-blame:{tip_version_id}` (TTL 24 h); install in-flight `depot:updating`; rate-limit counters |
+| PostgreSQL | api, workers, db migrations | The 97 tables declared in [`packages/db/src/schema/`](../../packages/db/src/schema/): players, sessions, roles and permissions, servers and their settings, `config_versions`, the hash-chained `audit_log`, the partitioned `events` journal, moderation, statistics and integration tables. Layout: [`components/db`](../components/db/README.md). |
+| Redis | api, all workers | event streams `events:server:{id}` and `events:global`; connector-logs stream `panel:logs` (`MAXLEN ~ 100k`); host metrics history `host:metrics` (`XADD` capped); depot progress stream `depot:progress` (≤5k entries); status keys `rcon:status:{id}`, `worker:heartbeat:{name}` (TTL 30 s); blame cache `config-blame:v3:{tip_version_id}` (TTL 24 h); install in-flight `depot:updating`; rate-limit counters |
 | Host filesystem | bridge, server containers | `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg` (RW host, RW container), `/var/lib/squad-panel/saved/{uuid}/**` (RW), `/var/lib/docker/volumes/squad-depot/**` (RO) |
 
 ## Event pipeline
@@ -22,32 +22,26 @@
 Every event uses the same envelope (see [`components/shared-types/data-model.md`](../components/shared-types/data-model.md)).
 
 ```
-producer                                    consumer
+producer                                    consumers
 ┌─────────────────────┐                     ┌──────────────────────┐
-│ worker-log-ingest   │                     │ players-projector    │
-│ worker-rcon         │ ──Redis Stream──▶   │ (UPSERT players,     │
-│ api (server.*)      │  events:server:{id} │  player_name_history)│
-│ bridge connectors   │                     │                      │
+│ worker-log-ingest   │                     │ worker-discord       │
+│ worker-rcon         │ ──Redis Stream──▶   │ worker-automation    │
+│ RNSquadJS sidecar   │  events:server:{id} │ (own consumer group  │
+│                     │                     │  per service)        │
 └─────────────────────┘                     └──────────────────────┘
-                       ─Redis Stream──▶     UI WebSocket mirror
-                        events:global
+                       ─Redis Stream──▶     events:global
 ```
 
-Consumer-group naming: `<service>:v<schema-version>` (e.g. `players-projector:v1`). Bumping the version starts a fresh group that replays from the tail.
+`worker-log-ingest` also persists each envelope to the partitioned `events` table. Its primary key `(event_id, occurred_at)` makes a replayed log line a no-op, and `processed_events` is no longer written by any producer (the `event-partition` worker only prunes the leftover rows). Consumer-group naming: `<service>:v<schema-version>` (for example `log-ingest:v1`). Bumping the version starts a fresh group that replays from the tail.
 
-### Idempotency (dual-layer)
+### Idempotency
 
-Every consumer does both before acting:
+- Producer side: `worker-log-ingest` claims `dedup:log-ingest:v1:{event_id}` with `SET ... EX 86400 NX` before `XADD` (stream capped with `MAXLEN ~ 10000`) and deletes the key when `XADD` fails, so a re-read line cannot publish twice.
+- Consumer side: each consumer claims `dedup:{group}:{event_id}` (24 h TTL) and `XACK`s only after the side effect committed (`worker-discord`, `worker-automation`).
 
-1. `SET dedup:${group}:${event_id} 1 EX 86400 NX` — fast short-circuit on redelivery.
-2. `INSERT INTO processed_events (event_id, group_name) ON CONFLICT DO NOTHING` — durable guarantee that survives Redis restarts.
+### Reclaim and retries
 
-`XACK` runs only after the side-effect commits. On consumer failure the Redis dedup key is `DEL`-ed so `XAUTOCLAIM`'s retry can proceed.
-
-### Reclaim / DLQ
-
-- `XAUTOCLAIM` runs every 30 s with a 120 s idle threshold.
-- After five deliveries to the same pending entry, the reclaimer moves the message to `events:dlq` and `XACK`s the original.
+Every 30 s `worker-discord` and `worker-automation` run `XAUTOCLAIM` (entries idle for 30 s, batches of 50) and `worker-config-sync` does the same for its Admins.cfg streams (60 s idle, `ADMINS_CFG_RECLAIM_*`). `worker-discord` acknowledges an entry after `MAX_DELIVERY_ATTEMPTS = 10` failed deliveries and logs an error. No code writes the `events:dlq` stream; only the key helper `STREAM_NAME.eventsDlq()` and a Redis-primitive test exist.
 
 ## Install flow (end to end)
 

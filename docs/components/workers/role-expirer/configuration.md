@@ -8,3 +8,7 @@
 | `ROLE_EXPIRY_REMINDER_INTERVAL_MS` | no | `86400000` | VIPSUB-4 expiry-reminder tick interval in milliseconds (daily). |
 | `VIP_RENEWAL_INTERVAL_MS` | no | `3600000` | VIPSUB-5 subscription renewal tick interval in milliseconds (hourly). |
 | `LOG_LEVEL` | no | `info` | Pino log level. |
+
+The three interval variables are parsed by `requiredTickIntervalMs`: an unset or
+blank value uses the default, and any other value that is not a positive integer
+(for example `1h` or `0`) throws at startup instead of falling back.

@@ -28,7 +28,7 @@
 
 - **Browser → Caddy**: TLS terminates at Caddy.
 - **Caddy → web/api containers**: Docker bridge network, only ports 80/443 are published.
-- **Containers → bridge**: unix socket bind-mounted into containers that need it (api, worker-rcon, worker-log-ingest). Group membership (`panel`) is checked on every connection.
+- **Containers → bridge**: unix socket bind-mounted into containers that need it (`api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` in both `docker/compose.yml` and `docker/compose.stand.yml`; `worker-rcon` does not mount it). Group membership (`panel`) is checked on every connection.
 - **Bridge → host**: bridge runs as root with `CAP_NET_ADMIN` (for `ufw`) plus `CAP_CHOWN`/`CAP_FOWNER` (sidecar socket directory ownership). All file paths are allowlisted under `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg`, `/var/lib/squad-panel/saved/{uuid}/**`, and `/var/lib/docker/volumes/squad-depot/**` (RO).
 
 ## systemd-analyze score

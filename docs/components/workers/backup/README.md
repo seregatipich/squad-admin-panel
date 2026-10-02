@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Will create restic-based snapshots of the Postgres database and all server config files on a configurable schedule.
+Placeholder for a future in-fleet backup worker. Backups themselves run in the restic `backup` compose service (see below).
 
-## Current status — heartbeat active, restic logic deferred
+## Current status — placeholder, not deployed
 
-The process logs `"worker-backup idle — deferred to later phase"` once at startup, then publishes an active `worker:heartbeat:backup` heartbeat (via `startHeartbeat`, `status: "idle (P2)"`) whenever `REDIS_URL` is set — every 5 s, TTL 30 s. No `REDIS_URL` means no Redis client is created and no heartbeat is published. There is no periodic idle loop beyond the heartbeat interval; the process just waits on `SIGINT`/`SIGTERM`. Restic snapshot/domain logic is still deferred to a later phase.
+`apps/workers/backup/src/index.ts` is a `runWorker` call with no ticks. At startup it logs `worker-backup placeholder idle — not deployed; backups run in the restic compose service (profile backup)`, then publishes the `worker:heartbeat:backup` heartbeat with status `idle (P2)` when `REDIS_URL` is set (Redis is optional; without it there is no heartbeat). The worker has no compose service in `docker/compose.yml` or `docker/compose.stand.yml`, so nothing runs it, and it contains no restic logic.
 
 ## Backup is already live via the restic service (INFRA-8)
 
-The scheduled backups the panel actually relies on today are **not** produced by this worker — they run in the `backup` service defined in `docker/compose.yml` (image built from `docker/restic.Dockerfile`). This worker stays a stub until a later phase folds the schedule into the worker fleet.
+The scheduled backups the panel actually relies on today are **not** produced by this worker — they run in the `backup` service defined in `docker/compose.yml` (image built from `docker/restic.Dockerfile`). This worker is an unused placeholder until a later phase folds the schedule into the worker fleet.
 
 - **What is backed up:** logical dumps, not raw data dirs. Before each snapshot the service's `PRE_COMMANDS` run `pg_dump -Fc` (Postgres → `admin.dump`) and `redis-cli --rdb` (Redis → `dump.rdb`) into the `backup_dump` volume, then `restic backup /data` snapshots that directory. `pg_dump`/`redis-cli` reuse `POSTGRES_PASSWORD`.
 - **Archived Squad logs (LOG-3, #51):** for servers with `server_settings.archive_logs_to_backup` on, the host bridge copies a rotated `SquadGame*.log` into `${DATA_DIR}/backup-dump/log-archive/{uuid}/` (via `PANEL_BACKUP_DUMP_ROOT`) just before the LOG-1 10-day retention sweep deletes it. Because that path is already inside `RESTIC_BACKUP_SOURCES=/data`, the next snapshot captures it under the same 7d/4w/6m retention — no separate restic invocation.
@@ -24,7 +24,7 @@ The scheduled backups the panel actually relies on today are **not** produced by
 ```
 apps/workers/backup/
   src/
-    index.ts    — active heartbeat lifecycle (worker:heartbeat:backup); restic/domain logic deferred
+    index.ts    — placeholder lifecycle (worker:heartbeat:backup); no restic logic
 ```
 
 ## Related docs

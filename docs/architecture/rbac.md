@@ -6,7 +6,7 @@ The panel uses a permission-key model. A role is a bag of permission-key strings
 
 Each entry in `PERMISSIONS` is a `PermissionDef` with:
 - `key` — unique string identifier (e.g. `server:start`)
-- `category` — one of the 16 values in `PERMISSION_CATEGORIES`
+- `category` — one of the 17 values in `PERMISSION_CATEGORIES` (56 keys in total)
 - `label` — human-readable Russian description
 - `dangerous?: true` — present when the action is destructive or irreversible
 - `unimplemented?: true` — present when the action is planned but not yet active
@@ -18,19 +18,20 @@ Current keys by category:
 | servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update`, `server:download_logs` |
 | configs | `config:view`, `config:edit`, `config:rollback` |
 | players | `player:view`, `player:view_ips`, `player:manage_alt_detection`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags` |
-| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`, `ban_source:view`, `banlist:read` |
+| moderation | `mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`, `ban_source:view`, `message_template:manage`, `banlist:read` |
 | admin_groups | `admin_group:view`, `admin_group:edit` |
 | whitelist | `whitelist:view`, `whitelist:edit` |
-| host | `host:view`, `host:metrics` |
+| host | `host:view`, `host:metrics`, `host:manage` |
 | audit | `audit:view`, `audit:export`* |
 | events | `events:view` |
 | users | `user:view`, `user:manage_roles` |
 | roles | `role:view`, `role:create`, `role:edit`, `role:delete` |
 | backup | `backup:view`*, `backup:trigger`*, `backup:restore`* |
 | api_tokens | `api_token:create`, `api_token:revoke` |
-| discord | `discord:link`* |
-| triggers | `trigger:view`, `trigger:edit`* |
+| discord | `discord:link`*, `integration:manage` |
+| triggers | `trigger:view`, `trigger:edit` |
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
+| balancer | `balancer:view`, `balancer:edit` |
 
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
 `admin_group:view` and `admin_group:edit` are production-active: they protect
@@ -46,7 +47,7 @@ Routes refer to these as literal strings; the type system narrows them to `Permi
 
 ## Role colors
 
-Roles have a `color` column constrained by `CONSTRAINT roles_color_palette CHECK (color IN (...))`. The 16 allowed values are mirrored in [`packages/shared-config/src/role-colors.ts`](../../packages/shared-config/src/role-colors.ts) as `ROLE_COLORS`. The test suite in `packages/shared-config/test/role-colors.test.ts` asserts that the TS constant and the SQL constraint stay in sync.
+Roles have a `color` column constrained by `CONSTRAINT roles_color_format CHECK (...)` (migration `0014`): either one of the 16 palette names or a `#RRGGBB` hex code. The 16 names are mirrored in [`packages/shared-config/src/role-colors.ts`](../../packages/shared-config/src/role-colors.ts) as `ROLE_COLORS`, and `isRoleColor` accepts them and hex codes. `packages/shared-config/test/role-colors.test.ts` checks the names against the original `roles_color_palette` constraint in migration `0009`, and `role-colors-hex.test.ts` covers the hex form.
 
 ## Enforcement
 

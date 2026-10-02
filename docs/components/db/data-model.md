@@ -522,7 +522,7 @@ M:N join table mapping roles to permission key strings. **Legacy**: no API route
 
 ## `roles`
 
-RBAC role definitions. Five system roles are seeded by migration `0009_panel_rbac.sql`: Owner, Senior Admin, Admin, Moderator, Viewer. Custom roles can be created by users with `role:create`. The Owner role is the only one with `is_system_role = true` that cannot be deleted.
+RBAC role definitions. Six roles are seeded by migrations `0009`, `0015` and `0016`: Owner, Admin, Moderator, QueuePriority, Cameraman, Intern. Custom roles can be created by users with `role:create`. The Owner role is the only one with `is_system_role = true` and cannot be deleted.
 
 **Columns**
 
