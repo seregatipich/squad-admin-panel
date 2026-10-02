@@ -252,6 +252,94 @@ describe('GET /api/v1/auth/steam/callback', () => {
     expect(flat).toMatch(/__Host-sid=s_/);
   }, 20_000);
 
+  // #115: with no Steam Web API key the profile lookup yields nothing; the
+  // login must not overwrite the stored nickname with the 'Player NNNN' stand-in.
+  it('keeps the stored nickname when the profile lookup yields nothing', async () => {
+    const STEAM_ID = '76561198000000115';
+    const NONCE = 'keep-name-nonce';
+    await h.db.insert(players).values({
+      id: uuidv7(),
+      steamId64: BigInt(STEAM_ID),
+      canonicalName: 'dead│   realnick',
+      canonicalNameNormalized: 'dead│   realnick',
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => new Response('is_valid:true\n', { status: 200 }),
+    );
+    await h.redis.set(
+      `steam-nonce:${NONCE}`,
+      JSON.stringify({ ts: Date.now(), ip: null }),
+      'EX',
+      300,
+    );
+    const params = new URLSearchParams({
+      n: NONCE,
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'id_res',
+      'openid.claimed_id': `https://steamcommunity.com/openid/id/${STEAM_ID}`,
+      'openid.identity': `https://steamcommunity.com/openid/id/${STEAM_ID}`,
+      'openid.return_to': `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+      'openid.response_nonce': '2026-04-25T12:00:00Zkeepname',
+      'openid.assoc_handle': 'x',
+      'openid.signed': 'signed,op_endpoint',
+      'openid.sig': 'sig',
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${params.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+
+    expect(res.statusCode).toBe(302);
+    const rows = await h.db
+      .select()
+      .from(players)
+      .where(eq(players.steamId64, BigInt(STEAM_ID)));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.canonicalName).toBe('dead│   realnick');
+    expect(rows[0]?.canonicalNameNormalized).toBe('dead│   realnick');
+  });
+
+  it('names a brand-new player with the placeholder when the profile lookup yields nothing', async () => {
+    const STEAM_ID = '76561198000001157';
+    const NONCE = 'new-placeholder-nonce';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => new Response('is_valid:true\n', { status: 200 }),
+    );
+    await h.redis.set(
+      `steam-nonce:${NONCE}`,
+      JSON.stringify({ ts: Date.now(), ip: null }),
+      'EX',
+      300,
+    );
+    const params = new URLSearchParams({
+      n: NONCE,
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'id_res',
+      'openid.claimed_id': `https://steamcommunity.com/openid/id/${STEAM_ID}`,
+      'openid.identity': `https://steamcommunity.com/openid/id/${STEAM_ID}`,
+      'openid.return_to': `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+      'openid.response_nonce': '2026-04-25T12:00:00Znewplaceholder',
+      'openid.assoc_handle': 'x',
+      'openid.signed': 'signed,op_endpoint',
+      'openid.sig': 'sig',
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${params.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+
+    expect(res.statusCode).toBe(302);
+    const rows = await h.db
+      .select()
+      .from(players)
+      .where(eq(players.steamId64, BigInt(STEAM_ID)));
+    expect(rows[0]?.canonicalName).toBe('Player 1157');
+  });
+
   it('replay rejected: same response_nonce can only be used once', async () => {
     const NONCE_A = 'replay-a';
     const NONCE_B = 'replay-b';

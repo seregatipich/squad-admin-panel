@@ -15,6 +15,12 @@ export interface PlayerIdentity {
   steamId64: bigint;
   canonicalName: string;
   avatarUrl: string | null;
+  /**
+   * The name is a stand-in (the profile lookup failed or is disabled), not one
+   * the provider reported. It names a brand-new player but never replaces the
+   * name an existing player already has (#115).
+   */
+  nameIsPlaceholder?: boolean;
 }
 
 /**
@@ -43,8 +49,7 @@ export async function establishAuthenticatedPlayerSession(
   }
 
   const update = {
-    canonicalName,
-    canonicalNameNormalized,
+    ...(identity.nameIsPlaceholder ? {} : { canonicalName, canonicalNameNormalized }),
     updatedAt: new Date(),
     ...(identity.avatarUrl === null ? {} : { avatarUrl: identity.avatarUrl }),
   };
