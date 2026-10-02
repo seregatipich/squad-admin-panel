@@ -505,6 +505,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       packages: read
     steps:
@@ -516,9 +517,34 @@ jobs:
           password: ${{ github.token }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         id: buildx
-      # rnsquadjs is not part of a release, so no deploy pushes a registry
-      # cache for it; it keeps its GitHub Actions layer cache instead.
+      # The promoted commit was pushed to dev first, so the stand deploy is building the same release
+      # images right now. Building them again here took 180-230 s whenever source layers changed (the
+      # deploy's layer cache is not pushed yet) and made this the slowest job of the run; reuse the
+      # ones the smoke tests need (api, workers) instead. With no deploy run for the commit, or one that
+      # ended without the images, reuse=false and the step below builds everything as before.
+      - name: Reuse the images the stand deploy built
+        id: deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-reuse-deploy-images.sh
+      # rnsquadjs is not part of a release, so no deploy builds or pushes it; it is always built here
+      # and keeps its GitHub Actions layer cache instead of the registry cache.
+      - name: build the rnsquadjs image
+        if: steps.deployed.outputs.reuse == 'true'
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        env:
+          TAG: ${{ github.sha }}
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          source: .
+          files: docker/docker-bake.hcl
+          targets: rnsquadjs
+          load: true
+          set: |
+            rnsquadjs.cache-from=type=gha,scope=rnsquadjs
+            rnsquadjs.cache-to=type=gha,scope=rnsquadjs,mode=max
       - name: build images
+        if: steps.deployed.outputs.reuse != 'true'
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         env:
           TAG: ${{ github.sha }}
