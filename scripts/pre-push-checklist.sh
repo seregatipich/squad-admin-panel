@@ -15,11 +15,14 @@
 #   2. biome check of the source directories.
 #   3. gitleaks secret scan of origin/dev..HEAD (only if gitleaks is installed).
 #   4. typecheck of the packages changed since origin/dev and their dependents.
-#   5. tests of the changed packages only, not their dependents; in apps/api,
-#      only the test files the diff touches. Suites whose tests read
-#      DATABASE_URL or REDIS_URL run only when a database is available —
-#      DATABASE_URL, or one provisioned for this worktree — and are skipped
-#      with a warning otherwise.
+#   5. tests of the changed packages only, not their dependents. Suites whose
+#      tests read DATABASE_URL or REDIS_URL run only when a database is
+#      available — DATABASE_URL, or one provisioned for this worktree — and are
+#      skipped with a warning otherwise. In apps/api, the test files the diff
+#      touches run when a database is available; otherwise (and when the diff
+#      touches none) the service-free half of the suite runs in full
+#      (`pnpm --filter @squad/api test:unit`), and the touched files that need
+#      a database are skipped.
 #   6. pnpm test:scripts, only when scripts/ or .github/ changed (it needs the
 #      database and Redis too).
 #
@@ -243,15 +246,18 @@ run_changed() {
     skip_step "package tests" "no changed package besides @squad/api"
   fi
 
-  if [ ${#api_tests[@]} -gt 0 ]; then
-    if [ "$db_ready" = 1 ]; then
-      run_step "api tests (changed test files)" \
-        pnpm --filter @squad/api exec vitest run --passWithNoTests "${api_tests[@]}"
-    else
-      skip_step "api tests" "no database: ${api_tests[*]}"
+  if [ "$db_ready" = 1 ] && [ ${#api_tests[@]} -gt 0 ]; then
+    run_step "api tests (changed test files)" \
+      pnpm --filter @squad/api exec vitest run --passWithNoTests "${api_tests[@]}"
+  elif [ "$api_changed" = 1 ] || [ ${#api_tests[@]} -gt 0 ]; then
+    # Without a database only the service-free half of the API suite can run.
+    # It runs in full rather than file by file because a change anywhere in
+    # apps/api can break it (the source-reading guards in particular), and it is
+    # cheap enough for that.
+    run_step "api tests (service-free set)" pnpm --filter @squad/api test:unit
+    if [ ${#api_tests[@]} -gt 0 ]; then
+      skip_step "api DB-backed tests" "no database: ${api_tests[*]}"
     fi
-  elif [ "$api_changed" = 1 ]; then
-    skip_step "api tests" "no api test file changed; ci runs the suite"
   fi
 
   if [ "$scripts_changed" = 0 ]; then

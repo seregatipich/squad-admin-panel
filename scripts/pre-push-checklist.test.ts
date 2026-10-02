@@ -298,7 +298,11 @@ describe('local pre-push checklist and git hooks', () => {
       result.stdout,
       /DB-backed package tests — skipped \(no database: @fixture\/db-worker @fixture\/redis-src\)/,
     );
-    assert.match(result.stdout, /api tests — skipped \(no database: test\/players\.test\.ts\)/);
+    assert.ok(commands.includes('pnpm|--filter|@squad/api|test:unit'));
+    assert.match(
+      result.stdout,
+      /api DB-backed tests — skipped \(no database: test\/players\.test\.ts\)/,
+    );
     assert.match(
       result.stdout,
       /operations and verification script tests — skipped \(no database\)/,
@@ -378,24 +382,93 @@ describe('local pre-push checklist and git hooks', () => {
     assert.deepEqual(logLines(fixture.dbEnvLog), ['|']);
   });
 
-  it('runs no api tests when the diff touches api source but no api test file', () => {
-    const fixture = checklistFixture(FIXTURE_PACKAGES);
-    const result = runChecklist(fixture, {
-      packages: [API_PACKAGE],
-      changed: ['apps/api/src/routes/players.ts', 'apps/api/test/helpers/players.ts'],
+  describe('apps/api tests', () => {
+    const UNIT_SET = 'pnpm|--filter|@squad/api|test:unit';
+    const noDatabase = { DATABASE_URL: '', TEST_DATABASE_URL: '' };
+    const runsVitest = (commands: string[]) =>
+      commands.some((line) => line.startsWith('pnpm|turbo|run|test') || line.includes('vitest'));
+
+    it('runs the service-free set, not a skip, when api changed and no database is available', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        packages: [API_PACKAGE],
+        changed: ['apps/api/src/routes/players.ts', 'apps/api/test/players.test.ts'],
+        env: noDatabase,
+      });
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const commands = checklistCommands(fixture);
+      assert.ok(commands.includes(UNIT_SET), 'the service-free set must run');
+      assert.equal(runsVitest(commands), false, 'no touched file may run without a database');
+      assert.match(result.stdout, /✓ api tests \(service-free set\)/);
+      assert.match(
+        result.stdout,
+        /api DB-backed tests — skipped \(no database: test\/players\.test\.ts\)/,
+      );
     });
 
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const commands = checklistCommands(fixture);
-    assert.ok(commands.includes(`pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`));
-    assert.equal(
-      commands.some((line) => line.startsWith('pnpm|turbo|run|test') || line.includes('vitest')),
-      false,
-    );
-    assert.match(
-      result.stdout,
-      /api tests — skipped \(no api test file changed; ci runs the suite\)/,
-    );
+    it('runs the service-free set for an api source change with no test file touched', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        packages: [API_PACKAGE],
+        changed: ['apps/api/src/routes/players.ts', 'apps/api/test/helpers/players.ts'],
+        env: noDatabase,
+      });
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const commands = checklistCommands(fixture);
+      assert.ok(commands.includes(`pnpm|turbo|run|typecheck|--filter=...[${MERGE_BASE}]`));
+      assert.ok(commands.includes(UNIT_SET));
+      assert.equal(runsVitest(commands), false);
+      assert.doesNotMatch(result.stdout, /api DB-backed tests — skipped/);
+    });
+
+    it('runs only the touched files, not the service-free set, when a database is available', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        packages: [API_PACKAGE],
+        changed: ['apps/api/src/routes/players.ts', 'apps/api/test/players.test.ts'],
+      });
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const commands = checklistCommands(fixture);
+      assert.ok(
+        commands.includes(
+          'pnpm|--filter|@squad/api|exec|vitest|run|--passWithNoTests|test/players.test.ts',
+        ),
+      );
+      assert.equal(commands.includes(UNIT_SET), false);
+    });
+
+    it('runs no api test at all when apps/api did not change', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        packages: [PLAIN_PACKAGE],
+        changed: ['packages/plain/src/index.ts'],
+        env: noDatabase,
+      });
+
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const commands = checklistCommands(fixture);
+      assert.equal(commands.includes(UNIT_SET), false);
+      assert.equal(
+        commands.some((line) => line.includes('vitest')),
+        false,
+      );
+      assert.doesNotMatch(result.stdout, /api (DB-backed )?tests/);
+    });
+
+    it('blocks the push when the service-free set fails', () => {
+      const fixture = checklistFixture(FIXTURE_PACKAGES);
+      const result = runChecklist(fixture, {
+        packages: [API_PACKAGE],
+        changed: ['apps/api/src/routes/players.ts'],
+        env: { ...noDatabase, FAKE_FAIL_ON: '--filter @squad/api test:unit' },
+      });
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout, /✗ api tests \(service-free set\) FAILED/);
+    });
   });
 
   it('runs test:scripts only when scripts/ or .github/ changed', () => {

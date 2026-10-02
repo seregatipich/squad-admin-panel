@@ -30,7 +30,7 @@ Pure functions, parsers, validators, pure reducers. Vitest / `go test -race`. Fa
 
 Locations:
 
-- `apps/api/test/*.test.ts` — only the pure-function files. Most of the directory is Tier 2: the API suite's global setup (`test/integration/global-setup.ts`) builds a migrated template database before any file runs, so even a file that never touches the database needs Postgres to be reachable
+- `apps/api/**/*.test.ts` — only the service-free files, selected by content (see below). Most of the package is Tier 2: the full suite's global setup (`test/integration/global-setup.ts`) builds a migrated template database before any file runs, so a file that never touches the database still needs Postgres to be reachable under `pnpm --filter @squad/api test`
 - `apps/bridge/internal/**/*_test.go`
 - `packages/**/test/*.test.ts`
 - `apps/workers/**/test/*.test.ts`
@@ -42,7 +42,13 @@ pnpm turbo run test        # every package; DB- and Redis-backed suites need the
 pnpm turbo run test:unit   # only the packages whose suites need no services
 ```
 
-`test:unit` exists only in packages whose suites run without Postgres or Redis: `@squad/shared-config`, `@squad/shared-types`, `@squad/diag`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/steam-api`, and `@squad/db`, whose script unsets `DATABASE_URL`/`TEST_DATABASE_URL` so its database suites skip (with a warning each) even when the variables are exported. `@squad/api` and the workers have no `test:unit`: their global setup, or tests outside the gates below, connect to Postgres and Redis. The Go bridge's `test:unit` needs a Linux host with `go` on `PATH`.
+`test:unit` exists only in packages whose selected suites run without Postgres or Redis: `@squad/shared-config`, `@squad/shared-types`, `@squad/diag`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/steam-api`, `@squad/db`, whose script unsets `DATABASE_URL`/`TEST_DATABASE_URL` so its database suites skip (with a warning each) even when the variables are exported, and `@squad/api`, which runs only part of its suite (next section). The workers have no `test:unit`: their contract tests connect to Postgres and Redis. The Go bridge's `test:unit` needs a Linux host with `go` on `PATH`.
+
+#### The API's service-free set
+
+`pnpm --filter @squad/api test:unit` runs [`vitest.unit.config.ts`](../../apps/api/vitest.unit.config.ts), which has no `globalSetup` and no setup file and therefore needs no database, Redis or Docker. Which files it runs is computed, never listed, by [`vitest.test-sets.ts`](../../apps/api/vitest.test-sets.ts): a test file belongs to the service set when its own source, or the source of any test-support file it imports (transitively, under `apps/api/test/` or `packages/db/test/helpers/`), names `buildIntegrationApp`, `reusePublicSchema`, `createDatabaseClient`, a `describeIf*` gate, `DATABASE_URL`, `REDIS_URL`, `hostDbUrl` or `ensureWorkerDatabase`. Every other file is in the unit set. The match is deliberately over-inclusive — a file that merely names `DATABASE_URL` as data stays in the service set — because a false positive costs one file in the fast run, while a false negative would make the local gate fail for a missing service. Imports into `src/` are not followed.
+
+`apps/api/test/test-sets.guard.test.ts` pins the split: every test file the full suite collects is in exactly one set, so a new file cannot fall between them, and the unit config runs exactly the unit set. The full suite in CI still runs both sets; `test:unit` only adds a fast subset for machines without services, and the [pre-push checklist](ci.md#local-pre-check) runs it for an `apps/api` change when no database is available. A unit-set test must therefore stay service-free: the moment it starts using the harness or a database variable it moves to the service set by itself.
 
 #### Suites that need Postgres or Redis
 
