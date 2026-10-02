@@ -9,8 +9,10 @@ import { containerOnlyPreHandler } from '../lib/server-runtime.js';
  * Browse and download the on-disk Squad server log files for a server.
  *
  * Raw logs live on the host filesystem at
- * `${PANEL_SAVED_ROOT}/<serverId>/SquadGame/Saved/Logs/` and are reachable only
- * through the Go bridge. Both routes are gated behind `server:download_logs`.
+ * `${PANEL_SAVED_ROOT}/<serverId>/Logs/` and are reachable only through the Go
+ * bridge. `saved/<serverId>` is what the game container mounts at
+ * `/squad/SquadGame/Saved`, so Squad's own `Saved/Logs` is `<serverId>/Logs` on
+ * the host (#100). Both routes are gated behind `server:download_logs`.
  *
  *   GET /api/v1/servers/:id/logs/files
  *     Lists `SquadGame*.log` files with size, mtime (RFC3339) and an `is_live`
@@ -38,7 +40,7 @@ const downloadParams = z.object({
 });
 
 function logsDir(serverId: string): string {
-  return `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs`;
+  return `${PANEL_SAVED_ROOT}/${serverId}/Logs`;
 }
 
 const serverLogFilesRoutes: FastifyPluginAsync = async (app) => {

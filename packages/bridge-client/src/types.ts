@@ -77,7 +77,7 @@ export interface FileReadStreamResult {
 }
 
 export interface SquadLogListParams {
-  /** Absolute Logs directory: <saved>/<uuid>/SquadGame/Saved/Logs. */
+  /** Absolute Logs directory: <saved>/<uuid>/Logs (saved/<uuid> is the game container's SquadGame/Saved). */
   path: string;
 }
 

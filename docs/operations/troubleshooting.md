@@ -55,6 +55,16 @@ Sources:
 3. `docker compose exec redis redis-cli XLEN host:metrics` confirms `worker-metrics-sampler` is writing too — it's the same sink wiring.
 4. The `/logs` page itself filters by `lvl=info` minimum by default; switch to `≥ debug` to see the bridge heartbeat lines that fire every 5 s.
 
+## Squad log files: where they live and the pre-#100 layout
+
+`/var/lib/squad-panel/saved/<uuid>` is bind-mounted at `/squad/SquadGame/Saved` in the game container, so Squad's own `Saved/Logs` is **`/var/lib/squad-panel/saved/<uuid>/Logs`** on the host. The rnsquadjs sidecar bind (`/squad/Logs:ro`), `GET /api/v1/servers/:id/logs/files*` and the `squad_log_retention_sweep` all read that one directory (#100). Before that fix they read `saved/<uuid>/SquadGame/Saved/Logs`, a directory Squad never writes to, so the log list was empty, the sidecar saw no `SquadGame.log`, and the sweep deleted nothing.
+
+Migration for an existing host (no data moves; the game containers are untouched):
+
+1. Check the premise on the host: `ls /var/lib/squad-panel/saved/<uuid>/Logs` holds `SquadGame.log`; `ls /var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs` is empty or missing.
+2. Redeploy the stack, then restart each server's rnsquadjs sidecar (Server -> restart, or `container_run` through the panel) so it re-binds `saved/<uuid>/Logs`. A sidecar started by the old release stays bound to the empty old directory until it is recreated.
+3. Optional cleanup of the empty leftovers the old sidecar start created: `find /var/lib/squad-panel/saved/*/SquadGame -type d -empty -delete` (the game container never uses `saved/<uuid>/SquadGame`; the command only removes empty directories).
+
 ## A worker stops sending heartbeats
 
 `/api/v1/health/workers` shows `alive: false` for the worker. Steps:

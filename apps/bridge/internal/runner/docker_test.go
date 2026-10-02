@@ -439,7 +439,7 @@ func TestComposeRNSquadJSArgs(t *testing.T) {
 		"--user 1001:1001",
 		"--restart unless-stopped",
 		"--pull never",
-		"-v /var/lib/squad-panel/saved/0196f0a2-1111-2222-3333-444444444444/SquadGame/Saved/Logs:/squad/Logs:ro",
+		"-v /var/lib/squad-panel/saved/0196f0a2-1111-2222-3333-444444444444/Logs:/squad/Logs:ro",
 		"-v /run/squad-panel/rnsquadjs/0196f0a2-1111-2222-3333-444444444444/sock:/run/panelBridge:rw",
 		"-v /run/squad-panel/rnsquadjs/0196f0a2-1111-2222-3333-444444444444/config.json:/app/config.json:ro",
 		"-e PANEL_BRIDGE_MODE=shadow",

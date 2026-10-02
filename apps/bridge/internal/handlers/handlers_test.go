@@ -174,7 +174,7 @@ func TestSquadLogRetentionSweep_DeletesOnlyExpiredRotatedLogs(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
 	savedRoot := t.TempDir()
-	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	logsDir := filepath.Join(savedRoot, serverID, "Logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatalf("mkdir logs dir: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestSquadLogRetentionSweep_ArchivesFlaggedServerBeforeDelete(t *testing.T) 
 	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
 	savedRoot := t.TempDir()
 	stagingRoot := t.TempDir()
-	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	logsDir := filepath.Join(savedRoot, serverID, "Logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatalf("mkdir logs dir: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestSquadLogRetentionSweep_UnflaggedServerDeleteOnly(t *testing.T) {
 	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
 	savedRoot := t.TempDir()
 	stagingRoot := t.TempDir()
-	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	logsDir := filepath.Join(savedRoot, serverID, "Logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatalf("mkdir logs dir: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestSquadLogRetentionSweep_ArchiveFailureKeepsFile(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
 	savedRoot := t.TempDir()
-	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	logsDir := filepath.Join(savedRoot, serverID, "Logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatalf("mkdir logs dir: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestSquadLogRetentionSweep_RejectsMalformedArchiveServerID(t *testing.T) {
 func TestValidateReadablePath_AcceptsConfigsAndSaved(t *testing.T) {
 	cases := []string{
 		"/var/lib/squad-panel/configs/019dbaa5-1234-7abc-8def-0123456789ab/ServerConfig/Admins.cfg",
-		"/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/SquadGame/Saved/Logs/SquadGame.log",
+		"/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/Logs/SquadGame.log",
 	}
 	for _, p := range cases {
 		if err := validateReadablePath(p); err != nil {
@@ -1060,7 +1060,7 @@ func TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize(t *testing.T) {
 func TestSquadLogList_ListsSquadGameLogsWithMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-	logsDir := filepath.Join(tmp, "SquadGame", "Saved", "Logs")
+	logsDir := filepath.Join(tmp, "Logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatalf("mkdir logs dir: %v", err)
 	}
@@ -1144,7 +1144,7 @@ func TestSquadLogList_ListsSquadGameLogsWithMetadata(t *testing.T) {
 func TestSquadLogList_MissingDirReturnsEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
-	missing := filepath.Join(tmp, "SquadGame", "Saved", "Logs")
+	missing := filepath.Join(tmp, "Logs")
 
 	d := &Dispatcher{}
 	params, _ := json.Marshal(map[string]any{"path": missing})
@@ -1327,7 +1327,7 @@ func TestFileReadStream_TraversalRejected(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
 	// Path escapes the allowed depot root via traversal.
-	evil := filepath.Join(tmp, "SquadGame", "Saved", "Logs", "..", "..", "..", "..", "etc", "shadow")
+	evil := filepath.Join(tmp, "Logs", "..", "..", "..", "..", "etc", "shadow")
 	d := &Dispatcher{}
 	params, _ := json.Marshal(map[string]any{"path": evil})
 	req := &rpc.Request{ID: "req-stream-traverse", Method: "file_read_stream", Params: params}
