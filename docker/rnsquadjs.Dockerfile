@@ -8,7 +8,7 @@
 ARG RNSQUADJS_REPO=https://github.com/lACTEPUKCl/RNSquadJS.git
 ARG RNSQUADJS_SHA=aa3806477c3e827d5ac05a8118b0120089938589
 
-FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS upstream
+FROM node:26-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS upstream
 ARG YARN_VERSION=1.22.22
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates python3 make g++ \
@@ -62,7 +62,7 @@ RUN yarn build
 # carry build tooling into the image that runs with --network host.
 RUN yarn install --production=true --frozen-lockfile --network-timeout 600000
 
-FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+FROM node:26-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS runtime
 # Sidecars are launched with `--pull never` (docker/compose.yml), like
 # squad-server and depot-init, so this tag must survive on the host between
 # deploys. `panel.preserve=true` exempts it from SystemPrune's
