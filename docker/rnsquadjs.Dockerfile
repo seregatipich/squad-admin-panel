@@ -6,7 +6,7 @@
 # lib/index.js alongside the rest of the application.
 
 ARG RNSQUADJS_REPO=https://github.com/lACTEPUKCl/RNSquadJS.git
-ARG RNSQUADJS_SHA=d76fb4a84bc64ae09b654d4dc17ab06ef308d295
+ARG RNSQUADJS_SHA=aa3806477c3e827d5ac05a8118b0120089938589
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS upstream
 ARG YARN_VERSION=1.22.22

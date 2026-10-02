@@ -59,8 +59,13 @@ export interface RnsquadjsPlugin {
   options: Record<string, unknown>;
 }
 
+/**
+ * Upstream parses the keys of config.json with parseInt and rejects a non-numeric one, so the
+ * sidecar's single server is always keyed "1"; the panel's server id travels in SERVER_ID.
+ */
+export const RNSQUADJS_CONFIG_KEY = '1';
+
 export interface RnsquadjsServerConfig {
-  id: string;
   host: string;
   port: number;
   password: string;
@@ -87,8 +92,7 @@ export async function renderRnsquadjsConfig(
   const password = await readRconPassword(app.bridge, serverId, 'rnsquadjs');
 
   return {
-    [serverId]: {
-      id: serverId,
+    [RNSQUADJS_CONFIG_KEY]: {
       host: '127.0.0.1',
       port: creds.rconPort,
       password,

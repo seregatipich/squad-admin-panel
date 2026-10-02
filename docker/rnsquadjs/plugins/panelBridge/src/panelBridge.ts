@@ -16,13 +16,20 @@ interface UpstreamState {
   players?: Array<{ name?: unknown; eosID?: unknown; steamID?: unknown }>;
 }
 
-const resolveServerId = (state: UpstreamState): string => {
-  if (typeof state.id === 'string' && state.id.length > 0) return state.id;
-  if (typeof state.id === 'number' && Number.isFinite(state.id)) return String(state.id);
-  const fromEnv = process.env.SERVER_ID;
+/**
+ * The panel's server id (a UUID). The sidecar always receives it as SERVER_ID; upstream's own
+ * `state.id` is the numeric key of its config.json (it parses the key with parseInt and rejects
+ * non-numeric ones), which is not the panel id, so it is only a fallback for a string id.
+ */
+export const resolveServerId = (
+  state: Pick<UpstreamState, 'id'>,
+  env: Record<string, string | undefined> = process.env,
+): string => {
+  const fromEnv = env.SERVER_ID;
   if (fromEnv && fromEnv.length > 0) return fromEnv;
+  if (typeof state.id === 'string' && state.id.length > 0) return state.id;
   throw new Error(
-    '[panelBridge] cannot resolve serverId: state.id is empty and SERVER_ID is unset',
+    '[panelBridge] cannot resolve serverId: SERVER_ID is unset and state.id is not a string',
   );
 };
 
