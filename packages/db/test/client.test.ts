@@ -24,9 +24,8 @@ afterAll(async () => {
 
 describeIfDb('createDatabaseClient', () => {
   it('connects and runs a trivial query', async () => {
-    const r = await db.execute(sql`SELECT 1::int AS x`);
-    const row =
-      (r as unknown as { rows: Array<{ x: number }> }).rows?.[0] ?? (r as Array<{ x: number }>)[0];
+    const r = await db.execute<{ x: number }>(sql`SELECT 1::int AS x`);
+    const row = r[0];
     expect(row?.x).toBe(1);
   });
 });

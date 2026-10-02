@@ -19,10 +19,20 @@ const RELEASE_DISBANDED_SQL = path.resolve(
   '../drizzle/0118_clan_members_release_disbanded.sql',
 );
 
-const PLAYER_IDS = Array.from({ length: 8 }, (_, i) => {
-  const n = (i + 1).toString(16).padStart(2, '0');
-  return `000000${n}-0000-4000-8000-000000000000`;
-});
+const playerUuid = (n: number): string =>
+  `000000${n.toString(16).padStart(2, '0')}-0000-4000-8000-000000000000`;
+
+/** A fixed-length tuple, so `PLAYER_IDS[0]` is a `string` under `noUncheckedIndexedAccess`. */
+const PLAYER_IDS: readonly [string, string, string, string, string, string, string, string] = [
+  playerUuid(1),
+  playerUuid(2),
+  playerUuid(3),
+  playerUuid(4),
+  playerUuid(5),
+  playerUuid(6),
+  playerUuid(7),
+  playerUuid(8),
+];
 
 let sql: ReturnType<typeof postgres>;
 
@@ -72,7 +82,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!sql) return;
   await sql`TRUNCATE clan_members, clans CASCADE`;
-  await sql`DELETE FROM players WHERE id = ANY(${PLAYER_IDS})`;
+  await sql`DELETE FROM players WHERE id = ANY(${[...PLAYER_IDS]})`;
   await sql.end({ timeout: 5 });
 });
 
@@ -195,7 +205,7 @@ describeIfDb('clan model constraints', () => {
       SELECT player_id FROM clan_members WHERE clan_id = ${clan} AND member_role = 'leader'
     `;
     expect(leaders.length).toBe(1);
-    expect(leaders[0].player_id).toBe(PLAYER_IDS[1]);
+    expect(leaders[0]?.player_id).toBe(PLAYER_IDS[1]);
   });
 
   it('enforces a unique clan name among active clans and frees it after soft-delete', async () => {

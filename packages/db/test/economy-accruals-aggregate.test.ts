@@ -50,7 +50,7 @@ beforeAll(async () => {
   for (const [id, name] of [
     [PLAYER_A, 'AccrualAlpha'],
     [PLAYER_B, 'AccrualBravo'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized)
       VALUES (${id}, ${name}, ${name.toLowerCase()})

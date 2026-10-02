@@ -6,6 +6,7 @@ import {
   heartbeatKey,
   startHeartbeat,
 } from '../src/heartbeat.js';
+import { defined } from './helpers/defined.js';
 
 interface SetCall {
   key: string;
@@ -50,7 +51,7 @@ describe('startHeartbeat', () => {
     const stop = startHeartbeat({ redis: r as never, name: 'rcon' });
     await vi.advanceTimersByTimeAsync(0);
     expect(r.calls.length).toBeGreaterThanOrEqual(1);
-    const first = r.calls[0];
+    const first = defined(r.calls[0]);
     expect(first.key).toBe('worker:heartbeat:rcon');
     expect(first.ttl).toBe(30);
     const payload = JSON.parse(first.value);
@@ -85,8 +86,8 @@ describe('startHeartbeat', () => {
       statusFn: () => 'sampling',
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(r.calls[0].ttl).toBe(11);
-    const payload = JSON.parse(r.calls[0].value);
+    expect(defined(r.calls[0]).ttl).toBe(11);
+    const payload = JSON.parse(defined(r.calls[0]).value);
     expect(payload.version).toBe('0.1.0');
     expect(payload.status).toBe('sampling');
     stop();
@@ -106,7 +107,7 @@ describe('startHeartbeat', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(onError).toHaveBeenCalledOnce();
-    expect((onError.mock.calls[0][0] as Error).message).toBe('boom');
+    expect((defined(onError.mock.calls[0])[0] as Error).message).toBe('boom');
     stop();
   });
 
@@ -134,7 +135,7 @@ describe('startHeartbeat', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(onError).toHaveBeenCalledOnce();
-    expect((onError.mock.calls[0][0] as Error).message).toBe('status boom');
+    expect((defined(onError.mock.calls[0])[0] as Error).message).toBe('status boom');
     expect(r.calls).toHaveLength(0);
     stop();
   });
@@ -147,7 +148,7 @@ describe('startHeartbeat', () => {
       statusFn: () => undefined,
     });
     await vi.advanceTimersByTimeAsync(0);
-    const payload = JSON.parse(r.calls[0].value);
+    const payload = JSON.parse(defined(r.calls[0]).value);
     expect(payload.status).toBeUndefined();
     stop();
   });

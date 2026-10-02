@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { defined } from './helpers/defined.js';
 
 // Durable guard for GHSA-q8mj-m7cp-5q26 (#244) and GHSA-4x5r-pxfx-6jf8 (#245):
 // both packages are transitive-only devDependencies with no first-party call
@@ -26,7 +27,7 @@ describe('root pnpm-lock.yaml security-patched transitive versions', () => {
       ...new Set([...LOCKFILE.matchAll(/'@babel\/core@([\d.]+)'/g)].map((m) => m[1])),
     ];
     expect(versions).toHaveLength(1);
-    const [, minor, patch] = versions[0].split('.').map(Number);
+    const [, minor = Number.NaN, patch = Number.NaN] = defined(versions[0]).split('.').map(Number);
     expect(minor > 29 || (minor === 29 && patch >= 6)).toBe(true);
   });
 });

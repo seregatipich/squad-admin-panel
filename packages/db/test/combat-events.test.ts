@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { combatEvents } from '../src/schema/combat-events.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -55,19 +56,23 @@ beforeAll(async () => {
   for (const [id, name, steamId64] of PLAYERS) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized, steam_id64)
-      VALUES (${id}, ${name}, ${name.toLowerCase()}, ${steamId64})
+      VALUES (${id}, ${name}, ${name.toLowerCase()}, ${steamId64?.toString() ?? null})
       ON CONFLICT (id) DO NOTHING
     `;
   }
 
-  const [bounds] = await sql<
-    { month_start: Date; current_part: string; prev_part: string; next_part: string }[]
-  >`
+  const bounds = defined(
+    (
+      await sql<
+        { month_start: Date; current_part: string; prev_part: string; next_part: string }[]
+      >`
     SELECT date_trunc('month', now()) AS month_start,
            'combat_events_' || to_char(now(), 'YYYY_MM') AS current_part,
            'combat_events_' || to_char(now() - interval '1 month', 'YYYY_MM') AS prev_part,
            'combat_events_' || to_char(now() + interval '1 month', 'YYYY_MM') AS next_part
-  `;
+  `
+    )[0],
+  );
   monthStart = bounds.month_start;
   currentPart = bounds.current_part;
   prevPart = bounds.prev_part;
@@ -103,11 +108,15 @@ afterAll(async () => {
 
 describeIfDb('combat_events table shape', () => {
   it('is monthly RANGE-partitioned on occurred_at', async () => {
-    const [meta] = await sql`
+    const meta = defined(
+      (
+        await sql`
       SELECT partstrat, pg_get_partkeydef(partrelid) AS keydef
       FROM pg_partitioned_table
       WHERE partrelid = 'combat_events'::regclass
-    `;
+    `
+      )[0],
+    );
     expect(meta.partstrat).toBe('r');
     expect(meta.keydef).toBe('RANGE (occurred_at)');
   });
@@ -141,11 +150,15 @@ describeIfDb('combat_events table shape', () => {
 
   it('routes an insert into the occurred_at monthly partition', async () => {
     const at = new Date(monthStart.getTime() + 5 * 86_400_000);
-    const [row] = await sql`
+    const row = defined(
+      (
+        await sql`
       INSERT INTO combat_events (event_type, server_id, victim_player_id, occurred_at)
       VALUES ('death', ${SERVER_1}, ${VICTIM}, ${at})
       RETURNING tableoid::regclass::text AS partition, id
-    `;
+    `
+      )[0],
+    );
     expect(row.partition).toBe(currentPart);
     expect(typeof row.id).toBe('string');
     await sql`DELETE FROM combat_events WHERE id = ${row.id}`;
@@ -161,15 +174,23 @@ describeIfDb('combat_events table shape', () => {
 
 describeIfDb('combat_events foreign keys', () => {
   it('accepts a victim/attacker whose steam_id64 is NULL (UUID-only linkage)', async () => {
-    const [ghost] = await sql<{ steam_id64: string | null }[]>`
+    const ghost = defined(
+      (
+        await sql<{ steam_id64: string | null }[]>`
       SELECT steam_id64 FROM players WHERE id = ${NULL_STEAM_PLAYER}
-    `;
+    `
+      )[0],
+    );
     expect(ghost.steam_id64).toBeNull();
-    const [row] = await sql`
+    const row = defined(
+      (
+        await sql`
       INSERT INTO combat_events (event_type, server_id, victim_player_id, attacker_player_id, occurred_at)
       VALUES ('death', ${SERVER_1}, ${NULL_STEAM_PLAYER}, ${NULL_STEAM_PLAYER}, ${monthStart})
       RETURNING id
-    `;
+    `
+      )[0],
+    );
     expect(row.id).toBeDefined();
     await sql`DELETE FROM combat_events WHERE id = ${row.id}`;
   });
@@ -182,11 +203,15 @@ describeIfDb('combat_events foreign keys', () => {
   });
 
   it('accepts a NULL victim_player_id for a vehicle_destroyed event (DOSSIER-1)', async () => {
-    const [row] = await sql`
+    const row = defined(
+      (
+        await sql`
       INSERT INTO combat_events (event_type, server_id, victim_player_id, victim_vehicle, occurred_at)
       VALUES ('vehicle_destroyed', ${SERVER_1}, NULL, 'T72B3', ${monthStart})
       RETURNING id, victim_vehicle
-    `;
+    `
+      )[0],
+    );
     expect(row.id).toBeDefined();
     expect(row.victim_vehicle).toBe('T72B3');
     await sql`DELETE FROM combat_events WHERE id = ${row.id}`;
@@ -217,8 +242,9 @@ describeIfDb('combat_events foreign keys', () => {
           occurredAt: monthStart,
         })
         .returning({ id: combatEvents.id, isTeamkill: combatEvents.isTeamkill });
-      expect(inserted[0].isTeamkill).toBe(true);
-      await sql`DELETE FROM combat_events WHERE id = ${inserted[0].id}`;
+      const event = defined(inserted[0]);
+      expect(event.isTeamkill).toBe(true);
+      await sql`DELETE FROM combat_events WHERE id = ${event.id.toString()}`;
     } finally {
       await client.end();
     }

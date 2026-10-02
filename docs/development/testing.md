@@ -298,7 +298,7 @@ pnpm turbo run typecheck                                # TS strict + `go build`
 cd apps/bridge && GOOS=linux GOARCH=amd64 go vet ./...  # also enforced by pre-commit
 ```
 
-Where a package has a `tsconfig.test.json` (`@squad/api`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/diag`, `@squad/shared-types`, `@squad/steam-api`), `typecheck` is one incremental `tsc -p tsconfig.test.json` over `src` and `test`, not a pass over `src` followed by one over everything. It keeps `declaration: true`, so declaration-emit errors in `src` still fail it; the `rootDir`/composite checks of `tsconfig.json` still run in `build`. The build info is written to `.cache/typecheck.tsbuildinfo` (git-ignored) and is a Turbo output of the task.
+Where a package has a `tsconfig.test.json` (`@squad/api`, `@squad/bridge-client`, `@squad/chat-ingest`, `@squad/db`, `@squad/diag`, `@squad/shared-config`, `@squad/shared-types`, `@squad/steam-api`), `typecheck` is one incremental `tsc -p tsconfig.test.json` over `src` and `test`, not a pass over `src` followed by one over everything. It keeps `declaration: true`, so declaration-emit errors in `src` still fail it; the `rootDir`/composite checks of `tsconfig.json` still run in `build`. The build info is written to `.cache/typecheck.tsbuildinfo` (git-ignored) and is a Turbo output of the task.
 
 ### Turbo caching of builds and tests
 

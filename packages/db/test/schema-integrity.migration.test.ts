@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 import {
   createIsolatedPackageTestDatabase,
@@ -136,8 +137,12 @@ describeIfDb('audit_log hash chain', () => {
     const first = await insertAudit('integrity.chain.first');
     // A concurrent session that drew its id from the sequence but has not
     // reached the trigger's advisory lock yet.
-    const [{ reserved }] = await sql<{ reserved: string }[]>`
-      SELECT nextval(pg_get_serial_sequence('audit_log', 'id'))::text AS reserved`;
+    const { reserved } = defined(
+      (
+        await sql<{ reserved: string }[]>`
+      SELECT nextval(pg_get_serial_sequence('audit_log', 'id'))::text AS reserved`
+      )[0],
+    );
     const overtaking = await insertAudit('integrity.chain.overtaking');
     const late = await insertAudit('integrity.chain.late', BigInt(reserved));
 
@@ -168,17 +173,25 @@ describeIfDb('config_versions parent chain', () => {
 
   it('still lets a server delete cascade through its own version chain', async () => {
     const serverId = await insertServer();
-    const [root] = await sql<{ id: string }[]>`
+    const root = defined(
+      (
+        await sql<{ id: string }[]>`
       INSERT INTO config_versions (server_id, filename, content, sha256, author_label)
-      VALUES (${serverId}, 'Server.cfg', 'v1', '\\x01', 'integrity') RETURNING id`;
+      VALUES (${serverId}, 'Server.cfg', 'v1', '\\x01', 'integrity') RETURNING id`
+      )[0],
+    );
     await sql`
       INSERT INTO config_versions (server_id, filename, content, sha256, author_label, parent_version_id)
       VALUES (${serverId}, 'Server.cfg', 'v2', '\\x02', 'integrity', ${root?.id ?? null})`;
 
     await sql`DELETE FROM servers WHERE id = ${serverId}`;
 
-    const [{ left }] = await sql<{ left: number }[]>`
-      SELECT count(*)::int AS left FROM config_versions WHERE server_id = ${serverId}`;
+    const { left } = defined(
+      (
+        await sql<{ left: number }[]>`
+      SELECT count(*)::int AS left FROM config_versions WHERE server_id = ${serverId}`
+      )[0],
+    );
     expect(left).toBe(0);
   });
 });
@@ -229,10 +242,14 @@ describeIfDb('indexes', () => {
 describeIfDb('ban_appeals tracking token at rest', () => {
   it('keeps only the sha256 of a plaintext token written by the previous release', async () => {
     const token = `integrity-${randomUUID()}`;
-    const [row] = await sql<{ tracking_token: string | null; tracking_token_hash: string }[]>`
+    const row = defined(
+      (
+        await sql<{ tracking_token: string | null; tracking_token_hash: string }[]>`
       INSERT INTO ban_appeals (steam_id64, body, tracking_token, status)
       VALUES (${nextSteamId()}, 'appeal', ${token}, 'rejected')
-      RETURNING tracking_token, tracking_token_hash`;
+      RETURNING tracking_token, tracking_token_hash`
+      )[0],
+    );
 
     expect(row).toEqual({
       tracking_token: null,
@@ -264,9 +281,13 @@ describeIfDb('ban_appeals tracking token at rest', () => {
 
 describeIfDb('events_appended NOTIFY', () => {
   it('fires once per statement and announces each distinct (server_id, kind)', async () => {
-    const [trigger] = await sql<{ row_level: boolean }[]>`
+    const trigger = defined(
+      (
+        await sql<{ row_level: boolean }[]>`
       SELECT (tgtype & 1) = 1 AS row_level FROM pg_trigger
-      WHERE tgname = 'trg_events_notify_appended' AND tgrelid = 'events'::regclass`;
+      WHERE tgname = 'trg_events_notify_appended' AND tgrelid = 'events'::regclass`
+      )[0],
+    );
     expect(trigger?.row_level).toBe(false);
 
     const serverId = await insertServer();

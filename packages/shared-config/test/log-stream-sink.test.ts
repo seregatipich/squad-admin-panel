@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { redisSinkStream } from '../src/log-stream-sink.js';
+import { defined } from './helpers/defined.js';
 
 interface XaddCall {
   stream: string;
@@ -26,8 +27,8 @@ describe('redisSinkStream', () => {
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
     expect(r.calls).toHaveLength(1);
-    expect(r.calls[0].stream).toBe('panel:logs');
-    const flat = r.calls[0].args.flat();
+    expect(defined(r.calls[0]).stream).toBe('panel:logs');
+    const flat = defined(r.calls[0]).args.flat();
     expect(flat).toContain('MAXLEN');
     expect(flat).toContain('100000');
     expect(flat).toContain('*');
@@ -42,7 +43,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 40, msg: 'down', src: 'bridge' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    const flat = r.calls[0].args.flat();
+    const flat = defined(r.calls[0]).args.flat();
     expect(flat).toContain('B');
   });
 
@@ -52,7 +53,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 30, msg: 'synced', src: 'config-sync' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    const flat = r.calls[0].args.flat();
+    const flat = defined(r.calls[0]).args.flat();
     expect(flat).not.toContain('A');
   });
 
@@ -64,7 +65,7 @@ describe('redisSinkStream', () => {
     );
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    const flat = r.calls[0].args.flat();
+    const flat = defined(r.calls[0]).args.flat();
     expect(flat).toContain('01999999-9999-7999-8999-999999999999');
   });
 
@@ -90,7 +91,7 @@ describe('redisSinkStream', () => {
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
     expect(r.calls).toHaveLength(1);
-    expect(r.calls[0].args.flat()).toContain('warn-line');
+    expect(defined(r.calls[0]).args.flat()).toContain('warn-line');
   });
 
   it('strips pino-http meta keys (req/res/responseTime/reqId/name) from ctx', async () => {
@@ -110,10 +111,10 @@ describe('redisSinkStream', () => {
     );
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    const flat = r.calls[0].args.flat() as string[];
+    const flat = defined(r.calls[0]).args.flat() as string[];
     const cIdx = flat.indexOf('c');
     expect(cIdx).toBeGreaterThanOrEqual(0);
-    const ctx = JSON.parse(flat[cIdx + 1]);
+    const ctx = JSON.parse(defined(flat[cIdx + 1]));
     expect(ctx).toEqual({ keep: 'this' });
     expect(JSON.stringify(ctx)).not.toContain('should-not-leak');
   });
@@ -135,7 +136,7 @@ describe('redisSinkStream', () => {
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
     expect(r.calls).toHaveLength(1);
-    expect(r.calls[0].args.flat()).toContain('good');
+    expect(defined(r.calls[0]).args.flat()).toContain('good');
   });
 
   it('flushes a buffered final line that lacks a trailing newline', async () => {
@@ -145,7 +146,7 @@ describe('redisSinkStream', () => {
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
     expect(r.calls).toHaveLength(1);
-    expect(r.calls[0].args.flat()).toContain('partial');
+    expect(defined(r.calls[0]).args.flat()).toContain('partial');
   });
 
   it('keeps level=60 (fatal) at error rank', async () => {
@@ -154,7 +155,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 60, msg: 'fatal' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    expect(r.calls[0].args.flat()).toContain('E');
+    expect(defined(r.calls[0]).args.flat()).toContain('E');
   });
 
   it('treats below-debug levels as debug', async () => {
@@ -163,7 +164,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 10, msg: 'trace' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    expect(r.calls[0].args.flat()).toContain('D');
+    expect(defined(r.calls[0]).args.flat()).toContain('D');
   });
 
   it('defaults non-numeric level fields to info(30)', async () => {
@@ -172,7 +173,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 'info', msg: 'hi' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    expect(r.calls[0].args.flat()).toContain('I');
+    expect(defined(r.calls[0]).args.flat()).toContain('I');
   });
 
   it('defaults missing msg to the empty string', async () => {
@@ -190,7 +191,7 @@ describe('redisSinkStream', () => {
     stream.write(`${JSON.stringify({ level: 30, msg: 'x', src: 'unknown' })}\n`);
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    expect(r.calls[0].args.flat()).toContain('A');
+    expect(defined(r.calls[0]).args.flat()).toContain('A');
   });
 
   it('omits ctx when only pino-meta keys remain', async () => {
@@ -201,7 +202,7 @@ describe('redisSinkStream', () => {
     );
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
-    const flat = r.calls[0].args.flat() as string[];
+    const flat = defined(r.calls[0]).args.flat() as string[];
     expect(flat).not.toContain('c');
   });
 

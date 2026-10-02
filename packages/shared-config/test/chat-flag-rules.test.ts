@@ -182,6 +182,6 @@ describe('compileChatFlagRule + detectChatFlag', () => {
       { id: 'ok', pattern: 'shit', patternType: 'word' },
     ]);
     expect(compiled).toHaveLength(1);
-    expect(compiled[0].id).toBe('ok');
+    expect(compiled[0]?.id).toBe('ok');
   });
 });

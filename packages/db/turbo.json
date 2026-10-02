@@ -10,6 +10,9 @@
     },
     "test:unit": {
       "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "outputs": [".cache/typecheck.tsbuildinfo"]
     }
   }
 }

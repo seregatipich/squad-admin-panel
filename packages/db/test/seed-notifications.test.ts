@@ -1,5 +1,5 @@
-import { seedSubscriptions } from '@squad/db/schema';
 import { describe, expect, it, vi } from 'vitest';
+import { seedSubscriptions } from '../src/schema/index.js';
 import { notifySeedSubscribers } from '../src/seed-notifications.js';
 
 function makeDb(

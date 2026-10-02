@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -24,7 +25,7 @@ beforeAll(async () => {
   for (const [id, name] of [
     [PLAYER_A, 'Alpha'],
     [PLAYER_B, 'Bravo'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized)
       VALUES (${id}, ${name}, ${name.toLowerCase()})
@@ -34,7 +35,7 @@ beforeAll(async () => {
   for (const [id, slug] of [
     [SERVER_1, 'srv-1'],
     [SERVER_2, 'srv-2'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO servers (id, display_name, slug)
       VALUES (${id}, ${slug}, ${slug})
@@ -58,11 +59,15 @@ beforeEach(async () => {
 
 describeIfDb('player_sessions table shape', () => {
   it('is monthly RANGE-partitioned on connected_at', async () => {
-    const [meta] = await sql`
+    const meta = defined(
+      (
+        await sql`
       SELECT partstrat, pg_get_partkeydef(partrelid) AS keydef
       FROM pg_partitioned_table
       WHERE partrelid = 'player_sessions'::regclass
-    `;
+    `
+      )[0],
+    );
     expect(meta.partstrat).toBe('r');
     expect(meta.keydef).toBe('RANGE (connected_at)');
   });
@@ -81,9 +86,13 @@ describeIfDb('player_sessions table shape', () => {
   it('routes inserts into the connected_at monthly partition', async () => {
     await sql`INSERT INTO player_sessions (player_id, server_id, connected_at)
               VALUES (${PLAYER_A}, ${SERVER_1}, ${new Date('2026-07-05T12:00:00.000Z')})`;
-    const [row] = await sql`
+    const row = defined(
+      (
+        await sql`
       SELECT tableoid::regclass::text AS partition FROM player_sessions
-    `;
+    `
+      )[0],
+    );
     expect(row.partition).toBe('player_sessions_2026_07');
   });
 

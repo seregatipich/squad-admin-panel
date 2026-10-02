@@ -11,6 +11,7 @@ import {
 } from '../src/presence/daily.js';
 import { splitOpenSessionsAtSeedingTransition } from '../src/presence/sessions.js';
 import * as schema from '../src/schema/index.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -79,19 +80,27 @@ async function dailyRows() {
 }
 
 async function sumDaily(): Promise<number> {
-  const [row] = await sql<{ total: number | null }[]>`
+  const row = defined(
+    (
+      await sql<{ total: number | null }[]>`
     SELECT COALESCE(SUM(online_seconds + boost_seconds + queue_seconds + seed_seconds), 0)::bigint AS total
     FROM player_daily_presence
-  `;
+  `
+    )[0],
+  );
   return Number(row.total ?? 0);
 }
 
 async function sumSessions(): Promise<number> {
-  const [row] = await sql<{ total: number | null }[]>`
+  const row = defined(
+    (
+      await sql<{ total: number | null }[]>`
     SELECT COALESCE(SUM(duration_seconds), 0)::bigint AS total
     FROM player_sessions
     WHERE duration_seconds IS NOT NULL
-  `;
+  `
+    )[0],
+  );
   return Number(row.total ?? 0);
 }
 
@@ -104,7 +113,7 @@ beforeAll(async () => {
   for (const [id, name] of [
     [PLAYER_A, 'Alpha'],
     [PLAYER_B, 'Bravo'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized)
       VALUES (${id}, ${name}, ${name.toLowerCase()})
@@ -114,7 +123,7 @@ beforeAll(async () => {
   for (const [id, slug] of [
     [SERVER_1, 'srv-1'],
     [SERVER_2, 'srv-2'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO servers (id, display_name, slug)
       VALUES (${id}, ${slug}, ${slug})
@@ -141,12 +150,16 @@ beforeEach(async () => {
 
 describeIfDb('player_daily_presence table shape', () => {
   it('has the composite (player_id, day, server_id) primary key', async () => {
-    const [pk] = await sql<{ cols: string }[]>`
+    const pk = defined(
+      (
+        await sql<{ cols: string }[]>`
       SELECT string_agg(a.attname, ',' ORDER BY array_position(i.indkey, a.attnum)) AS cols
       FROM pg_index i
       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
       WHERE i.indrelid = 'player_daily_presence'::regclass AND i.indisprimary
-    `;
+    `
+      )[0],
+    );
     expect(pk.cols).toBe('player_id,day,server_id');
   });
 
@@ -421,9 +434,13 @@ describeIfDb('total_time_played_seconds sync', () => {
     await recomputeDailyPresenceForAllSessions(sql, NOW);
     await recomputeDailyPresenceForAllSessions(sql, NOW);
 
-    const [row] = await sql<{ total_time_played_seconds: number }[]>`
+    const row = defined(
+      (
+        await sql<{ total_time_played_seconds: number }[]>`
       SELECT total_time_played_seconds FROM players WHERE id = ${PLAYER_A}
-    `;
+    `
+      )[0],
+    );
     expect(Number(row.total_time_played_seconds)).toBe(3600);
   });
 });

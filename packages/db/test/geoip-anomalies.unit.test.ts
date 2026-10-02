@@ -5,6 +5,7 @@ import {
   detectGeoAnomalies,
   type GeoObservation,
 } from '../src/geoip/anomalies.js';
+import { defined } from './helpers/defined.js';
 
 const HOUR_MS = 3_600_000;
 const ANCHOR = Date.parse('2026-07-01T00:00:00.000Z');
@@ -39,7 +40,7 @@ describe('country-switch detection', () => {
   it('flags a country change inside the default 24h window as a recent switch', () => {
     const result = detectGeoAnomalies([obs('DE', 0), obs('RU', 6)]);
     expect(result.switches).toHaveLength(1);
-    const [entry] = result.switches;
+    const entry = defined(result.switches[0]);
     expect(entry.fromCountryCode).toBe('DE');
     expect(entry.toCountryCode).toBe('RU');
     expect(entry.gapHours).toBeCloseTo(6);
@@ -50,34 +51,34 @@ describe('country-switch detection', () => {
   it('does not treat a switch after 48h as recent under the default window', () => {
     const result = detectGeoAnomalies([obs('DE', 0), obs('RU', 48)]);
     expect(result.switches).toHaveLength(1);
-    expect(result.switches[0].withinWindow).toBe(false);
+    expect(defined(result.switches[0]).withinWindow).toBe(false);
     expect(result.hasRecentSwitch).toBe(false);
   });
 
   it('treats the exact window boundary as outside the window', () => {
     const result = detectGeoAnomalies([obs('DE', 0), obs('RU', 24)]);
-    expect(result.switches[0].withinWindow).toBe(false);
+    expect(defined(result.switches[0]).withinWindow).toBe(false);
     expect(result.hasRecentSwitch).toBe(false);
   });
 
   it('honours a configurable window so a 48h switch can still alert', () => {
     const result = detectGeoAnomalies([obs('DE', 0), obs('RU', 48)], { switchWindowHours: 72 });
-    expect(result.switches[0].withinWindow).toBe(true);
+    expect(defined(result.switches[0]).withinWindow).toBe(true);
     expect(result.hasRecentSwitch).toBe(true);
   });
 
   it('orders unsorted observations chronologically before comparing', () => {
     const result = detectGeoAnomalies([obs('RU', 6), obs('DE', 0)]);
     expect(result.switches).toHaveLength(1);
-    expect(result.switches[0].fromCountryCode).toBe('DE');
-    expect(result.switches[0].toCountryCode).toBe('RU');
+    expect(defined(result.switches[0]).fromCountryCode).toBe('DE');
+    expect(defined(result.switches[0]).toCountryCode).toBe('RU');
   });
 
   it('ignores observations without a known country when detecting switches', () => {
     const result = detectGeoAnomalies([obs('DE', 0), obs(null, 3), obs('RU', 6)]);
     expect(result.switches).toHaveLength(1);
-    expect(result.switches[0].fromCountryCode).toBe('DE');
-    expect(result.switches[0].toCountryCode).toBe('RU');
+    expect(defined(result.switches[0]).fromCountryCode).toBe('DE');
+    expect(defined(result.switches[0]).toCountryCode).toBe('RU');
     expect(result.distinctCountryCount).toBe(2);
   });
 
@@ -113,7 +114,7 @@ describe('multi-country soft flag threshold', () => {
       switchWindowHours: 0,
       multiCountryThreshold: -5,
     });
-    expect(result.switches[0].withinWindow).toBe(true);
+    expect(defined(result.switches[0]).withinWindow).toBe(true);
     expect(result.multiCountry).toBe(true);
   });
 
@@ -126,7 +127,7 @@ describe('multi-country soft flag threshold', () => {
     const germany = result.distinctCountries.find((entry) => entry.countryCode === 'DE');
     expect(germany?.observationCount).toBe(2);
     expect(germany?.countryName).toBe('Germany');
-    expect(result.distinctCountries[0].countryCode).toBe('RU');
+    expect(defined(result.distinctCountries[0]).countryCode).toBe('RU');
   });
 
   it('returns an empty result for no observations', () => {

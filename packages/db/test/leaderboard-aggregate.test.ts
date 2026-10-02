@@ -8,6 +8,7 @@ import {
   backfillMonths,
   recomputeLeaderboardPeriod,
 } from '../src/leaderboard/aggregate.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -69,11 +70,15 @@ async function seedMatch(
   playerSeeds: (string | MatchPlayerSeed)[],
   winner: 'team1' | 'team2' | 'draw' | null = null,
 ) {
-  const [match] = await sql<{ id: string }[]>`
+  const match = defined(
+    (
+      await sql<{ id: string }[]>`
     INSERT INTO matches (server_id, started_at, winner)
     VALUES (${serverId}, ${startedAt}::timestamptz, ${winner})
     RETURNING id
-  `;
+  `
+    )[0],
+  );
   for (const entry of playerSeeds) {
     const seed = typeof entry === 'string' ? { playerId: entry } : entry;
     await sql`
@@ -119,7 +124,7 @@ beforeAll(async () => {
   for (const [id, name] of [
     [PLAYER_A, 'Alpha'],
     [PLAYER_B, 'Bravo'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized)
       VALUES (${id}, ${name}, ${name.toLowerCase()})
@@ -129,7 +134,7 @@ beforeAll(async () => {
   for (const [id, slug] of [
     [SERVER_1, 'srv-1'],
     [SERVER_2, 'srv-2'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO servers (id, display_name, slug)
       VALUES (${id}, ${slug}, ${slug})
@@ -161,12 +166,16 @@ beforeEach(async () => {
 
 describeIfDb('player_stat_periods table shape', () => {
   it('uses a NULLS NOT DISTINCT identity so one rollup row exists per key', async () => {
-    const [meta] = await sql<{ indnullsnotdistinct: boolean }[]>`
+    const meta = defined(
+      (
+        await sql<{ indnullsnotdistinct: boolean }[]>`
       SELECT i.indnullsnotdistinct
       FROM pg_index i
       JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'player_stat_periods_identity'
-    `;
+    `
+      )[0],
+    );
     expect(meta.indnullsnotdistinct).toBe(true);
   });
 
@@ -186,15 +195,23 @@ describeIfDb('recomputeLeaderboardPeriod reconciliation', () => {
 
     await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
 
-    const [statSum] = await sql<{ total: number }[]>`
+    const statSum = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(online_seconds), 0)::bigint AS total
       FROM player_stat_periods
       WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id IS NOT NULL
-    `;
-    const [presenceSum] = await sql<{ total: number }[]>`
+    `
+      )[0],
+    );
+    const presenceSum = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(online_seconds), 0)::bigint AS total
       FROM player_daily_presence WHERE day = '2026-07-05'
-    `;
+    `
+      )[0],
+    );
     expect(Number(statSum.total)).toBe(Number(presenceSum.total));
     expect(Number(statSum.total)).toBe(6300);
   });
@@ -308,17 +325,25 @@ describeIfDb('combat aggregation (DOSSIER-4)', () => {
     expect(julyBServer1?.revives).toBe(6);
 
     // The materialised monthly kills reconcile with a manual sum over match_players.
-    const [manual] = await sql<{ total: number }[]>`
+    const manual = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(mp.kills), 0)::bigint AS total
       FROM match_players mp
       JOIN matches m ON m.id = mp.match_id
       WHERE m.server_id = ANY(${[SERVER_1, SERVER_2]})
-    `;
-    const [materialised] = await sql<{ total: number }[]>`
+    `
+      )[0],
+    );
+    const materialised = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(kills), 0)::bigint AS total
       FROM player_stat_periods
       WHERE period_type = 'month' AND server_id IS NOT NULL
-    `;
+    `
+      )[0],
+    );
     expect(Number(materialised.total)).toBe(Number(manual.total));
     expect(Number(materialised.total)).toBe(14);
   });
@@ -452,15 +477,23 @@ describeIfDb('seeding contribution (LEAD-6)', () => {
     expect(aRollup?.seeding_seconds).toBe(1800);
 
     // The materialised total reconciles with player_daily_presence.
-    const [presenceSum] = await sql<{ total: number }[]>`
+    const presenceSum = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(seed_seconds), 0)::bigint AS total
       FROM player_daily_presence WHERE day = '2026-07-05'
-    `;
-    const [statSum] = await sql<{ total: number }[]>`
+    `
+      )[0],
+    );
+    const statSum = defined(
+      (
+        await sql<{ total: number }[]>`
       SELECT COALESCE(SUM(seeding_seconds), 0)::bigint AS total
       FROM player_stat_periods
       WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id IS NOT NULL
-    `;
+    `
+      )[0],
+    );
     expect(Number(statSum.total)).toBe(Number(presenceSum.total));
     expect(Number(statSum.total)).toBe(2100);
   });

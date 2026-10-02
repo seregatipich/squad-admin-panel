@@ -10,13 +10,14 @@
 // constraint name live on `err.cause`. Asserting with `.rejects.toThrow(/name/)`
 // therefore silently tests nothing useful, so every constraint assertion here
 // walks the cause chain via `pgErrorOf`.
-import * as schema from '@squad/db/schema';
+
 import { getTableColumns, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadActiveSeasonTarget, loadSeasonTarget } from '../src/leaderboard/season.js';
+import * as schema from '../src/schema/index.js';
 import { seasons } from '../src/schema/seasons.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
