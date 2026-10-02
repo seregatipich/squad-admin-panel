@@ -118,13 +118,15 @@ describe.each(COMPOSE_FILES)('%s — authenticated Redis', (file) => {
     const urls = [...yaml.matchAll(/^\s+REDIS_URL: (\S+)$/gm)].map((m) => m[1]);
     expect(urls.length).toBeGreaterThan(0);
     for (const url of urls) {
-      expect(url).toMatch(/^redis:\/\/:\$\{REDIS_PASSWORD\}@(redis|127\.0\.0\.1):6379$/);
+      expect(url).toMatch(
+        /^redis:\/\/:\$\{REDIS_PASSWORD\}@(redis|127\.0\.0\.1):(6379|\$\{REDIS_HOST_PORT:-6379\})$/,
+      );
     }
   });
 
   it('hands the sidecar only the restricted rnsquadjs credentials', () => {
     expect(serviceBlock(yaml, 'api')).toMatch(
-      /^ {6}SIDECAR_REDIS_URL: redis:\/\/rnsquadjs:\$\{REDIS_SIDECAR_PASSWORD\}@127\.0\.0\.1:6379$/m,
+      /^ {6}SIDECAR_REDIS_URL: redis:\/\/rnsquadjs:\$\{REDIS_SIDECAR_PASSWORD\}@127\.0\.0\.1:(6379|\$\{REDIS_HOST_PORT:-6379\})$/m,
     );
   });
 });

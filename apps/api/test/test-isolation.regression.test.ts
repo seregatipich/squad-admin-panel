@@ -40,6 +40,7 @@ describe('test isolation', () => {
            -e "steamId64.*testSteamId" \
            -e "steamId64, sid" \
            -e "steamId64, steamId)" \
+           -e "players\\.steamId64, h\\.seed\\.ownerSteamId64" \
            -e "test-isolation" \
            -e "snapshot-restore" \
            -e "e2e/" \

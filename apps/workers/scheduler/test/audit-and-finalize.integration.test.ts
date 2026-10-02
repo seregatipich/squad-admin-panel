@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { auditLog, createDatabaseClient, seasons } from '@squad/db';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -19,9 +19,15 @@ afterAll(async () => {
 });
 
 describe('scheduler audit writers (#1012)', () => {
-  it('keeps a single audit_log insert in deps.ts so a schema change is made once', () => {
-    const source = readFileSync(new URL('../src/deps.ts', import.meta.url), 'utf8');
-    expect(source.match(/insert\(auditLog\)/g)).toHaveLength(1);
+  it('keeps a single audit_log insert in deps so a schema change is made once', () => {
+    const depsDirectory = new URL('../src/deps/', import.meta.url);
+    const sources = [
+      new URL('../src/deps.ts', import.meta.url),
+      ...readdirSync(depsDirectory).map((name) => new URL(name, depsDirectory)),
+    ]
+      .map((url) => readFileSync(url, 'utf8'))
+      .join('\n');
+    expect(sources.match(/insert\(auditLog\)/g)).toHaveLength(1);
   });
 });
 
