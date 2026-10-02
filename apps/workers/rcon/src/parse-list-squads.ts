@@ -3,6 +3,9 @@
  *
  * Output is grouped by team headers. Squad rows do not repeat the team, so the
  * parser carries the latest `Team ID: n (name)` context into subsequent rows.
+ * Squad build 25594911 (2026-10-01) appended the ticket count to the header
+ * (`Team ID: 1 (7th Guards Mountain Air Assault Division) - Tickets: 169`); the
+ * old header without it still parses.
  */
 
 export interface RconSquad {
@@ -18,7 +21,9 @@ export interface RconSquad {
   is_command_squad: boolean;
 }
 
-const TEAM_HEADER = /^Team ID:\s*(\d+)\s*\((.+)\)\s*$/;
+const TEAM_HEADER = /^Team ID:\s*(\d+)\s*\((.+)\)(?:\s*-\s*Tickets:\s*\S+)?\s*$/;
+/** A squad row, whether or not {@link SQUAD_LINE} can read it. */
+const SQUAD_ROW = /^ID:\s*\d+\b/;
 const SQUAD_LINE =
   /^ID:\s*(\d+)\s*\|\s*Name:\s*(.+?)\s*\|\s*Size:\s*(\d+)\s*\|\s*Locked:\s*(True|False)\s*\|\s*Creator Name:\s*(.+?)\s*\|\s*Creator Online IDs:\s*(.+?)\s*$/;
 const EOS_ID = /EOS:\s*([0-9a-f]{32})/i;
@@ -28,8 +33,19 @@ function isCommandSquad(name: string): boolean {
   return name === 'Command Squad' || name === 'Командирский отряд';
 }
 
-export function parseListSquads(raw: string): RconSquad[] {
+/** What one `ListSquads` reply held, including the rows the parser could not read. */
+export interface ListSquadsParse {
+  squads: RconSquad[];
+  /** Squad rows (`ID: n ...`) in the reply, whether or not a team header preceded them. */
+  squadRows: number;
+  /** Squad rows no known layout matched; raw, so redact before logging (`redactRconSample`). */
+  unparsedRows: string[];
+}
+
+export function parseListSquadsDetailed(raw: string): ListSquadsParse {
   const squads: RconSquad[] = [];
+  const unparsedRows: string[] = [];
+  let squadRows = 0;
   let currentTeamId: number | null = null;
   let currentTeamName: string | null = null;
 
@@ -44,10 +60,13 @@ export function parseListSquads(raw: string): RconSquad[] {
       continue;
     }
 
-    if (currentTeamId === null || currentTeamName === null) continue;
-
-    const squad = SQUAD_LINE.exec(line);
-    if (!squad) continue;
+    const isRow = SQUAD_ROW.test(line);
+    if (isRow) squadRows += 1;
+    const squad = currentTeamId === null || currentTeamName === null ? null : SQUAD_LINE.exec(line);
+    if (!squad || currentTeamId === null || currentTeamName === null) {
+      if (isRow) unparsedRows.push(line);
+      continue;
+    }
 
     const idsSegment = squad[6] as string;
     const eosMatch = EOS_ID.exec(idsSegment);
@@ -68,5 +87,9 @@ export function parseListSquads(raw: string): RconSquad[] {
     });
   }
 
-  return squads;
+  return { squads, squadRows, unparsedRows };
+}
+
+export function parseListSquads(raw: string): RconSquad[] {
+  return parseListSquadsDetailed(raw).squads;
 }

@@ -1,7 +1,7 @@
 import type { RconRefreshScope } from '@squad/shared-config';
 import type { RconClient } from '../client.js';
-import { parseListPlayers, type RconPlayer } from '../parse-list-players.js';
-import { parseListSquads } from '../parse-list-squads.js';
+import { parseListPlayersDetailed, type RconPlayer } from '../parse-list-players.js';
+import { parseListSquadsDetailed } from '../parse-list-squads.js';
 import { parseServerInfo } from '../parse-server-info.js';
 import { parseShowNextMap } from '../parse-show-next-map.js';
 import {
@@ -13,6 +13,7 @@ import {
 import { buildRoster } from '../roster.js';
 import { A2sProbe } from './a2s-probe.js';
 import { AdminCommandQueue } from './admin-command-queue.js';
+import { RosterParseGuard, type RosterRead } from './roster-parse-guard.js';
 import { SeedingTracker } from './seeding-tracker.js';
 import { ServerEvents } from './server-events.js';
 import { SquadHistory } from './squad-history.js';
@@ -73,6 +74,7 @@ export abstract class ServerPoller {
   protected readonly publisher: StatusPublisher;
   protected readonly seeding: SeedingTracker;
   protected readonly squadHistory: SquadHistory;
+  private readonly parseGuard: RosterParseGuard;
   protected readonly adminQueue: AdminCommandQueue;
   protected readonly events: ServerEvents;
   private readonly a2s: A2sProbe;
@@ -84,6 +86,7 @@ export abstract class ServerPoller {
     this.publisher = new StatusPublisher(target, opts);
     this.seeding = new SeedingTracker(target, opts);
     this.squadHistory = new SquadHistory(target, opts);
+    this.parseGuard = new RosterParseGuard(target, opts);
     this.adminQueue = new AdminCommandQueue(target, opts, () => this.client);
     this.events = new ServerEvents(target, opts);
     this.a2s = new A2sProbe(target, opts);
@@ -169,24 +172,43 @@ export abstract class ServerPoller {
     this.rosterTimer = setInterval(() => void this.refreshRoster(), interval);
   }
 
+  /**
+   * Parses one `ListPlayers` + `ListSquads` pair and says which of the two can
+   * be trusted. A reply whose rows no parser pattern reads is not an empty
+   * server (see {@link RosterParseGuard}): the caller keeps the last good roster,
+   * squads and sessions instead of acting on a list that is empty because the
+   * format changed, and publishes the problem in `rcon:status`.
+   */
+  private readRoster(rawPlayers: string, rawSquads: string): RosterRead {
+    return this.parseGuard.inspect(
+      parseListPlayersDetailed(rawPlayers),
+      parseListSquadsDetailed(rawSquads),
+    );
+  }
+
   private async refreshRoster(): Promise<void> {
     if (!this.client || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
       const rawPlayers = await this.client.exec('ListPlayers');
       const rawSquads = await this.client.exec('ListSquads');
-      const players = parseListPlayers(rawPlayers);
-      const squads = parseListSquads(rawSquads);
+      const { players, squads, playersOk, squadsOk, problems } = this.readRoster(
+        rawPlayers,
+        rawSquads,
+      );
       const polledAt = new Date().toISOString();
-      const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
-      this.rosterFirstSeen = firstSeen;
-      await this.publisher.writeRoster(entries, polledAt);
-      await this.publisher.writeSquads(squads, polledAt);
-      await this.squadHistory.trackSquads(squads, players, polledAt);
+      if (playersOk) {
+        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+        this.rosterFirstSeen = firstSeen;
+        await this.publisher.writeRoster(entries, polledAt);
+      }
+      if (squadsOk) await this.publisher.writeSquads(squads, polledAt);
+      if (playersOk && squadsOk) await this.squadHistory.trackSquads(squads, players, polledAt);
       if (this.client && !this.stopped) {
         await this.publisher.writeStatus('connected', {
-          player_count: players.length,
-          squad_count: squads.length,
+          player_count: playersOk ? players.length : null,
+          squad_count: squadsOk ? squads.length : null,
+          roster_parse_error: problems,
         });
       }
     } catch (err) {
@@ -227,6 +249,8 @@ export abstract class ServerPoller {
       const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
       const info = rawInfo ? parseServerInfo(rawInfo) : null;
       const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
+      this.parseGuard.inspectServerInfo(rawInfo, info);
+      this.parseGuard.inspectNextMap(rawNextMap, nextMap !== null);
       if (this.client && !this.stopped) {
         await this.publisher.writeStatus('connected', {
           tickrate_rt: info?.tickrate ?? undefined,
@@ -279,88 +303,101 @@ export abstract class ServerPoller {
       const rawSquads = await this.client.exec('ListSquads');
       const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
       const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
-      const players = parseListPlayers(rawPlayers);
-      const squads = parseListSquads(rawSquads);
+      const { players, squads, playersOk, squadsOk, problems } = this.readRoster(
+        rawPlayers,
+        rawSquads,
+      );
       const info = rawInfo ? parseServerInfo(rawInfo) : null;
       const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
-      // A database failure must not count as an RCON failure: three of those
-      // in a row close a healthy client and its admin command queue (#981).
-      try {
-        await upsertPlayers(this.opts.db, players, (player, err) =>
-          this.opts.log.warn(
-            { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
-            'player upsert failed',
-          ),
-        );
-      } catch (err) {
-        this.opts.log.warn(
-          { err: (err as Error).message, serverId: this.target.serverId },
-          'player upsert failed (db); rcon connection unaffected',
-        );
-      }
+      this.parseGuard.inspectServerInfo(rawInfo, info);
+      this.parseGuard.inspectNextMap(rawNextMap, nextMap !== null);
       const pollAt = new Date();
-      try {
-        await accruePlayerKitTime(
-          this.opts.db,
-          players,
-          this.lastKitAccrualAt,
-          pollAt,
-          this.target.serverId,
-          this.opts.pollIntervalMs ?? 30_000,
-        );
-      } catch (err) {
-        this.opts.log.warn(
-          { err: (err as Error).message, serverId: this.target.serverId },
-          'kit-time accrual failed (db); rcon connection unaffected',
-        );
-      }
-      this.lastKitAccrualAt = pollAt;
-      this.consecutivePollFails = 0;
       const polledAt = pollAt.toISOString();
-      const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
-      this.rosterFirstSeen = firstSeen;
-      await this.reconcileSessions(players, firstSeen, pollAt);
-      this.lastSuccessfulPollAt = pollAt;
-      await this.publisher.writeRoster(entries, polledAt);
-      await this.publisher.writeSquads(squads, polledAt);
-      await this.squadHistory.trackSquads(squads, players, polledAt);
+      this.consecutivePollFails = 0;
+      // Everything below that derives from the player list is skipped when the
+      // reply was unreadable (`playersOk` false): an empty list there would
+      // close every open session, accrue no kit time and report an empty
+      // server. The unreadable reply itself is already logged by the guard.
+      if (playersOk) {
+        // A database failure must not count as an RCON failure: three of those
+        // in a row close a healthy client and its admin command queue (#981).
+        try {
+          await upsertPlayers(this.opts.db, players, (player, err) =>
+            this.opts.log.warn(
+              { serverId: this.target.serverId, eosId: player.eos_id, err: err.message },
+              'player upsert failed',
+            ),
+          );
+        } catch (err) {
+          this.opts.log.warn(
+            { err: (err as Error).message, serverId: this.target.serverId },
+            'player upsert failed (db); rcon connection unaffected',
+          );
+        }
+        try {
+          await accruePlayerKitTime(
+            this.opts.db,
+            players,
+            this.lastKitAccrualAt,
+            pollAt,
+            this.target.serverId,
+            this.opts.pollIntervalMs ?? 30_000,
+          );
+        } catch (err) {
+          this.opts.log.warn(
+            { err: (err as Error).message, serverId: this.target.serverId },
+            'kit-time accrual failed (db); rcon connection unaffected',
+          );
+        }
+        this.lastKitAccrualAt = pollAt;
+        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+        this.rosterFirstSeen = firstSeen;
+        await this.reconcileSessions(players, firstSeen, pollAt);
+        this.lastSuccessfulPollAt = pollAt;
+        await this.publisher.writeRoster(entries, polledAt);
+      }
+      if (squadsOk) await this.publisher.writeSquads(squads, polledAt);
+      if (playersOk && squadsOk) await this.squadHistory.trackSquads(squads, players, polledAt);
       const pollMs = Date.now() - start;
       this.opts.log.info(
         {
           serverId: this.target.serverId,
           ms: pollMs,
-          n: players.length,
-          squads: squads.length,
+          n: playersOk ? players.length : null,
+          squads: squadsOk ? squads.length : null,
         },
         'poll listplayers',
       );
-      await this.events.emitEvent('rcon.players_polled', {
-        players: players
-          .filter((p) => p.steam_id64 !== null)
-          .map((p) => ({
-            steam_id64: p.steam_id64,
-            eos_id: p.eos_id,
-            name: p.name,
-            team_id: p.team_id,
-            squad_id: p.squad_id,
-            is_leader: p.is_leader ?? false,
-            role: p.role ?? undefined,
-          })),
-        polled_at: polledAt,
-        latency_ms: Date.now() - start,
-      });
+      if (playersOk) {
+        await this.events.emitEvent('rcon.players_polled', {
+          players: players
+            .filter((p) => p.steam_id64 !== null)
+            .map((p) => ({
+              steam_id64: p.steam_id64,
+              eos_id: p.eos_id,
+              name: p.name,
+              team_id: p.team_id,
+              squad_id: p.squad_id,
+              is_leader: p.is_leader ?? false,
+              role: p.role ?? undefined,
+            })),
+          polled_at: polledAt,
+          latency_ms: Date.now() - start,
+        });
+      }
       // A poll still in flight when stop() ran must not write 'connected' or
       // seeding events for a supervisor already torn down (#982).
       if (this.client && !this.stopped) {
         await this.publisher.writeStatus('connected', {
-          player_count: players.length,
+          player_count: playersOk ? players.length : null,
           last_poll_at: new Date().toISOString(),
           tickrate_rt: info?.tickrate ?? undefined,
           current_map: info?.map_name ?? undefined,
           next_level: nextMap?.level ?? undefined,
           next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
           game_mode: info?.game_mode ?? undefined,
-          squad_count: squads.length,
+          squad_count: squadsOk ? squads.length : null,
+          roster_parse_error: problems,
           // DISCORD-6 (#153): the Discord status channel renders
           // {players}x{queue}, and this cache is its only source for the queue —
           // ShowServerInfo already parses PublicQueue_I, it just was not stored.
@@ -396,7 +433,7 @@ export abstract class ServerPoller {
         }
       }
 
-      if (!this.stopped) {
+      if (!this.stopped && playersOk) {
         await this.seeding.tickSeeding(players.length, info?.map_name ?? null, polledAt);
       }
     } catch (err) {

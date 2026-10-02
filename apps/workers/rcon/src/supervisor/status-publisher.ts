@@ -16,6 +16,7 @@ const PUBLISHED_STATUS_FIELDS = [
   'next_layer',
   'game_mode',
   'public_queue',
+  'roster_parse_error',
 ] as const;
 
 type ConnectedStatus = Partial<

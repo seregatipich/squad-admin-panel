@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseListPlayers } from '../src/parse-list-players.js';
+import { parseListPlayers, parseListPlayersDetailed } from '../src/parse-list-players.js';
 
 describe('ListPlayers parser', () => {
   it('returns an empty list for an empty server', () => {
@@ -132,5 +132,113 @@ describe('ListPlayers parser', () => {
     expect(parsed).toHaveLength(2);
     expect(parsed[0]?.name).toBe('[BSS] Пеланкин 🛠️');
     expect(parsed[1]?.name).toBe('КУНГФУ ПАДЛА');
+  });
+
+  describe('Squad build 25594911 (Party ID and Vehicle fields, #126)', () => {
+    const EOS = 'abcdef0123456789abcdef0123456789';
+    const STEAM = '76561198012345678';
+    const header = '----- Active Players -----';
+    const footer = '----- Recently Disconnected Players [Max of 15] -----';
+
+    it('parses a row with Party ID: N/A and Vehicle: N/A', () => {
+      const raw = [
+        header,
+        `ID: 60 | Online IDs: EOS: ${EOS} steam: ${STEAM} | Name:  -quic | Team ID: 2 | Party ID: N/A | Squad ID: 1 | Is Leader: False | Role: USA_Medic_02 | Vehicle: N/A`,
+        footer,
+      ].join('\n');
+      expect(parseListPlayers(raw)).toEqual([
+        {
+          rcon_id: 60,
+          eos_id: EOS,
+          steam_id64: STEAM,
+          name: '-quic',
+          team_id: 2,
+          squad_id: 1,
+          is_leader: false,
+          role: 'USA_Medic_02',
+        },
+      ]);
+    });
+
+    it('parses a row with a numbered party, a leader and a vehicle name', () => {
+      const raw = [
+        header,
+        `ID: 95 | Online IDs: EOS: ${EOS} steam: ${STEAM} | Name:   3bank0 | Team ID: 2 | Party ID: #0 | Squad ID: 12 | Is Leader: True | Role: RGF_SL_01 | Vehicle: RGF_BTR80_Woodland`,
+        footer,
+      ].join('\n');
+      const [player] = parseListPlayers(raw);
+      expect(player).toMatchObject({
+        rcon_id: 95,
+        name: '3bank0',
+        team_id: 2,
+        squad_id: 12,
+        is_leader: true,
+        role: 'RGF_SL_01',
+      });
+    });
+
+    it('keeps names with a pipe and Cyrillic names under the new layout', () => {
+      const raw = [
+        header,
+        `ID: 8 | Online IDs: EOS: ${EOS} steam: ${STEAM} | Name: [TAG] Nick | Alt | Team ID: 1 | Party ID: N/A | Squad ID: 1 | Is Leader: True | Role: USA_SL_01 | Vehicle: N/A`,
+        `ID: 13 | Online IDs: EOS: 0123456789abcdef0123456789abcdef | Name: КУНГФУ ПАДЛА | Team ID: 2 | Party ID: #3 | Squad ID: N/A | Is Leader: False | Role: IMF_Rifleman_01 | Vehicle: N/A`,
+        footer,
+      ].join('\n');
+      const parsed = parseListPlayers(raw);
+      expect(parsed.map((p) => p.name)).toEqual(['[TAG] Nick | Alt', 'КУНГФУ ПАДЛА']);
+      expect(parsed[1]?.squad_id).toBeNull();
+      expect(parsed[1]?.steam_id64).toBeNull();
+    });
+
+    it('reads old-format and new-format rows of one reply together', () => {
+      const raw = [
+        header,
+        `ID: 0 | Online IDs: EOS: ${EOS} steam: ${STEAM} | Name: Old | Team ID: 1 | Squad ID: 2 | Is Leader: True | Role: USA_Rifleman_01`,
+        `ID: 1 | Online IDs: EOS: 0123456789abcdef0123456789abcdef | Name: New | Team ID: 1 | Party ID: N/A | Squad ID: 2 | Is Leader: False | Role: USA_Rifleman_01 | Vehicle: N/A`,
+        footer,
+      ].join('\n');
+      expect(parseListPlayers(raw).map((p) => p.name)).toEqual(['Old', 'New']);
+    });
+  });
+
+  describe('parseListPlayersDetailed', () => {
+    const header = '----- Active Players -----';
+    const footer = '----- Recently Disconnected Players [Max of 15] -----';
+
+    it('counts no rows for an empty server', () => {
+      expect(parseListPlayersDetailed([header, footer].join('\n'))).toEqual({
+        players: [],
+        activeRows: 0,
+        unparsedRows: [],
+      });
+    });
+
+    it('reports rows no layout matched instead of hiding them', () => {
+      const raw = [
+        header,
+        'ID: 1 | Online IDs: EOS: abcdef0123456789abcdef0123456789 | Name: A | Squad: 3 | Role: X',
+        'ID: 2 | Online IDs: EOS: 0123456789abcdef0123456789abcdef | Name: B | Team ID: 1 | Squad ID: 1 | Is Leader: False | Role: R',
+        footer,
+        'ID: 9 | Since Disconnect: 05m.32s',
+      ].join('\n');
+      const result = parseListPlayersDetailed(raw);
+      expect(result.activeRows).toBe(2);
+      expect(result.players.map((p) => p.name)).toEqual(['B']);
+      expect(result.unparsedRows).toEqual([
+        'ID: 1 | Online IDs: EOS: abcdef0123456789abcdef0123456789 | Name: A | Squad: 3 | Role: X',
+      ]);
+    });
+
+    it('reports an active row without an EOS id as unparsed', () => {
+      const raw = [
+        header,
+        'ID: 4 | Online IDs: steam: 76561198012345678 | Name: NoEos | Team ID: 1 | Squad ID: 1 | Is Leader: False | Role: R',
+        footer,
+      ].join('\n');
+      const result = parseListPlayersDetailed(raw);
+      expect(result.players).toEqual([]);
+      expect(result.activeRows).toBe(1);
+      expect(result.unparsedRows).toHaveLength(1);
+    });
   });
 });
