@@ -156,13 +156,14 @@ the newest SHA matters and nothing deploys from it.
 | `go` | `go vet`, `go test -race`, `govulncheck` (pinned `v1.7.0`), and a static-link check of the bridge binary |
 | `images` | the `release` group and `rnsquadjs` of `docker/docker-bake.hcl`, reading (never writing) the GHCR layer cache the stand deploy writes, then smoke tests: the api image imports `postgres`, every `WORKER` in `docker/compose.stand.yml` is in the workers image, and the workers image exits 64 without one |
 | `backup` | the INFRA-8 backup/restore round trip (`scripts/test-backup-restore.sh`) |
-| `gate` | `needs` every other job with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); then merges the API and web shards' blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite |
+| `coverage` | `needs` only `test-api` and `test-web` and merges their blob reports with `vitest --merge-reports --coverage`, which enforces those packages' coverage thresholds on the whole suite; it overlaps the slower package shards instead of running after them |
+| `gate` | `needs` every other job (including `coverage`) with `if: always()` and fails unless all of them succeeded (only `mutation` may be skipped); it installs nothing |
 
 The API and web suites need no build: vitest resolves every `@squad/*` import to its
 source through the packages' `development` export condition, and the API harness builds
 its template database from the SQL migrations itself. One shard cannot meet its
 package's thresholds, so [`scripts/ci-test-shard.sh`](../../scripts/ci-test-shard.sh)
-switches them off per shard and writes a blob report, and `gate` applies them to the
+switches them off per shard and writes a blob report, and `coverage` applies them to the
 merged coverage. [`scripts/test-ci-test-shard.sh`](../../scripts/test-ci-test-shard.sh)
 fails CI if the slices stop adding up to the `test:cov` list exactly, the shard
 arguments drift, or the weighted package assignment stops balancing the shards
