@@ -22,6 +22,8 @@ const EXISTING_STEAM_ID = testSteamId(299_001);
 const NEW_STEAM_ID = testSteamId(299_002);
 const KEEP_AVATAR_STEAM_ID = testSteamId(299_003);
 const EXPIRED_ROLE_STEAM_ID = testSteamId(299_004);
+const PLACEHOLDER_KEEP_STEAM_ID = testSteamId(299_005);
+const PLACEHOLDER_NEW_STEAM_ID = testSteamId(299_006);
 
 async function buildApp(dbUrl: string) {
   const app = Fastify({ logger: false });
@@ -168,6 +170,81 @@ describe('establishAuthenticatedPlayerSession', () => {
 
     const player = await h.db.select().from(players).where(eq(players.id, playerId)).limit(1);
     expect(player[0]?.avatarUrl).toBe('https://cdn.example/keep.jpg');
+  });
+
+  // #115: a failed profile lookup supplies a stand-in name, which must not
+  // replace the real nickname an existing player already has.
+  it('keeps an existing name when the identity name is only a placeholder', async () => {
+    await resetSetupState(h.db, { firstOwnerClaimed: true });
+    const playerId = uuidv7();
+    await h.db.insert(players).values({
+      id: playerId,
+      steamId64: PLACEHOLDER_KEEP_STEAM_ID,
+      canonicalName: 'Real Nick',
+      canonicalNameNormalized: 'real nick',
+    });
+    h.setIdentity({
+      steamId64: PLACEHOLDER_KEEP_STEAM_ID,
+      canonicalName: 'Player 9001',
+      avatarUrl: null,
+      nameIsPlaceholder: true,
+    });
+
+    const response = await h.app.inject({ method: 'GET', url: '/establish' });
+
+    expect(response.statusCode).toBe(302);
+    const player = await h.db.select().from(players).where(eq(players.id, playerId)).limit(1);
+    expect(player[0]).toMatchObject({
+      canonicalName: 'Real Nick',
+      canonicalNameNormalized: 'real nick',
+    });
+  });
+
+  it('names a brand-new player with the placeholder', async () => {
+    await resetSetupState(h.db, { firstOwnerClaimed: true });
+    h.setIdentity({
+      steamId64: PLACEHOLDER_NEW_STEAM_ID,
+      canonicalName: 'Player 9002',
+      avatarUrl: null,
+      nameIsPlaceholder: true,
+    });
+
+    await h.app.inject({ method: 'GET', url: '/establish' });
+
+    const player = await h.db
+      .select()
+      .from(players)
+      .where(eq(players.steamId64, PLACEHOLDER_NEW_STEAM_ID))
+      .limit(1);
+    expect(player[0]).toMatchObject({
+      canonicalName: 'Player 9002',
+      canonicalNameNormalized: 'player 9002',
+    });
+  });
+
+  it('still renames an existing player when the provider reports a real name', async () => {
+    await resetSetupState(h.db, { firstOwnerClaimed: true });
+    await h.db.insert(players).values({
+      id: uuidv7(),
+      steamId64: PLACEHOLDER_KEEP_STEAM_ID,
+      canonicalName: 'Player 9001',
+      canonicalNameNormalized: 'player 9001',
+    });
+    h.setIdentity({
+      steamId64: PLACEHOLDER_KEEP_STEAM_ID,
+      canonicalName: 'Fresh Persona',
+      avatarUrl: null,
+      nameIsPlaceholder: false,
+    });
+
+    await h.app.inject({ method: 'GET', url: '/establish' });
+
+    const player = await h.db
+      .select()
+      .from(players)
+      .where(eq(players.steamId64, PLACEHOLDER_KEEP_STEAM_ID))
+      .limit(1);
+    expect(player[0]?.canonicalName).toBe('Fresh Persona');
   });
 
   it('uses an expired panel role as self-service authority', async () => {

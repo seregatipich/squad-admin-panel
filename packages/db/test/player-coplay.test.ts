@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { recomputeCoplayForAllSessions, recomputeCoplayWindow } from '../src/coplay/aggregate.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -74,7 +75,7 @@ beforeAll(async () => {
     [PLAYER_A, 'Alpha'],
     [PLAYER_B, 'Bravo'],
     [PLAYER_C, 'Charlie'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO players (id, canonical_name, canonical_name_normalized)
       VALUES (${id}, ${name}, ${name.toLowerCase()})
@@ -84,7 +85,7 @@ beforeAll(async () => {
   for (const [id, slug] of [
     [SERVER_1, 'srv-1'],
     [SERVER_2, 'srv-2'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO servers (id, display_name, slug)
       VALUES (${id}, ${slug}, ${slug})
@@ -110,12 +111,16 @@ beforeEach(async () => {
 
 describeIfDb('player_coplay table shape', () => {
   it('has the composite (a, b, server, window_start) primary key', async () => {
-    const [pk] = await sql<{ cols: string }[]>`
+    const pk = defined(
+      (
+        await sql<{ cols: string }[]>`
       SELECT string_agg(a.attname, ',' ORDER BY array_position(i.indkey, a.attnum)) AS cols
       FROM pg_index i
       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
       WHERE i.indrelid = 'player_coplay'::regclass AND i.indisprimary
-    `;
+    `
+      )[0],
+    );
     expect(pk.cols).toBe('player_a_id,player_b_id,server_id,window_start');
   });
 
@@ -232,14 +237,22 @@ describeIfDb('recomputeCoplayWindow', () => {
 
     await recomputeCoplayWindow(sql, { fromDay: '2026-07-05', toDay: '2026-07-05', now: NOW });
 
-    const [fromA] = await sql<{ overlap: number; count: number }[]>`
+    const fromA = defined(
+      (
+        await sql<{ overlap: number; count: number }[]>`
       SELECT overlap_seconds::bigint AS overlap, shared_session_count AS count
       FROM player_coplay WHERE player_a_id = ${PLAYER_A}
-    `;
-    const [fromB] = await sql<{ overlap: number; count: number }[]>`
+    `
+      )[0],
+    );
+    const fromB = defined(
+      (
+        await sql<{ overlap: number; count: number }[]>`
       SELECT overlap_seconds::bigint AS overlap, shared_session_count AS count
       FROM player_coplay WHERE player_b_id = ${PLAYER_B}
-    `;
+    `
+      )[0],
+    );
     expect(Number(fromA.overlap)).toBe(3600);
     expect(fromA.count).toBe(10);
     // Same physical row is visible from either player's perspective.
@@ -337,7 +350,7 @@ describeIfDb('recomputeCoplayWindow', () => {
 
     const written = await recomputeCoplayForAllSessions(sql, NOW);
     expect(written).toBe(1);
-    const [row] = await coplayRows();
+    const row = defined((await coplayRows())[0]);
     expect(row.overlap_seconds).toBe(3600);
     expect(row.window_start).toBe('2026-07-01');
   });

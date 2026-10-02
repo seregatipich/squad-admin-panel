@@ -183,6 +183,7 @@ describe('local pre-push checklist and git hooks', () => {
       const fixture = checklistFixture(FIXTURE_PACKAGES);
       const result = runChecklist(fixture, { input: pushLine('refs/heads/master') });
       assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /skipped — this push does not update dev/);
       assert.deepEqual(gatedCommands(fixture), []);
     });
 

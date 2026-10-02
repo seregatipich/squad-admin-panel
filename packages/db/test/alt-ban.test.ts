@@ -12,7 +12,7 @@ let db: DatabaseClient;
 
 const PLAYER = '0a17ba17-0000-4000-8000-000000000001';
 
-async function insertRule(config: unknown, enabled = true): Promise<string> {
+async function insertRule(config: postgres.JSONValue, enabled = true): Promise<string> {
   const id = randomUUID();
   await sql`
     INSERT INTO alert_rules (id, name, type, config, enabled)

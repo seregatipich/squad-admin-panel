@@ -10,6 +10,7 @@ import {
   type DossierSql,
   reconcileDossierAggregates,
 } from '../src/dossier/aggregate.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -94,9 +95,9 @@ beforeAll(async () => {
     ON CONFLICT (id) DO NOTHING
   `;
 
-  const [row] = await sql<
-    { month_start: Date }[]
-  >`SELECT date_trunc('month', now()) AS month_start`;
+  const row = defined(
+    (await sql<{ month_start: Date }[]>`SELECT date_trunc('month', now()) AS month_start`)[0],
+  );
   monthStart = row.month_start;
 
   // A dedicated connection for the drizzle executor: drizzle-orm/postgres-js
@@ -131,16 +132,20 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
     const at = new Date(monthStart.getTime() + 5000);
     await applyCombatEventToDossier(sql, death({ occurredAt: at }));
 
-    const [row] = await sql<
-      {
-        kills: number;
-        teamkills: number;
-        shots_events: number;
-        damage: string | null;
-        last_used_at: Date;
-      }[]
-    >`SELECT kills, teamkills, shots_events, damage, last_used_at
-        FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    const row = defined(
+      (
+        await sql<
+          {
+            kills: number;
+            teamkills: number;
+            shots_events: number;
+            damage: string | null;
+            last_used_at: Date;
+          }[]
+        >`SELECT kills, teamkills, shots_events, damage, last_used_at
+        FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(1);
     expect(row.teamkills).toBe(0);
     expect(row.shots_events).toBe(0);
@@ -150,8 +155,12 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
 
   it('counts a teamkill as teamkills, not kills', async () => {
     await applyCombatEventToDossier(sql, death({ isTeamkill: true }));
-    const [row] = await sql<{ kills: number; teamkills: number }[]>`
-      SELECT kills, teamkills FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    const row = defined(
+      (
+        await sql<{ kills: number; teamkills: number }[]>`
+      SELECT kills, teamkills FROM player_weapon_stats WHERE player_id = ${ATTACKER}`
+      )[0],
+    );
     expect(row.kills).toBe(0);
     expect(row.teamkills).toBe(1);
   });
@@ -159,16 +168,24 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
   it('accumulates damage and shots across damage events', async () => {
     await applyCombatEventToDossier(sql, death({ eventType: 'damage', damage: 40 }));
     await applyCombatEventToDossier(sql, death({ eventType: 'damage', damage: 60 }));
-    const [row] = await sql<{ shots_events: number; damage: string }[]>`
-      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    const row = defined(
+      (
+        await sql<{ shots_events: number; damage: string }[]>`
+      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`
+      )[0],
+    );
     expect(row.shots_events).toBe(2);
     expect(Number(row.damage)).toBe(100);
   });
 
   it('keeps damage NULL when the source event carries no damage magnitude', async () => {
     await applyCombatEventToDossier(sql, death({ eventType: 'damage', damage: null }));
-    const [row] = await sql<{ shots_events: number; damage: string | null }[]>`
-      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    const row = defined(
+      (
+        await sql<{ shots_events: number; damage: string | null }[]>`
+      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`
+      )[0],
+    );
     expect(row.shots_events).toBe(1);
     expect(row.damage).toBeNull();
   });
@@ -176,8 +193,12 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
   it('does not overwrite an accumulated damage total with a later NULL-damage event', async () => {
     await applyCombatEventToDossier(sql, death({ eventType: 'damage', damage: 75 }));
     await applyCombatEventToDossier(sql, death({ eventType: 'damage', damage: null }));
-    const [row] = await sql<{ shots_events: number; damage: string }[]>`
-      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    const row = defined(
+      (
+        await sql<{ shots_events: number; damage: string }[]>`
+      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`
+      )[0],
+    );
     expect(row.shots_events).toBe(2);
     expect(Number(row.damage)).toBe(75);
   });
@@ -191,9 +212,13 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
       sql,
       death({ eventType: 'vehicle_destroyed', weapon: 'BP_RPG7', victimVehicle: 'T72B3' }),
     );
-    const [row] = await sql<{ destroyed_count: number }[]>`
+    const row = defined(
+      (
+        await sql<{ destroyed_count: number }[]>`
       SELECT destroyed_count FROM player_vehicle_kills
-      WHERE player_id = ${ATTACKER} AND victim_vehicle_asset_id = 'T72B3' AND weapon = 'BP_RPG7'`;
+      WHERE player_id = ${ATTACKER} AND victim_vehicle_asset_id = 'T72B3' AND weapon = 'BP_RPG7'`
+      )[0],
+    );
     expect(row.destroyed_count).toBe(2);
   });
 
@@ -203,23 +228,33 @@ describeIfDb('applyCombatEventToDossier — incremental UPSERT', () => {
       sql,
       death({ eventType: 'damage', damage: 30, attackerVehicle: 'BTR82A' }),
     );
-    const [row] = await sql<{ kills: number; damage: string }[]>`
+    const row = defined(
+      (
+        await sql<{ kills: number; damage: string }[]>`
       SELECT kills, damage FROM player_vehicle_stats
-      WHERE player_id = ${ATTACKER} AND vehicle_asset_id = 'BTR82A'`;
+      WHERE player_id = ${ATTACKER} AND vehicle_asset_id = 'BTR82A'`
+      )[0],
+    );
     expect(row.kills).toBe(1);
     expect(Number(row.damage)).toBe(30);
   });
 
   it('aggregates an EOS-only player (no steam_id64) by uuid', async () => {
     await applyCombatEventToDossier(sql, death({ attackerPlayerId: EOS_ONLY }));
-    const [row] = await sql<{ kills: number }[]>`
-      SELECT kills FROM player_weapon_stats WHERE player_id = ${EOS_ONLY}`;
+    const row = defined(
+      (
+        await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${EOS_ONLY}`
+      )[0],
+    );
     expect(row.kills).toBe(1);
   });
 
   it('ignores events with no resolvable attacker', async () => {
     await applyCombatEventToDossier(sql, death({ attackerPlayerId: null }));
-    const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM player_weapon_stats`;
+    const { n } = defined(
+      (await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM player_weapon_stats`)[0],
+    );
     expect(n).toBe(0);
   });
 });
@@ -260,9 +295,13 @@ describeIfDb('reconcileDossierAggregates', () => {
     const repair = await reconcileDossierAggregates(sql, { repair: true });
     expect(repair.repaired).toBe(true);
 
-    const [row] = await sql<{ kills: number; shots_events: number; damage: string }[]>`
+    const row = defined(
+      (
+        await sql<{ kills: number; shots_events: number; damage: string }[]>`
       SELECT kills, shots_events, damage FROM player_weapon_stats
-      WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+      WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(2);
     expect(row.shots_events).toBe(1);
     expect(Number(row.damage)).toBe(25);
@@ -313,8 +352,12 @@ describeIfDb('reconcileDossierAggregates', () => {
     // Simulate a 24-month retention partition drop: the raw events vanish.
     await sql`DELETE FROM combat_events`;
 
-    const [row] = await sql<{ kills: number }[]>`
-      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    const row = defined(
+      (
+        await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(2);
   });
 });
@@ -327,9 +370,13 @@ describeIfDb('applyCombatEventToDossier — drizzle executor path', () => {
     const at = new Date(monthStart.getTime() + 5000);
     await applyCombatEventToDossier(drz, death({ occurredAt: at }));
 
-    const [row] = await sql<{ kills: number; teamkills: number; last_used_at: Date }[]>`
+    const row = defined(
+      (
+        await sql<{ kills: number; teamkills: number; last_used_at: Date }[]>`
       SELECT kills, teamkills, last_used_at FROM player_weapon_stats
-      WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+      WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(1);
     expect(row.teamkills).toBe(0);
     expect(row.last_used_at.getTime()).toBe(at.getTime());
@@ -338,8 +385,12 @@ describeIfDb('applyCombatEventToDossier — drizzle executor path', () => {
   it('accumulates weapon damage through the drizzle executor', async () => {
     await applyCombatEventToDossier(drz, death({ eventType: 'damage', damage: 40 }));
     await applyCombatEventToDossier(drz, death({ eventType: 'damage', damage: 60 }));
-    const [row] = await sql<{ shots_events: number; damage: string }[]>`
-      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    const row = defined(
+      (
+        await sql<{ shots_events: number; damage: string }[]>`
+      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`
+      )[0],
+    );
     expect(row.shots_events).toBe(2);
     expect(Number(row.damage)).toBe(100);
   });
@@ -349,9 +400,13 @@ describeIfDb('applyCombatEventToDossier — drizzle executor path', () => {
       drz,
       death({ eventType: 'vehicle_destroyed', weapon: 'BP_RPG7', victimVehicle: 'T72B3' }),
     );
-    const [row] = await sql<{ destroyed_count: number }[]>`
+    const row = defined(
+      (
+        await sql<{ destroyed_count: number }[]>`
       SELECT destroyed_count FROM player_vehicle_kills
-      WHERE player_id = ${ATTACKER} AND victim_vehicle_asset_id = 'T72B3' AND weapon = 'BP_RPG7'`;
+      WHERE player_id = ${ATTACKER} AND victim_vehicle_asset_id = 'T72B3' AND weapon = 'BP_RPG7'`
+      )[0],
+    );
     expect(row.destroyed_count).toBe(1);
   });
 
@@ -363,7 +418,9 @@ describeIfDb('applyCombatEventToDossier — drizzle executor path', () => {
       }),
     ).rejects.toThrow('boom');
 
-    const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM player_weapon_stats`;
+    const { n } = defined(
+      (await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM player_weapon_stats`)[0],
+    );
     expect(n).toBe(0);
   });
 });
@@ -389,8 +446,12 @@ describeIfDb('reconcileDossierAggregates — 48h window', () => {
     const repair = await reconcileDossierAggregates(sql, { repair: true });
     expect(repair.repaired).toBe(true);
 
-    const [row] = await sql<{ kills: number }[]>`
-      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    const row = defined(
+      (
+        await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(2);
 
     const after = await reconcileDossierAggregates(sql, { windowHours: 48 });
@@ -417,8 +478,12 @@ describeIfDb('reconcileDossierAggregates — 48h window', () => {
     const windowed = await reconcileDossierAggregates(sql, { windowHours: 48 });
     expect(windowed.discrepancies.total).toBe(0);
 
-    const [row] = await sql<{ kills: number }[]>`
-      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    const row = defined(
+      (
+        await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`
+      )[0],
+    );
     expect(row.kills).toBe(2);
   });
 });

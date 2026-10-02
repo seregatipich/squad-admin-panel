@@ -3,6 +3,7 @@ import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import postgres from 'postgres';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import * as schema from '../src/schema/index.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 /**
@@ -24,7 +25,9 @@ afterAll(async () => {
   await sql?.end({ timeout: 5 });
 });
 
-const tables = Object.values(schema).filter((value): value is PgTable => is(value, PgTable));
+const tables = Object.values<unknown>(schema).filter((value): value is PgTable =>
+  is(value, PgTable),
+);
 
 describeIfDb('TypeScript schema vs migrated database', () => {
   it('declares only indexes that exist, with the same uniqueness and partial predicate', async () => {
@@ -36,7 +39,7 @@ describeIfDb('TypeScript schema vs migrated database', () => {
     for (const table of tables) {
       const config = getTableConfig(table);
       for (const index of config.indexes) {
-        const name = index.config.name;
+        const name = defined(index.config.name, 'index name');
         const def = defs.get(name);
         if (!def) {
           problems.push(`${config.name}.${name}: missing in database`);

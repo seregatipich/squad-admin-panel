@@ -4,11 +4,11 @@
 // regression: servers.is_canary column existed on sister branch but migration was never
 // carried over to feat/panel-rbac
 // Fix: migration 0011 adds IF NOT EXISTS guard for carry-forward
-import * as schema from '@squad/db/schema';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import * as schema from '../src/schema/index.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -28,7 +28,7 @@ afterAll(async () => {
 
 describeIfDb('migration regressions', () => {
   it('player search and report-analytics indexes exist (0126, audit #71)', async () => {
-    const rows = await db.execute(sql`
+    const rows = await db.execute<{ indexname: string; indexdef: string }>(sql`
       SELECT indexname, indexdef FROM pg_indexes
       WHERE schemaname = 'public'
         AND indexname IN (
@@ -38,24 +38,19 @@ describeIfDb('migration regressions', () => {
         )
       ORDER BY indexname;
     `);
-    const defs = new Map(
-      (rows as Array<{ indexname: string; indexdef: string }>).map((r) => [
-        r.indexname,
-        r.indexdef,
-      ]),
-    );
+    const defs = new Map(rows.map((r) => [r.indexname, r.indexdef]));
     expect(defs.get('players_canonical_name_normalized_trgm_idx')).toContain('gin_trgm_ops');
     expect(defs.get('player_name_history_name_normalized_trgm_idx')).toContain('gin_trgm_ops');
     expect(defs.get('player_reports_created_at_idx')).toContain('(created_at)');
   });
 
   it('server_log_sources exists with the ssh-only kind check (0113)', async () => {
-    const cols = await db.execute(sql`
+    const cols = await db.execute<{ column_name: string }>(sql`
       SELECT column_name FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'server_log_sources'
       ORDER BY column_name;
     `);
-    const names = (cols as Array<{ column_name: string }>).map((c) => c.column_name);
+    const names = cols.map((c) => c.column_name);
     expect(names).toEqual(
       expect.arrayContaining([
         'server_id',
@@ -71,19 +66,19 @@ describeIfDb('migration regressions', () => {
         'key_version',
       ]),
     );
-    const definition = await db.execute(sql`
+    const definition = await db.execute<{ def: string }>(sql`
       SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
       WHERE conname = 'server_log_sources_kind_chk';
     `);
-    expect(String((definition as Array<{ def: string }>)[0]?.def ?? '')).toContain("'ssh'");
+    expect(String(definition[0]?.def ?? '')).toContain("'ssh'");
   });
 
   it("servers_runtime_enum accepts 'external' and still rejects unknown runtimes (0112)", async () => {
-    const definition = await db.execute(sql`
+    const definition = await db.execute<{ def: string }>(sql`
       SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
       WHERE conname = 'servers_runtime_enum' AND conrelid = 'servers'::regclass;
     `);
-    const def = String((definition as Array<{ def: string }>)[0]?.def ?? '');
+    const def = String(definition[0]?.def ?? '');
     expect(def).toContain("'container'");
     expect(def).toContain("'external'");
 
@@ -199,13 +194,13 @@ describeIfDb('migration regressions', () => {
   });
 
   it('servers_slug_active_key is partial unique on deleted_at IS NULL', async () => {
-    const rows = (await db.execute(sql`
+    const rows = await db.execute<{ indexdef: string }>(sql`
       SELECT indexdef FROM pg_indexes
       WHERE schemaname = 'public' AND tablename = 'servers' AND indexname = 'servers_slug_active_key';
-    `)) as unknown as Array<{ indexdef: string }>;
+    `);
     expect(rows.length).toBe(1);
-    expect(rows[0].indexdef).toMatch(/UNIQUE/i);
-    expect(rows[0].indexdef).toMatch(/WHERE \(deleted_at IS NULL\)/i);
+    expect(rows[0]?.indexdef).toMatch(/UNIQUE/i);
+    expect(rows[0]?.indexdef).toMatch(/WHERE \(deleted_at IS NULL\)/i);
   });
 
   it('two servers can share slug if one is deleted', async () => {

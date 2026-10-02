@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { VEHICLE_CATALOG_SEED } from '../src/schema/vehicle-catalog.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -66,9 +67,13 @@ afterAll(async () => {
 
 describeIfDb('vehicle_catalog seed', () => {
   it('materializes the localization catalog with EN/RU names and a class', async () => {
-    const [row] = await sql<{ name_en: string; name_ru: string; vehicle_class: string }[]>`
+    const row = defined(
+      (
+        await sql<{ name_en: string; name_ru: string; vehicle_class: string }[]>`
       SELECT name_en, name_ru, vehicle_class FROM vehicle_catalog WHERE asset_id = 'T72B3'
-    `;
+    `
+      )[0],
+    );
     expect(row.name_en).toBe('T-72B3');
     expect(row.name_ru).toBe('Т-72Б3');
     expect(row.vehicle_class).toBe('MBT');
@@ -95,18 +100,26 @@ describeIfDb('combat_events vehicle rows', () => {
       VALUES
         ('vehicle_destroyed', ${SERVER_ID}, NULL, NULL, 'T72B3', 'BTR82A', 'BP_Projectile_HEAT', date_trunc('month', now()))
     `;
-    const [row] = await sql<{ victim_player_id: string | null; victim_vehicle: string }[]>`
+    const row = defined(
+      (
+        await sql<{ victim_player_id: string | null; victim_vehicle: string }[]>`
       SELECT victim_player_id, victim_vehicle FROM combat_events
       WHERE event_type = 'vehicle_destroyed' AND victim_vehicle = 'T72B3'
-    `;
+    `
+      )[0],
+    );
     expect(row.victim_player_id).toBeNull();
     expect(row.victim_vehicle).toBe('T72B3');
   });
 
   it('writes a vehicle_destroyed row even when the asset_id is unknown to the catalog', async () => {
-    const [{ known }] = await sql<{ known: string }[]>`
+    const { known } = defined(
+      (
+        await sql<{ known: string }[]>`
       SELECT count(*)::int AS known FROM vehicle_catalog WHERE asset_id = 'MysteryHovercraft'
-    `;
+    `
+      )[0],
+    );
     expect(Number(known)).toBe(0);
     await sql`
       INSERT INTO combat_events
@@ -114,9 +127,13 @@ describeIfDb('combat_events vehicle rows', () => {
       VALUES
         ('vehicle_destroyed', ${SERVER_ID}, NULL, NULL, 'MysteryHovercraft', date_trunc('month', now()))
     `;
-    const [row] = await sql<{ victim_vehicle: string }[]>`
+    const row = defined(
+      (
+        await sql<{ victim_vehicle: string }[]>`
       SELECT victim_vehicle FROM combat_events WHERE victim_vehicle = 'MysteryHovercraft'
-    `;
+    `
+      )[0],
+    );
     expect(row.victim_vehicle).toBe('MysteryHovercraft');
   });
 

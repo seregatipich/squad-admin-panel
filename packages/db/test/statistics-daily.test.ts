@@ -1,6 +1,7 @@
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { recomputeServerDailyStats } from '../src/statistics/daily.js';
+import { defined } from './helpers/defined.js';
 import { describeIfDb } from './helpers/describe-if.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -124,7 +125,7 @@ beforeAll(async () => {
   for (const [id, slug] of [
     [SERVER_1, 'stats-srv-1'],
     [SERVER_2, 'stats-srv-2'],
-  ]) {
+  ] as const) {
     await sql`
       INSERT INTO servers (id, display_name, slug)
       VALUES (${id}, ${slug}, ${slug})
@@ -164,12 +165,16 @@ beforeEach(async () => {
 
 describeIfDb('server_daily_stats table shape', () => {
   it('has the composite (server_id, day) primary key', async () => {
-    const [pk] = await sql<{ cols: string }[]>`
+    const pk = defined(
+      (
+        await sql<{ cols: string }[]>`
       SELECT string_agg(a.attname, ',' ORDER BY array_position(i.indkey, a.attnum)) AS cols
       FROM pg_index i
       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
       WHERE i.indrelid = 'server_daily_stats'::regclass AND i.indisprimary
-    `;
+    `
+      )[0],
+    );
     expect(pk.cols).toBe('server_id,day');
   });
 

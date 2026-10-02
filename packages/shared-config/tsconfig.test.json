@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "incremental": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": "./.cache/typecheck.tsbuildinfo",
+    "declaration": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

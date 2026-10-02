@@ -137,6 +137,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       }
 
       let canonicalName = `Player ${String(steamId64).slice(-4)}`;
+      let nameIsPlaceholder = true;
       let avatarUrl: string | null = null;
       try {
         const profile = await fetchSteamProfile(steamId64, {
@@ -144,13 +145,16 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
           redis: app.redis,
           timeoutMs: STEAM_LOGIN_PROFILE_TIMEOUT_MS,
         });
-        if (profile?.persona) canonicalName = profile.persona;
+        if (profile?.persona) {
+          canonicalName = profile.persona;
+          nameIsPlaceholder = false;
+        }
         if (profile?.avatarUrl) avatarUrl = profile.avatarUrl;
       } catch (err) {
         req.log.warn({ err }, 'steam profile enrichment failed (non-fatal)');
       }
 
-      const identity: PlayerIdentity = { steamId64, canonicalName, avatarUrl };
+      const identity: PlayerIdentity = { steamId64, canonicalName, avatarUrl, nameIsPlaceholder };
       await establishAuthenticatedPlayerSession(app, req, reply, identity, {
         redirectTo: landingPath,
       });
