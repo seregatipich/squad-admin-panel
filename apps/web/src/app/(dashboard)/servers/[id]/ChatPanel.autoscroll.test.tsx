@@ -40,7 +40,9 @@ afterEach(() => {
 describe('ChatPanel autoscroll beyond the message cap', () => {
   it(
     'keeps scrolling to the bottom after the 200-message buffer fills (#599)',
-    { timeout: 20000 },
+    // Alone this takes ~3 s; the 201 re-renders are CPU-bound, so on a busy machine (the pre-push
+    // checklist runs the whole workspace at once) it needs a much wider budget than the default.
+    { timeout: 90000 },
     () => {
       const { container } = render(<ChatPanel serverId="srv-1" />);
       const list = container.querySelector<HTMLDivElement>('.overflow-y-auto');
