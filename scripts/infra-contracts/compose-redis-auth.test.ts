@@ -138,3 +138,36 @@ describe('docker/compose.yml — backup service', () => {
     expect(serviceBlock(yaml, 'backup')).toMatch(/^ {6}REDISCLI_AUTH: \$\{REDIS_PASSWORD\}$/m);
   });
 });
+
+describe.each(COMPOSE_FILES)('%s — no unauthenticated Redis URL anywhere', (file) => {
+  it('gives every redis:// literal credentials, whatever the variable is called', () => {
+    const yaml = readFileSync(resolve(REPO_ROOT, file), 'utf-8');
+    const urls = [...yaml.matchAll(/redis:\/\/[^\s'"]+/g)].map((m) => m[0]);
+    expect(urls.length).toBeGreaterThan(0);
+    for (const url of urls) {
+      expect(url).toMatch(
+        /^redis:\/\/(:\$\{REDIS_PASSWORD\}|rnsquadjs:\$\{REDIS_SIDECAR_PASSWORD\})@/,
+      );
+    }
+  });
+});
+
+describe('scripts/test-backup-restore.sh — mirrors the authenticated Redis (#97)', () => {
+  const script = readFileSync(resolve(REPO_ROOT, 'scripts/test-backup-restore.sh'), 'utf-8');
+  const code = script.split('\n').filter((l) => !/^\s*#/.test(l));
+
+  it('starts every long-running redis-server with --requirepass', () => {
+    const servers = code.filter((l) => /^\s*("\$RD_IMG" )?redis-server /.test(l));
+    expect(servers.length).toBe(2);
+    for (const line of servers) expect(line).toContain('--requirepass "$REDIS_PW"');
+  });
+
+  it('hands REDISCLI_AUTH to every redis-cli caller', () => {
+    const execs = code.filter((l) => /docker exec .*\bredis-cli\b/.test(l));
+    expect(execs.length).toBeGreaterThanOrEqual(3);
+    for (const line of execs) expect(line).toContain('-e REDISCLI_AUTH="$REDIS_PW"');
+    // The toolbox runs the PRE_COMMANDS dump; the one-off container converts the RDB.
+    expect(script).toMatch(/-e RESTIC_PASSWORD=citest -e REDISCLI_AUTH="\$REDIS_PW"/);
+    expect(script).toMatch(/-e REDISCLI_AUTH="\$REDIS_PW" -e REDIS_READY_ATTEMPTS/);
+  });
+});

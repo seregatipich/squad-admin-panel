@@ -218,7 +218,7 @@ Errors: returns `runtime_error` with a descriptive message when `du`, `statfs`, 
 
 #### `squad_log_retention_sweep({ archive_server_ids })` → `SquadLogRetentionSweepResult`
 
-Deletes expired rotated Squad log files from the host saved tree. The only accepted param is `archive_server_ids: string[]` (LOG-3, #51) — the set of server UUIDs whose expiring logs must be archived before deletion. Callers still cannot pass a path, glob, or retention duration, and the bridge owns every filesystem path: it scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/` and stages archives only under `$PANEL_BACKUP_DUMP_ROOT` (`${DATA_DIR}/backup-dump`). Unknown keys (e.g. a caller-supplied `path`) are rejected as `invalid_args`.
+Deletes expired rotated Squad log files from the host saved tree. The only accepted param is `archive_server_ids: string[]` (LOG-3, #51) — the set of server UUIDs whose expiring logs must be archived before deletion. Callers still cannot pass a path, glob, or retention duration, and the bridge owns every filesystem path: it scans only `/var/lib/squad-panel/saved/{uuid}/Logs/` and stages archives only under `$PANEL_BACKUP_DUMP_ROOT` (`${DATA_DIR}/backup-dump`). Unknown keys (e.g. a caller-supplied `path`) are rejected as `invalid_args`.
 
 Deletion policy:
 
@@ -236,7 +236,7 @@ Response shape:
 | `retention_days` | int | Fixed at `10`. Not configurable in this slice. |
 | `cutoff` | string | RFC 3339 UTC cutoff timestamp (`now - 10d`). |
 | `servers_scanned` | int | Count of valid UUID saved directories inspected. |
-| `log_dirs_scanned` | int | Count of existing `SquadGame/Saved/Logs` directories read successfully. |
+| `log_dirs_scanned` | int | Count of existing `saved/{uuid}/Logs` directories read successfully. |
 | `files_scanned` | int | Count of regular files found in scanned log dirs. |
 | `deleted_count` | int | Count of files removed. |
 | `deleted_bytes` | int64 | Sum of removed file sizes before deletion. |

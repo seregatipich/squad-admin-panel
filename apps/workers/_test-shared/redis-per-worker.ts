@@ -11,19 +11,20 @@
  * contract test shared database 14 before, and suites delete the keys they
  * create. A pool of more than seven slots wraps around and shares.
  *
- * Must run after `load-env.ts`, which fills in `REDIS_URL` from the defaults.
+ * When neither `TEST_REDIS_URL` nor `REDIS_URL` is set there is no Redis to
+ * isolate: nothing is set, so `describeIfRedis` skips locally and refuses to
+ * skip under `CI` (#120) instead of believing in a made-up default server.
  */
 const FIRST_DATABASE = 1;
 const DATABASE_COUNT = 7;
 
-const slot = Number(process.env.VITEST_POOL_ID ?? '1');
-const database = String(FIRST_DATABASE + ((slot - 1) % DATABASE_COUNT));
-const base = (
-  process.env.TEST_REDIS_URL ??
-  process.env.REDIS_URL ??
-  'redis://127.0.0.1:6379'
-).replace(/\/\d*$/, '');
+const configured = process.env.TEST_REDIS_URL ?? process.env.REDIS_URL;
+if (configured) {
+  const slot = Number(process.env.VITEST_POOL_ID ?? '1');
+  const database = String(FIRST_DATABASE + ((slot - 1) % DATABASE_COUNT));
+  const base = configured.replace(/\/\d*$/, '');
 
-process.env.TEST_REDIS_DB = database;
-process.env.TEST_REDIS_URL = `${base}/${database}`;
-process.env.REDIS_URL = `${base}/${database}`;
+  process.env.TEST_REDIS_DB = database;
+  process.env.TEST_REDIS_URL = `${base}/${database}`;
+  process.env.REDIS_URL = `${base}/${database}`;
+}

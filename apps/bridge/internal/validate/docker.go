@@ -12,6 +12,13 @@ const (
 	PanelDataRoot    = "/var/lib/squad-panel"
 	PanelConfigsRoot = "/var/lib/squad-panel/configs"
 	PanelSavedRoot   = "/var/lib/squad-panel/saved"
+	// SquadLogsDirName is the Squad log directory inside a server's saved/{uuid}
+	// directory. saved/{uuid} is bind-mounted at /squad/SquadGame/Saved in the
+	// game container, where Squad writes /squad/SquadGame/Saved/Logs, so on the
+	// host the logs live at saved/{uuid}/Logs. The sidecar bind, the log
+	// list/download paths the API builds and the retention sweep all use this
+	// one convention (#100).
+	SquadLogsDirName = "Logs"
 	DepotVolumeName  = "squad-depot"
 	ServerImage      = "squad-server:latest"
 	DepotInitImage   = "squad-panel/depot-init:latest"

@@ -37,7 +37,7 @@ The worker translates each `onStopped` into a `tail.stopped` diag emit carrying 
 
 The bridge-side policy is fixed:
 
-1. Scan only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`.
+1. Scan only `/var/lib/squad-panel/saved/{uuid}/Logs/`.
 2. Delete only regular files matching `SquadGame*.log`.
 3. Never delete exact `SquadGame.log`.
 4. Delete only when `mtime + 10d < now`.

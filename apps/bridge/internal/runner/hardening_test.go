@@ -176,7 +176,7 @@ func sidecarFixture(t *testing.T) (*DockerRunner, *Fake, RNSquadJSRunSpec, strin
 // or any parent component would make root's docker bind an arbitrary host
 // directory into the sidecar. Every component must be a real directory.
 func TestRunRNSquadJSRejectsSymlinkedLogsPath(t *testing.T) {
-	for _, planted := range []string{"SquadGame", "SquadGame/Saved", "SquadGame/Saved/Logs"} {
+	for _, planted := range []string{"Logs"} {
 		t.Run(planted, func(t *testing.T) {
 			d, f, spec, savedDir := sidecarFixture(t)
 			link := filepath.Join(savedDir, planted)
@@ -196,6 +196,43 @@ func TestRunRNSquadJSRejectsSymlinkedLogsPath(t *testing.T) {
 	}
 }
 
+// Regression for #100: the game container writes /squad/SquadGame/Saved/Logs,
+// where saved/{uuid} is mounted at /squad/SquadGame/Saved, so on the host the
+// logs are saved/{uuid}/Logs. The sidecar must bind exactly that directory, not
+// a directory one SquadGame/Saved level deeper that Squad never writes to.
+func TestSidecarLogsBindIsWhereTheGameContainerWritesLogs(t *testing.T) {
+	d, f, spec, savedDir := sidecarFixture(t)
+	d.SavedRoot = filepath.Dir(savedDir)
+	game := validRunSpec()
+	game.ServerID = spec.ServerID
+	game.SavedHost = "/var/lib/squad-panel/saved/" + spec.ServerID
+	game.ConfigsHost = "/var/lib/squad-panel/configs/" + spec.ServerID + "/ServerConfig"
+	gameFake := &Fake{Stdout: []byte("id\n")}
+	if _, err := NewDocker(gameFake).Run(context.Background(), game); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var savedSource string
+	for _, a := range gameFake.Calls[0].Args {
+		if src, ok := strings.CutSuffix(a, ":/squad/SquadGame/Saved:rw"); ok {
+			savedSource = src
+		}
+	}
+	if savedSource == "" {
+		t.Fatalf("game container has no Saved mount: %v", gameFake.Calls[0].Args)
+	}
+	if _, err := d.RunRNSquadJS(context.Background(), spec); err != nil {
+		t.Fatalf("RunRNSquadJS: %v", err)
+	}
+	// Squad's /squad/SquadGame/Saved/Logs is <saved mount source>/Logs on the host.
+	want := filepath.Join(filepath.Dir(savedDir), spec.ServerID, "Logs") + ":/squad/Logs:ro"
+	if filepath.Base(savedSource) != spec.ServerID {
+		t.Fatalf("saved mount source %q is not saved/{uuid}", savedSource)
+	}
+	if !strings.Contains(strings.Join(f.Calls[0].Args, " "), want) {
+		t.Fatalf("sidecar logs bind %q is not the game container's Saved/Logs; args %v", want, f.Calls[0].Args)
+	}
+}
+
 // A missing Logs tree is created as real directories (instead of letting
 // docker create it root-owned through whatever the path resolves to), and
 // the bind points at it.
@@ -204,7 +241,7 @@ func TestRunRNSquadJSCreatesMissingLogsDir(t *testing.T) {
 	if _, err := d.RunRNSquadJS(context.Background(), spec); err != nil {
 		t.Fatalf("RunRNSquadJS: %v", err)
 	}
-	logs := filepath.Join(savedDir, "SquadGame", "Saved", "Logs")
+	logs := filepath.Join(savedDir, "Logs")
 	if info, err := os.Lstat(logs); err != nil || !info.IsDir() {
 		t.Fatalf("Logs dir not created as a real directory: %v %v", info, err)
 	}

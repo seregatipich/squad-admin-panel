@@ -245,7 +245,7 @@ Asks the bridge to sweep expired rotated Squad logs under the host saved tree. N
 
 Deletion policy is enforced by the bridge:
 
-- scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`;
+- scans only `/var/lib/squad-panel/saved/{uuid}/Logs/`;
 - deletes regular `SquadGame*.log` files only when `mtime + 10d < now`;
 - never deletes exact `SquadGame.log`;
 - continues after per-file errors and returns a bounded error summary.

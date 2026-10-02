@@ -385,8 +385,10 @@ func (d *DockerRunner) savedRoot() string {
 }
 
 // sidecarLogsComponents is the path of the Squad Logs directory below
-// <savedRoot>/<serverID>, one component per element.
-var sidecarLogsComponents = []string{"SquadGame", "Saved", "Logs"}
+// <savedRoot>/<serverID>, one component per element. <serverID> is mounted at
+// /squad/SquadGame/Saved in the game container, so Squad's own Saved/Logs is
+// <serverID>/Logs on the host (#100).
+var sidecarLogsComponents = []string{validate.SquadLogsDirName}
 
 // sidecarLogsDir is the host directory bound read-only at /squad/Logs.
 func (d *DockerRunner) sidecarLogsDir(serverID string) string {
@@ -394,7 +396,7 @@ func (d *DockerRunner) sidecarLogsDir(serverID string) string {
 }
 
 // ensureSidecarLogsDir verifies that every component of the sidecar's Logs
-// bind source below the saved root — <id>, SquadGame, Saved, Logs — is a
+// bind source below the saved root — <id>, Logs — is a
 // real directory, never a symlink. That tree is owned by the game server
 // (uid 1001, which runs third-party mods), and docker (root) resolves
 // symlinks in a bind source, so a planted symlink would otherwise mount an

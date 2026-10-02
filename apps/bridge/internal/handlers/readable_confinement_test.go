@@ -194,7 +194,7 @@ func TestSquadLogRetentionSweep_DoesNotFollowSymlinkedLogsDir(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
 	savedRoot := t.TempDir()
-	savedDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved")
+	savedDir := filepath.Join(savedRoot, serverID)
 	if err := os.MkdirAll(savedDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestReadableTrustRoot_ConfinesEachAllowlistEntry(t *testing.T) {
 	cases := []struct {
 		path, root, rel string
 	}{
-		{validate.PanelSavedRoot + "/" + uuid + "/SquadGame/Saved/Logs/SquadGame.log", validate.PanelSavedRoot + "/" + uuid, "SquadGame/Saved/Logs/SquadGame.log"},
+		{validate.PanelSavedRoot + "/" + uuid + "/Logs/SquadGame.log", validate.PanelSavedRoot + "/" + uuid, "Logs/SquadGame.log"},
 		{validate.PanelSavedRoot + "/" + uuid, validate.PanelSavedRoot + "/" + uuid, "."},
 		{validate.PanelConfigsRoot + "/" + uuid + "/ServerConfig/Server.cfg", validate.PanelConfigsRoot + "/" + uuid, "ServerConfig/Server.cfg"},
 		{depot + "/ServerConfig/Server.cfg", depot, "ServerConfig/Server.cfg"},

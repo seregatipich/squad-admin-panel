@@ -478,7 +478,7 @@ type squadLogFile struct {
 // directory (validated read-only under the panel roots and resolved inside
 // its trust root, see readableTrustRoot), each with its size,
 // RFC3339 mtime, and an is_live flag set on the active SquadGame.log. The API
-// builds the path as <saved>/<uuid>/SquadGame/Saved/Logs; a missing directory
+// builds the path as <saved>/<uuid>/Logs (the game container's Saved/Logs, #100); a missing directory
 // yields an empty list rather than an error, mirroring readImmediateDirs.
 func (d *Dispatcher) squadLogList(req *rpc.Request) rpc.Response {
 	var p squadLogListParams
@@ -649,7 +649,7 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 }
 
 // squadLogsRel is a server's Logs directory relative to its saved/{uuid} dir.
-var squadLogsRel = filepath.Join("SquadGame", "Saved", "Logs")
+var squadLogsRel = validate.SquadLogsDirName
 
 // sweepServerLogs applies retention to one server's Logs directory. Every path
 // is resolved inside serverDir (saved/{uuid}) through an os.Root: the game

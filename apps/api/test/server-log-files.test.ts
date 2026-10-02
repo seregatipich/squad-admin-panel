@@ -61,7 +61,7 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
       seedOwnerGuard: true,
       bridge: makeFakeBridge({
         squadLogList: async ({ path }) => {
-          expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs`);
+          expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/Logs`);
           return {
             files: [
               { name: 'SquadGame.log', size: 4096, mtime: '2026-07-24T10:00:00Z', is_live: true },
@@ -158,7 +158,7 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
       seedOwnerGuard: true,
       bridge: makeFakeBridge({
         fileReadStream: async ({ path }, onStream) => {
-          expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs/SquadGame.log`);
+          expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/Logs/SquadGame.log`);
           for (let off = 0; off < payload.length; off += FRAME_BYTES) {
             const chunk = payload.subarray(off, off + FRAME_BYTES);
             emittedFrames += 1;
