@@ -75,7 +75,7 @@ docker compose --env-file .env.stand --env-file .release.env -f docker/compose.s
    | nothing — same image digests, migrations, Caddyfile, compose file and `.env.stand` | records the commit and exits before any Docker call |
    | an image digest | pulls that image, unless the host already has it |
    | `packages/db/drizzle` | `pg_dump -Fc` into `~/backups/panel-<UTC time>-<12-hex sha>.dump` (mode `0600`; the newest 5 are kept), then `compose run --rm migrator`; a failed dump or migration stops the deploy before any app container is replaced |
-   | `docker/Caddyfile.stand` | recreates `caddy` (compose sees the file's hash as `CADDYFILE_SHA`) |
+   | `docker/Caddyfile.stand` | recreates `caddy` (compose sees the file's hash as `CADDYFILE_SHA`; the panel is unreachable for the few seconds it takes to restart) |
    | `docker/compose.stand.yml`, `.env.stand` | compose recreates the services whose configuration changed |
 
    It then runs `compose up -d --remove-orphans`, polls every recreated service
@@ -366,6 +366,18 @@ Caddy handles TLS automatically. Set `TLS_ISSUER` in `.env`:
 |---|---|
 | `internal` (default) | Self-signed local CA. Good for dev and LAN deployments. |
 | `acme` | Let's Encrypt (or other ACME CA). Requires a public DNS name in `APP_DOMAIN` and a valid `ACME_EMAIL`. |
+
+### SquadCalc on the stand host
+
+[`docker/Caddyfile.stand`](../../docker/Caddyfile.stand) has a second site, `calc.${APP_DOMAIN}`,
+that terminates TLS for a **separate** service running on the stand host outside this stack:
+[SquadCalc](https://github.com/sh4rkman/SquadCalc) (a static site) together with the relay
+that links it to the AGS-17 timer overlay (`/relay/<code>` WebSocket). Caddy only proxies
+to `SQUADCALC_UPSTREAM` (default `host.docker.internal:9910`, reachable through the `caddy`
+service's `host-gateway` alias). DuckDNS resolves every subdomain of `APP_DOMAIN` to the host
+and the same `DUCKDNS_TOKEN` answers the DNS-01 challenge, so no extra DNS record or secret
+is needed. If nothing listens on the upstream, the subdomain answers `502` and the panel at
+`APP_DOMAIN` is unaffected.
 
 ## First deploy
 
