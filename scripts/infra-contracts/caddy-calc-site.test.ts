@@ -24,7 +24,9 @@ describe('docker/Caddyfile.stand calc site', () => {
   const calc = siteBlock(caddyfile, 'calc.{$APP_DOMAIN}');
 
   it('issues its certificate through DuckDNS DNS-01 like the panel site', () => {
-    expect(calc).toMatch(/^\ttls \{\n\t\tdns duckdns \{env\.DUCKDNS_TOKEN\}\n\t\tresolvers 1\.1\.1\.1 8\.8\.8\.8\n\t\}$/m);
+    expect(calc).toMatch(
+      /^\ttls \{\n\t\tdns duckdns \{env\.DUCKDNS_TOKEN\}\n\t\tresolvers 1\.1\.1\.1 8\.8\.8\.8\n\t\}$/m,
+    );
   });
 
   it('proxies everything to SQUADCALC_UPSTREAM, defaulting to port 9910 of the host', () => {
@@ -44,10 +46,15 @@ describe('docker/Caddyfile.stand calc site', () => {
 });
 
 describe('docker/compose.stand.yml caddy service', () => {
-  const caddy = compose.slice(compose.indexOf('\n  caddy:\n'), compose.indexOf('\n  squad-server-image:'));
+  const caddy = compose.slice(
+    compose.indexOf('\n  caddy:\n'),
+    compose.indexOf('\n  squad-server-image:'),
+  );
 
   it('passes SQUADCALC_UPSTREAM with the same default as the Caddyfile', () => {
-    expect(caddy).toMatch(/SQUADCALC_UPSTREAM: \$\{SQUADCALC_UPSTREAM:-host\.docker\.internal:9910\}/);
+    expect(caddy).toMatch(
+      /SQUADCALC_UPSTREAM: \$\{SQUADCALC_UPSTREAM:-host\.docker\.internal:9910\}/,
+    );
   });
 
   it('can resolve host.docker.internal', () => {
