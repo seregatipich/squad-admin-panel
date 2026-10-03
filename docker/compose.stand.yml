@@ -649,6 +649,10 @@ services:
       # a bind-mounted file change, and a single-file mount keeps showing the
       # replaced inode after rsync, so a Caddyfile edit must recreate caddy.
       CADDYFILE_SHA: ${CADDYFILE_SHA:-}
+      # Where `calc.${APP_DOMAIN}` is proxied to: the SquadCalc service on the host.
+      SQUADCALC_UPSTREAM: ${SQUADCALC_UPSTREAM:-host.docker.internal:9910}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./Caddyfile.stand:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
